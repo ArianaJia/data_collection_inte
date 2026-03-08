@@ -1,0 +1,30 @@
+# STM32CubeIDE / Eclipse metadata
+.settings/
+.metadata/
+
+# Build outputs
+Debug/
+Release/
+*.o
+*.d
+*.su
+*.cyclo
+*.elf
+*.map
+*.list
+*.hex
+*.bin
+*.axf
+*.out
+
+# Temporary / generated files
+*.log
+*.tmp
+*.bak
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
