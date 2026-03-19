@@ -48,6 +48,13 @@ extern uint8_t mlx90640_dma_buf[MLX90640_DMA_BUF_SIZE];
 
     extern void MLX90640_I2CInit(void);
     extern int MLX90640_I2CGeneralReset(void);
+
+    // ------------------- TCA9548A I2C MUX -------------------
+    // A0/A1/A2全部接地 => 7-bit地址 0x70
+    #define TCA9548A_ADDR_7BIT 0x70
+    // 选择通道：ch=0..7，传入0xFF表示不选择（关闭所有通道）
+    extern int TCA9548A_SelectChannel(uint8_t ch);
+
     extern int MLX90640_I2CRead(uint8_t slaveAddr,uint16_t startAddress, uint16_t nMemAddressRead, uint16_t *data);
     extern int MLX90640_I2CWrite(uint8_t slaveAddr,uint16_t writeAddress, uint16_t data);
     extern void MLX90640_I2CFreqSet(int freq);

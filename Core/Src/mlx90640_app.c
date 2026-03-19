@@ -35,22 +35,29 @@ void MLX90640_App_Init(void)
     // I2C peripheral is already initialized by CubeMX: [`Core/Src/i2c.c`](Core/Src/i2c.c:32)
     // UART1 peripheral is already initialized by CubeMX: [`Core/Src/usart.c`](Core/Src/usart.c:32)
 
-    // Dump EEPROM and extract calibration parameters
+    // Init low-level driver
     (void)MLX90640_I2CInit();
 
+    // TCA9548A：默认先选CH0（避免总线悬空）
+    (void)TCA9548A_SelectChannel(0);
+
+    // 仅需初始化一次参数：4个MLX90640地址相同(0x33)，但参数可能略有差异。
+    // 这里先按“同型号同参数”处理：从CH0读取EEPROM并提取参数。
+    // 如你希望每路独立参数，需要扩展为 params[4] + eeData[4]。
     if (MLX90640_DumpEE(MLX90640_ADDR, g_eeData) == MLX90640_NO_ERROR)
     {
         (void)MLX90640_ExtractParameters(g_eeData, &g_params);
-
-        // Keep default mode from sensor; optionally set refresh rate here.
-        // Example: 4Hz => value per datasheet mapping, but we keep default to be safe.
-        // (void)MLX90640_SetChessMode(MLX90640_ADDR);
-        // (void)MLX90640_SetRefreshRate(MLX90640_ADDR, 0x02);
     }
 }
 
-int MLX90640_App_CaptureOnce(void)
+int MLX90640_App_CaptureOnce(uint8_t sensor_id)
 {
+    // 通过TCA9548A选择对应通道：sensor_id 0..3 => CH0..CH3
+    if (sensor_id > 3)
+        return -1;
+    if (TCA9548A_SelectChannel(sensor_id) != 0)
+        return -2;
+
     int status = MLX90640_GetFrameData(MLX90640_ADDR, g_frameData);
     if (status != MLX90640_NO_ERROR)
         return status;
@@ -67,19 +74,20 @@ int MLX90640_App_CaptureOnce(void)
     return 0;
 }
 
-int MLX90640_App_UartSendFrame_DMA(void)
+int MLX90640_App_UartSendFrame_DMA(uint8_t sensor_id)
 {
     if (s_uart1_tx_busy)
         return -1;
 
-    // Pack float array as bytes (little-endian, STM32 is little-endian)
-    memcpy(g_MLX90640_Frame.UartTxBuf, (uint8_t*)g_MLX90640_Frame.To, sizeof(g_MLX90640_Frame.To));
+    // 第1字节：sensor_id；后续：768个float
+    g_MLX90640_Frame.UartTxBuf[0] = sensor_id;
+    memcpy(&g_MLX90640_Frame.UartTxBuf[1], (uint8_t*)g_MLX90640_Frame.To, sizeof(g_MLX90640_Frame.To));
 
     // MAX485: 发送前切到“写”(驱动使能)
     HAL_GPIO_WritePin(EN_GPIO_Port, EN_Pin, GPIO_PIN_SET);
 
     s_uart1_tx_busy = 1;
-    if (HAL_UART_Transmit_DMA(&huart1, g_MLX90640_Frame.UartTxBuf, (uint16_t)sizeof(g_MLX90640_Frame.To)) != HAL_OK)
+    if (HAL_UART_Transmit_DMA(&huart1, g_MLX90640_Frame.UartTxBuf, (uint16_t)(1 + sizeof(g_MLX90640_Frame.To))) != HAL_OK)
     {
         s_uart1_tx_busy = 0;
         // 失败则立即回到“读”(接收)

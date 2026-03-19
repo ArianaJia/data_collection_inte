@@ -15,6 +15,34 @@
 #include "cmsis_os.h"
 #include <string.h>
 
+int TCA9548A_SelectChannel(uint8_t ch)
+{
+    uint8_t ctrl;
+
+    if (ch == 0xFF)
+    {
+        ctrl = 0x00; // disable all channels
+    }
+    else if (ch <= 7)
+    {
+        ctrl = (uint8_t)(1U << ch);
+    }
+    else
+    {
+        return -1;
+    }
+
+    // TCA9548A control register write
+    if (HAL_I2C_Master_Transmit(MLX90640_I2C_HANDLE, (uint16_t)(TCA9548A_ADDR_7BIT << 1), &ctrl, 1, 10) != HAL_OK)
+    {
+        return -1;
+    }
+
+    // small settle delay (optional)
+    osDelay(1);
+    return 0;
+}
+
 // ------------------- DMA global objects declared in header -------------------
 volatile int8_t mlx90640_dma_tx_flag = 0;
 volatile int8_t mlx90640_dma_rx_flag = 0;

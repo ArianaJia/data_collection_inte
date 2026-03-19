@@ -28,6 +28,7 @@
 #include "battery.h"
 #include "can.h"
 #include "mlx90640_app.h"
+#include "usart.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -174,6 +175,7 @@ void StartDefaultTask(void *argument)
   {
     //LED Lighting test
  	  HAL_GPIO_TogglePin(GPIOD,GPIO_PIN_12);
+ 	  HAL_UART_Transmit(&huart1,"hello_world\n",12, 200);
 // 	  HAL_GPIO_TogglePin(GPIOD,GPIO_PIN_13);
  	  osDelay(100);
   }
@@ -227,16 +229,23 @@ void StartTask03(void *argument)
 
   for(;;)
   {
-    if (MLX90640_App_UartTxIdle())
+    // 4个MLX90640通过TCA9548A接在同一条I2C上：轮询CH0~CH3
+    for (uint8_t sensor_id = 0; sensor_id < 4; sensor_id++)
     {
-      if (MLX90640_App_CaptureOnce() == 0)
+      if (MLX90640_App_UartTxIdle())
       {
-        (void)MLX90640_App_UartSendFrame_DMA();
+        if (MLX90640_App_CaptureOnce(sensor_id) == 0)
+        {
+          (void)MLX90640_App_UartSendFrame_DMA(sensor_id);
+        }
       }
-    }
 
-    // 约束发送节奏：避免堵塞I2C/UART
-    osDelay(50);
+      // 每路之间稍作间隔，避免I2C过载
+      osDelay(5);
+    }
+    HAL_GPIO_TogglePin(GPIOD,GPIO_PIN_13);
+    // 一轮4路采集后再延时
+    osDelay(20);
   }
   /* USER CODE END StartTask03 */
 }
@@ -254,6 +263,7 @@ void StartTask04(void *argument)
   /* Infinite loop */
   for(;;)
   {
+	HAL_UART_Transmit(&huart1,"hello\n",6, 200);
     osDelay(1);
   }
   /* USER CODE END StartTask04 */
@@ -272,6 +282,7 @@ void StartTask05(void *argument)
   /* Infinite loop */
   for(;;)
   {
+	HAL_UART_Transmit(&huart1,"world\n",6, 200);
     osDelay(1);
   }
   /* USER CODE END StartTask05 */
