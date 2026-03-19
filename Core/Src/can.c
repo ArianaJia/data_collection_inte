@@ -479,4 +479,6 @@ void HAL_CAN2_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 //    }
 //  }
 }
+/* USER CODE BEGIN 1 */
+
 /* USER CODE END 1 */

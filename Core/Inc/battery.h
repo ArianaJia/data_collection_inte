@@ -125,6 +125,17 @@ typedef struct
 extern Battery_InfoDef    g_BatteryInfo;  // 电池箱+充电机核心数据
 extern CANB_LoopAllData   g_CANB_LoopData;// CANB环路全量数据（ECU+IMU）
 
+/************************** MLX90640 红外阵列数据（新增：FreeRTOS采集+UART1 DMA发送） **************************/
+// 统一放入结构体，便于扩展与传递
+typedef struct
+{
+    float    To[768];              // 32x24 = 768 像素温度（单位：℃，float）
+    uint8_t  UartTxBuf[768 * 4];   // UART1 DMA发送缓冲区：3072字节（直接发送float数组的原始字节序）
+    volatile uint8_t FrameReady;   // 标志位：0=空闲/未就绪，1=有新帧待发送，2=发送中
+} MLX90640_FrameTypeDef;
+
+extern MLX90640_FrameTypeDef g_MLX90640_Frame;
+
 #ifdef __cplusplus
 }
 #endif

@@ -73,6 +73,7 @@ void User_CAN1_Send(void);
 void CAN_Send_Msg(CAN_HandleTypeDef *canHandle, uint32_t SendStdId, uint8_t *pTxData);
 void CAN_Start(void);
 
+
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus
