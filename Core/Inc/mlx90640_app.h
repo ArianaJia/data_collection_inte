@@ -7,6 +7,11 @@ extern "C" {
 
 #include <stdint.h>
 
+
+// ------------------- MLX90640 config -------------------
+#define MLX90640_ADDR            0x33
+#define MLX90640_EMISSIVITY      0.95f
+
 // 初始化 MLX90640（读取EEPROM并提取参数，设置默认刷新率/模式）
 void MLX90640_App_Init(void);
 

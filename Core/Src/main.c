@@ -19,10 +19,6 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
-
-/* FreeRTOS tick handler prototype (provided by FreeRTOS port layer) */
-extern void xPortSysTickHandler(void);
-
 #include "adc.h"
 #include "can.h"
 #include "dma.h"
@@ -205,19 +201,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM8)
   {
-    /* 1) HAL 基准tick (uwTick) */
     HAL_IncTick();
-
-    /* 2) FreeRTOS 内核tick：让RTOS使用TIM8而不是SysTick (方案A)
-     * 说明：
-     * - CMSIS-RTOS2 默认在 SysTick_Handler() 里调用 xPortSysTickHandler()
-     * - 你的工程已将HAL timebase切到TIM8，因此需要在TIM8中断里喂给FreeRTOS
-     * - 调度器未启动时调用无效，因此需判断调度器状态
-     */
-    if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
-    {
-      xPortSysTickHandler();
-    }
   }
   /* USER CODE BEGIN Callback 1 */
 

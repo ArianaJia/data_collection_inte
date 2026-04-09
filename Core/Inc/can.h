@@ -72,6 +72,7 @@ void CAN_Filter_Config(CAN_HandleTypeDef *canHandle);
 void User_CAN1_Send(void);
 void CAN_Send_Msg(CAN_HandleTypeDef *canHandle, uint32_t SendStdId, uint8_t *pTxData);
 void CAN_Start(void);
+osStatus_t freertos_can_queue_send_from_isr(const CAN_Msg_Queue_t *pData);
 
 
 /* USER CODE END Prototypes */

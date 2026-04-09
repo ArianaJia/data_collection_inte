@@ -15,9 +15,9 @@ optimization: Og
 # MCU settings
 targetMCU: stm32f4x
 cpu: cortex-m4 # type of cpu e.g. cortex-m4
-fpu:  # Defines how floating points are defined. Can be left empty.
-floatAbi: 
-ldscript:  # linker script
+fpu: fpv4-sp-d16 # Defines how floating points are defined. Can be left empty.
+floatAbi: hard
+ldscript: STM32F407ZETX_FLASH.ld # linker script
 
 # Compiler definitions. The -D prefix for the compiler will be automatically added.
 cDefinitions: []
@@ -73,14 +73,86 @@ excludes:
 
 # Include directories (directories containing .h or .hpp files)
 # If a CubeMX makefile is present it will automatically include the include directories from that makefile.
-includeDirectories: []
+includeDirectories:
+  - Core/Inc
+  - Drivers/STM32F4xx_HAL_Driver/Inc
+  - Drivers/STM32F4xx_HAL_Driver/Inc/Legacy
+  - Drivers/CMSIS/Device/ST/STM32F4xx/Include
+  - Drivers/CMSIS/Include
+  - FATFS/Target
+  - FATFS/App
+  - Middlewares/Third_Party/FreeRTOS/Source/include
+  - Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F
+  - Middlewares/Third_Party/FatFs/src
+  - Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2
 
 # Files that should be included in the compilation.
 # If a CubeMX makefile is present it will automatically include the  c and cpp/cxx files from that makefile.
 # Glob patterns (https://www.wikiwand.com/en/Glob_(programming)) can be used.
 # Do mind that double stars are reserved in yaml
 # these should be escaped with a: \ or the name should be in double quotes e.g. "HARDWARE_DRIVER*.c"
-sourceFiles:  []
+sourceFiles:
+  - Core/Src/adc.c
+  - Core/Src/battery.c
+  - Core/Src/can.c
+  - Core/Src/dma.c
+  - Core/Src/freertos.c
+  - Core/Src/gpio.c
+  - Core/Src/i2c.c
+  - Core/Src/main.c
+  - Core/Src/MLX90640_API.c
+  - Core/Src/mlx90640_app.c
+  - Core/Src/MLX90640_I2C_Driver.c
+  - Core/Src/rtc.c
+  - Core/Src/spi.c
+  - Core/Src/stm32f4xx_hal_msp.c
+  - Core/Src/stm32f4xx_hal_timebase_tim.c
+  - Core/Src/stm32f4xx_it.c
+  - Core/Src/syscalls.c
+  - Core/Src/sysmem.c
+  - Core/Src/system_stm32f4xx.c
+  - Core/Src/usart.c
+  - Core/Startup/startup_stm32f407zetx.s
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_adc.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_adc_ex.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_can.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_cortex.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma_ex.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_exti.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ex.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ramfunc.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_gpio.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c_ex.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr_ex.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc_ex.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc_ex.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_spi.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim_ex.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c
+  - Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_adc.c
+  - FATFS/App/fatfs.c
+  - FATFS/Target/user_diskio.c
+  - Middlewares/Third_Party/FatFs/src/diskio.c
+  - Middlewares/Third_Party/FatFs/src/ff.c
+  - Middlewares/Third_Party/FatFs/src/ff_gen_drv.c
+  - Middlewares/Third_Party/FreeRTOS/Source/croutine.c
+  - Middlewares/Third_Party/FreeRTOS/Source/event_groups.c
+  - Middlewares/Third_Party/FreeRTOS/Source/list.c
+  - Middlewares/Third_Party/FreeRTOS/Source/queue.c
+  - Middlewares/Third_Party/FreeRTOS/Source/stream_buffer.c
+  - Middlewares/Third_Party/FreeRTOS/Source/tasks.c
+  - Middlewares/Third_Party/FreeRTOS/Source/timers.c
+  - Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c
+  - Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c
+  - Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c
 
 # When no makefile is present it will show a warning pop-up.
 # However when compilation without the CubeMX Makefile is desired, this can be turned of.

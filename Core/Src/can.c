@@ -5,7 +5,7 @@
   * @brief   STM32F407 CAN1/CAN2控制器驱动：底层配置、滤波初始化、
   *          报文收发/中断处理，支持标准帧/扩展帧通信，适配电池箱、
   *          电机、IMU等外设；电池数据已抽离至battery.c/h，解耦设计
-  *          CAN1：PA11(RX)/PA12(TX) 标准帧 处理0x401/0x501/0x502/0x50
+  *          CAN1：PA11(RX)/PA12(TX) 标准帧 处理0x401/0x501/0x502/0x503
   *          CAN2：PB12(RX)/PB13(TX) 扩展帧 处理电池箱0x18xxx0F3/0x18xxx0F4系列ID
   ******************************************************************************
   * @attention
@@ -27,7 +27,7 @@ can_msg g_can_msg = {
   .g_CAN1DefSendID = 0x102 // 原默认标准ID初始化值
 };
 
-const uint16_t       g_CAN1FilterID[4] = {0x401, 0x501, 0x502, 0x50}; // CAN1过滤ID列表（只读，防止误修改）
+const uint16_t       g_CAN1FilterID[4] = {0x401, 0x501, 0x502, 0x503}; // CAN1过滤ID列表（只读，防止误修改）
 
 /* USER CODE END 0 */
 
@@ -344,6 +344,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
       // 3. 中断中发送到FreeRTOS队列（CMSIS-RTOS V2中断安全API）
       // 3. 调用接口函数发送数据（完全不接触myQueue01Handle）
         osStatus_t send_status = freertos_can_queue_send_from_isr(&can_queue_data);
+        (void)send_status;
 //  // 根据接收的标准ID执行对应业务逻辑（原有入口保留，可自行扩展）
 //  switch(can_msg.g_CANRxHeader.StdId)
 //  {
@@ -392,6 +393,7 @@ void HAL_CAN2_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
       // 3. 中断中发送到FreeRTOS队列
       // 3. 调用接口函数发送数据（完全不接触myQueue01Handle）
         osStatus_t send_status = freertos_can_queue_send_from_isr(&can_queue_data);
+        (void)send_status;
 //  // 处理电池模组电压/温度扩展帧：0x180050F3 ~ 0x184550F3
 //  if(can_msg.g_CANRxHeader.ExtId >= 0x180050F3 && can_msg.g_CANRxHeader.ExtId <= 0x184550F3)
 //  {

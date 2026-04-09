@@ -75,14 +75,73 @@ endif
 ######################################
 # C sources
 C_SOURCES =  \
-
+Core/Src/adc.c \
+Core/Src/battery.c \
+Core/Src/can.c \
+Core/Src/dma.c \
+Core/Src/freertos.c \
+Core/Src/gpio.c \
+Core/Src/i2c.c \
+Core/Src/main.c \
+Core/Src/MLX90640_API.c \
+Core/Src/mlx90640_app.c \
+Core/Src/MLX90640_I2C_Driver.c \
+Core/Src/rtc.c \
+Core/Src/spi.c \
+Core/Src/stm32f4xx_hal_msp.c \
+Core/Src/stm32f4xx_hal_timebase_tim.c \
+Core/Src/stm32f4xx_it.c \
+Core/Src/syscalls.c \
+Core/Src/sysmem.c \
+Core/Src/system_stm32f4xx.c \
+Core/Src/usart.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_adc.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_adc_ex.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_can.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_cortex.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma_ex.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_exti.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ex.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ramfunc.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_gpio.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c_ex.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr_ex.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc_ex.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc_ex.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_spi.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim_ex.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c \
+Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_adc.c \
+FATFS/App/fatfs.c \
+FATFS/Target/user_diskio.c \
+Middlewares/Third_Party/FatFs/src/diskio.c \
+Middlewares/Third_Party/FatFs/src/ff.c \
+Middlewares/Third_Party/FatFs/src/ff_gen_drv.c \
+Middlewares/Third_Party/FreeRTOS/Source/croutine.c \
+Middlewares/Third_Party/FreeRTOS/Source/event_groups.c \
+Middlewares/Third_Party/FreeRTOS/Source/list.c \
+Middlewares/Third_Party/FreeRTOS/Source/queue.c \
+Middlewares/Third_Party/FreeRTOS/Source/stream_buffer.c \
+Middlewares/Third_Party/FreeRTOS/Source/tasks.c \
+Middlewares/Third_Party/FreeRTOS/Source/timers.c \
+Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c \
+Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c \
+Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c
 
 CXX_SOURCES = \
 
 
 # ASM sources
 ASM_SOURCES =  \
-
+Core/Startup/startup_stm32f407zetx.s
 
 #######################################
 # Tools
@@ -137,10 +196,10 @@ OPENOCD ?= openocd
 CPU = -mcpu=cortex-m4
 
 # fpu
-FPU = 
+FPU = -mfpu=fpv4-sp-d16
 
 # float-abi
-FLOAT-ABI = 
+FLOAT-ABI = -mfloat-abi=hard
 
 # mcu
 MCU = $(CPU) -mthumb $(FPU) $(FLOAT-ABI)
@@ -151,7 +210,9 @@ AS_DEFS =
 
 # C defines
 C_DEFS =  \
-
+-DDEBUG \
+-DUSE_HAL_DRIVER \
+-DSTM32F407xx
 
 # CXX defines
 CXX_DEFS =  \
@@ -162,7 +223,17 @@ AS_INCLUDES = \
 
 # C includes
 C_INCLUDES =  \
-
+-ICore/Inc \
+-IDrivers/STM32F4xx_HAL_Driver/Inc \
+-IDrivers/STM32F4xx_HAL_Driver/Inc/Legacy \
+-IDrivers/CMSIS/Device/ST/STM32F4xx/Include \
+-IDrivers/CMSIS/Include \
+-IFATFS/Target \
+-IFATFS/App \
+-IMiddlewares/Third_Party/FreeRTOS/Source/include \
+-IMiddlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F \
+-IMiddlewares/Third_Party/FatFs/src \
+-IMiddlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2
 
 
 # compile gcc flags
@@ -191,7 +262,7 @@ CXXFLAGS += $(ASSEMBLER_LIST_OUTPUT_FLAG)
 # LDFLAGS
 #######################################
 # link script
-LDSCRIPT = 
+LDSCRIPT = STM32F407ZETX_FLASH.ld
 
 # libraries
 LIBS = -lc -lm 

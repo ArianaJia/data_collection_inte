@@ -21,7 +21,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "main.h"
-#include "cmsis_os2.h"
+#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -29,6 +29,8 @@
 #include "can.h"
 #include "mlx90640_app.h"
 #include "usart.h"
+// 引入FreeRTOS原生API头文件（必须，否则找不到xQueueSendFromISR）
+#include "queue.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -69,7 +71,7 @@ osThreadId_t myTask03Handle;
 const osThreadAttr_t myTask03_attributes = {
   .name = "myTask03",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityBelowNormal,
+  .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for myTask04 */
 osThreadId_t myTask04Handle;
@@ -89,6 +91,11 @@ const osThreadAttr_t myTask05_attributes = {
 osMessageQueueId_t myQueue01Handle;
 const osMessageQueueAttr_t myQueue01_attributes = {
   .name = "myQueue01"
+};
+/* Definitions for myQueue02 */
+osMessageQueueId_t myQueue02Handle;
+const osMessageQueueAttr_t myQueue02_attributes = {
+  .name = "myQueue02"
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -129,6 +136,9 @@ void MX_FREERTOS_Init(void) {
   /* Create the queue(s) */
   /* creation of myQueue01 */
   myQueue01Handle = osMessageQueueNew (16, sizeof(uint16_t), &myQueue01_attributes);
+
+  /* creation of myQueue02 */
+  myQueue02Handle = osMessageQueueNew (16, sizeof(uint16_t), &myQueue02_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -174,12 +184,12 @@ void StartDefaultTask(void *argument)
   for(;;)
   {
     //LED Lighting test
- 	  HAL_GPIO_TogglePin(GPIOD,GPIO_PIN_12);
- 	  HAL_UART_Transmit(&huart1,"hello_world\n",12, 200);
+ 	  HAL_GPIO_TogglePin(GPIOD,GPIO_PIN_12);//red
+ 	  // HAL_UART_Transmit(&huart1,"hello_world\n",12, 200);
 // 	  HAL_GPIO_TogglePin(GPIOD,GPIO_PIN_13);
  	  osDelay(100);
   }
-/* USER CODE END StartDefaultTask */
+  /* USER CODE END StartDefaultTask */
 }
 
 /* USER CODE BEGIN Header_StartTask02 */
@@ -204,7 +214,7 @@ void StartTask02(void *argument)
  	{
  	  Task02_ParseCanMessage(&recv_data);
  	}
-osDelay(10);
+   osDelay(10);
   }
   /* USER CODE END StartTask02 */
 }
@@ -234,18 +244,17 @@ void StartTask03(void *argument)
     {
       if (MLX90640_App_UartTxIdle())
       {
-        if (MLX90640_App_CaptureOnce(sensor_id) == 0)
-        {
-          (void)MLX90640_App_UartSendFrame_DMA(sensor_id);
-        }
+        (void)MLX90640_App_CaptureOnce(sensor_id);
+        // 不管成功/失败，都尝试发送（若UART忙则函数内部返回BUSY）
+        (void)MLX90640_App_UartSendFrame_DMA(sensor_id);
       }
-
+//      HAL_UART_Transmit(&huart1,sensor_id,sizeof(sensor_id),100);
       // 每路之间稍作间隔，避免I2C过载
-      osDelay(5);
+      osDelay(50);
     }
-    HAL_GPIO_TogglePin(GPIOD,GPIO_PIN_13);
+     HAL_GPIO_TogglePin(GPIOD,GPIO_PIN_13);
     // 一轮4路采集后再延时
-    osDelay(20);
+    osDelay(200);
   }
   /* USER CODE END StartTask03 */
 }
@@ -260,11 +269,11 @@ void StartTask03(void *argument)
 void StartTask04(void *argument)
 {
   /* USER CODE BEGIN StartTask04 */
-  /* Infinite loop */
+  // 调试MLX90640期间：暂停无关的UART发送，避免与UART1 DMA发送冲突
   for(;;)
   {
-	HAL_UART_Transmit(&huart1,"hello\n",6, 200);
-    osDelay(1);
+      HAL_UART_Transmit(&huart1,(uint8_t*)"task04\n",7,100);
+	  osDelay(500);
   }
   /* USER CODE END StartTask04 */
 }
@@ -279,19 +288,16 @@ void StartTask04(void *argument)
 void StartTask05(void *argument)
 {
   /* USER CODE BEGIN StartTask05 */
-  /* Infinite loop */
+  // 调试MLX90640期间：暂停无关的UART发送，避免与UART1 DMA发送冲突
   for(;;)
   {
-	HAL_UART_Transmit(&huart1,"world\n",6, 200);
-    osDelay(1);
+    osDelay(1000);
   }
   /* USER CODE END StartTask05 */
 }
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
-// 引入FreeRTOS原生API头文件（必须，否则找不到xQueueSendFromISR）
-#include "queue.h"
 
 // 修正后的CAN队列发送接口（中断安全）
 osStatus_t freertos_can_queue_send_from_isr(const CAN_Msg_Queue_t *pData)
@@ -448,15 +454,25 @@ static void Task02_ParseCanMessage(const CAN_Msg_Queue_t *recv_data)
         {
           g_CANB_LoopData.ECU.Motor_Torque[i] = (int)recv_data->msg_data[i + 3];
         }
-        g_CANB_LoopData.ECU.driving_mode = (int)recv_data->msg_data[7];
+          g_CANB_LoopData.ECU.driving_mode = (int)recv_data->msg_data[7];
         break;
 
       case 0x502:
         /* 四轮扭矩，RL,FL,RR,FR */
         for (int i = 0; i < 4; i++)
         {
-          g_CANB_LoopData.ECU.Wheel_RPM[i] = (int)recv_data->msg_data[i];
+          g_CANB_LoopData.ECU.Motor_RPM[i] = (int)recv_data->msg_data[i];
+          // 功率解析：低字节在前，高字节在后（与现有逻辑保持一致）
           g_CANB_LoopData.ECU.Motor_Power[i] = (256 * (int)recv_data->msg_data[2 * i + 1] + (int)recv_data->msg_data[2 * i]) / 9549;
+        }
+        break;
+
+      case 0x503:
+        // 新增：0x503 故障/错误码解析：高字节在前，低字节在后（Big-Endian）
+        // 约定：Byte0-1→ERRO[0], Byte2-3→ERRO[1], Byte4-5→ERRO[2], Byte6-7→ERRO[3]
+        for (int i = 0; i < 4; i++)
+        {
+          g_CANB_LoopData.ECU.ERRO[i] = (256 * (int)recv_data->msg_data[2 * i] + (int)recv_data->msg_data[2 * i + 1]);
         }
         break;
 

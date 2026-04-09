@@ -13,12 +13,18 @@ extern "C" {
 #define IMU_ACC_SCALE          (16.0f/32768.0f) // IMU加速度校准：组合值×16g/32768
 #define BAT_TEMP_POINT_PER_MOD 23
 #define BAT_TEMP_OFFSET        30
+#define MLX90640_SENSOR_COUNT  4U
+#define MLX90640_PIXEL_COUNT   768U
+#define MLX90640_UART_FRAME_BYTES (1U + (MLX90640_PIXEL_COUNT * sizeof(float)))
+#define MLX90640_FRAME_STATE_IDLE  0U
+#define MLX90640_FRAME_STATE_READY 1U
+#define MLX90640_FRAME_STATE_BUSY  2U
 /************************** 电池箱全量数据结构体（整合SOC+充电机所有交互数据） **************************/
 typedef struct
 {
     /********** 电池箱基础参数 **********/
-    uint16_t CellVolt[16][24];   // 单体电压[模组][单体]，mV
-    int8_t   ModTemp[16][8];     // 模组温度[模组][测点]，℃（已校准）
+    uint16_t CellVolt[6][24];   // 单体电压[模组][单体]，mV
+    int8_t   ModTemp[6][8];     // 模组温度[模组][测点]，℃（已校准）
     uint16_t TotalVolt;          // 电池总电压，mV
     int16_t  TotalCurrent;       // 电池总电流，mA（正放电/负充电）
     int8_t   MaxTemp;            // 电池最高温度，℃
@@ -61,31 +67,34 @@ typedef struct
     uint8_t  driving_mode;
 
     /********** 车轮转速（单位：rpm）与电机扭矩（N·M）**********/
-    uint16_t Wheel_RPM[4];           //车轮转速
-    uint16_t Motor_Torque[4];        // 左前车轮转速
+    uint16_t Motor_RPM[4];           //电机转速
+    uint16_t Motor_Torque[4];        //电机扭矩
+
+    /********** 新增：0x503 故障/错误码（按协议4路） **********/
+    int      ERRO[4];                // 4路整形错误码/故障码（解析方式同功率的低/高字节拼接）
 
     /********** 车轮附着系数利用率（0~100%） **********/
-    uint8_t  Adhesion_RL_Long;   // 左后-纵向附着系数利用率
-    uint8_t  Adhesion_RL_Lat;    // 左后-横向附着系数利用率
-    uint8_t  Adhesion_FL_Long;   // 左前-纵向附着系数利用率
-    uint8_t  Adhesion_FL_Lat;    // 左前-横向附着系数利用率
-    uint8_t  Adhesion_RR_Long;   // 右后-纵向附着系数利用率
-    uint8_t  Adhesion_RR_Lat;    // 右后-横向附着系数利用率
-    uint8_t  Adhesion_FR_Long;   // 右前-纵向附着系数利用率
-    uint8_t  Adhesion_FR_Lat;    // 右前-横向附着系数利用率
+//    uint8_t  Adhesion_RL_Long;   // 左后-纵向附着系数利用率
+//    uint8_t  Adhesion_RL_Lat;    // 左后-横向附着系数利用率
+//    uint8_t  Adhesion_FL_Long;   // 左前-纵向附着系数利用率
+//    uint8_t  Adhesion_FL_Lat;    // 左前-横向附着系数利用率
+//    uint8_t  Adhesion_RR_Long;   // 右后-纵向附着系数利用率
+//    uint8_t  Adhesion_RR_Lat;    // 右后-横向附着系数利用率
+//    uint8_t  Adhesion_FR_Long;   // 右前-纵向附着系数利用率
+//    uint8_t  Adhesion_FR_Lat;    // 右前-横向附着系数利用率
 } CANB_ECU_VehicleTypeDef;
 
 /************************** CANB-IMU惯导数据结构体（平铺字段，整合横/纵向加速度） **************************/
 typedef struct
 {
-    /********** 时间信息 **********/
-    uint8_t  Time_YY;            // 年份（例：24→2024年）
-    uint8_t  Time_MM;            // 月份（1~12）
-    uint8_t  Time_DD;            // 日期（1~31）
-    uint8_t  Time_HH;            // 小时（0~23）
-    uint8_t  Time_MN;            // 分钟（0~59）
-    uint8_t  Time_SS;            // 秒（0~59）
-
+//    /********** 时间信息 **********/
+//    uint8_t  Time_YY;            // 年份（例：24→2024年）
+//    uint8_t  Time_MM;            // 月份（1~12）
+//    uint8_t  Time_DD;            // 日期（1~31）
+//    uint8_t  Time_HH;            // 小时（0~23）
+//    uint8_t  Time_MN;            // 分钟（0~59）
+//    uint8_t  Time_SS;            // 秒（0~59）
+//
     /********** 原生三轴加速度（单位：g） **********/
     int16_t  Acc_X_Raw;          // X轴加速度原始值（低字节在前）
     int16_t  Acc_Y_Raw;          // Y轴加速度原始值
@@ -98,20 +107,20 @@ typedef struct
     float    Long_Accel;         // 纵向加速度（前进为正）
     float    Lat_Accel;          // 横向加速度（右偏为正）
 
-    /********** 三轴角速度 **********/
-    int16_t  Gyro_X_Raw;         // X轴角速度原始值
-    int16_t  Gyro_Y_Raw;         // Y轴角速度原始值
-    int16_t  Gyro_Z_Raw;         // Z轴角速度原始值
-
-    /********** 姿态角（横滚/俯仰/航向） **********/
-    int32_t  Roll_Raw;           // 横滚角原始值
-    int32_t  Pitch_Raw;          // 俯仰角原始值
-    int32_t  Yaw_Raw;            // 航向角原始值
-
-    /********** 三轴磁场 **********/
-    int16_t  Mag_X_Raw;          // X轴磁场原始值
-    int16_t  Mag_Y_Raw;          // Y轴磁场原始值
-    int16_t  Mag_Z_Raw;          // Z轴磁场原始值
+//    /********** 三轴角速度 **********/
+//    int16_t  Gyro_X_Raw;         // X轴角速度原始值
+//    int16_t  Gyro_Y_Raw;         // Y轴角速度原始值
+//    int16_t  Gyro_Z_Raw;         // Z轴角速度原始值
+//
+//    /********** 姿态角（横滚/俯仰/航向） **********/
+//    int32_t  Roll_Raw;           // 横滚角原始值
+//    int32_t  Pitch_Raw;          // 俯仰角原始值
+//    int32_t  Yaw_Raw;            // 航向角原始值
+//
+//    /********** 三轴磁场 **********/
+//    int16_t  Mag_X_Raw;          // X轴磁场原始值
+//    int16_t  Mag_Y_Raw;          // Y轴磁场原始值
+//    int16_t  Mag_Z_Raw;          // Z轴磁场原始值
 } CANB_IMU_TypeDef;
 
 /************************** CANB环路全量数据结构体（聚合ECU+IMU，全局入口） **************************/
@@ -129,9 +138,17 @@ extern CANB_LoopAllData   g_CANB_LoopData;// CANB环路全量数据（ECU+IMU）
 // 统一放入结构体，便于扩展与传递
 typedef struct
 {
-    float    To[768];              // 32x24 = 768 像素温度（单位：℃，float）
-    uint8_t  UartTxBuf[768 * 4];   // UART1 DMA发送缓冲区：3072字节（直接发送float数组的原始字节序）
-    volatile uint8_t FrameReady;   // 标志位：0=空闲/未就绪，1=有新帧待发送，2=发送中
+    float    To[MLX90640_SENSOR_COUNT][MLX90640_PIXEL_COUNT];
+    float    Ta[MLX90640_SENSOR_COUNT];
+    float    Tr[MLX90640_SENSOR_COUNT];
+    int32_t  LastError[MLX90640_SENSOR_COUNT];
+    uint32_t FrameCounter[MLX90640_SENSOR_COUNT];
+    uint8_t  ValidMask;
+    uint8_t  ActiveSensorId;
+    uint8_t  TxSensorId;
+    volatile uint8_t FrameState;
+    uint16_t UartTxLen;
+    uint8_t  UartTxBuf[MLX90640_UART_FRAME_BYTES];
 } MLX90640_FrameTypeDef;
 
 extern MLX90640_FrameTypeDef g_MLX90640_Frame;
