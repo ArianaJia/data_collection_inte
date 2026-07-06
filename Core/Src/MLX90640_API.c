@@ -37,6 +37,11 @@ static float GetMedian(float *values, int n);
 static int IsPixelBad(uint16_t pixel,paramsMLX90640 *params);
 static int ValidateFrameData(uint16_t *frameData);
 static int ValidateAuxData(uint16_t *auxData);
+static float *mlx90640ExtractScratch = 0;
+void MLX90640_SetExtractScratch(float *scratch)
+{
+    mlx90640ExtractScratch = scratch;
+}
   
 int MLX90640_DumpEE(uint8_t slaveAddr, uint16_t *eeData)
 {
@@ -232,6 +237,11 @@ static int ValidateAuxData(uint16_t *auxData)
 int MLX90640_ExtractParameters(uint16_t *eeData, paramsMLX90640 *mlx90640)
 {
     int error = 0;
+
+    if ((eeData == 0) || (mlx90640 == 0) || (mlx90640ExtractScratch == 0))
+    {
+        return -MLX90640_FRAME_DATA_ERROR;
+    }
     
     ExtractVDDParameters(eeData, mlx90640);
     ExtractPTATParameters(eeData, mlx90640);
@@ -878,7 +888,7 @@ static void ExtractAlphaParameters(uint16_t *eeData, paramsMLX90640 *mlx90640)
     uint8_t accRowScale;
     uint8_t accColumnScale;
     uint8_t accRemScale;
-    float alphaTemp[768];
+    float *alphaTemp = mlx90640ExtractScratch;
     float temp;
     
 
@@ -1044,7 +1054,7 @@ static void ExtractKtaPixelParameters(uint16_t *eeData, paramsMLX90640 *mlx90640
     uint8_t ktaScale1;
     uint8_t ktaScale2;
     uint8_t split;
-    float ktaTemp[768];
+    float *ktaTemp = mlx90640ExtractScratch;
     float temp;
     
     KtaRC[0] = (int8_t)MLX90640_MS_BYTE(eeData[54]);;
@@ -1119,7 +1129,7 @@ static void ExtractKvPixelParameters(uint16_t *eeData, paramsMLX90640 *mlx90640)
     int8_t KvReCe;
     uint8_t kvScale;
     uint8_t split;
-    float kvTemp[768];
+    float *kvTemp = mlx90640ExtractScratch;
     float temp;
 
     KvRoCo = MLX90640_NIBBLE4(eeData[52]);
@@ -1454,3 +1464,5 @@ static int IsPixelBad(uint16_t pixel,paramsMLX90640 *params)
 }     
 
 //------------------------------------------------------------------------------
+
+

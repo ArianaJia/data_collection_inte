@@ -112,6 +112,7 @@ typedef struct
     int MLX90640_SynchFrame(uint8_t slaveAddr);
     int MLX90640_TriggerMeasurement(uint8_t slaveAddr);
     int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData);
+    void MLX90640_SetExtractScratch(float *scratch);
     int MLX90640_ExtractParameters(uint16_t *eeData, paramsMLX90640 *mlx90640);
     float MLX90640_GetVdd(uint16_t *frameData, const paramsMLX90640 *params);
     float MLX90640_GetTa(uint16_t *frameData, const paramsMLX90640 *params);
@@ -128,3 +129,4 @@ typedef struct
     void MLX90640_BadPixelsCorrection(uint16_t *pixels, float *to, int mode, paramsMLX90640 *params);
     
 #endif
+

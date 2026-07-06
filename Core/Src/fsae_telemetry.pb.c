@@ -24,19 +24,22 @@ PB_BIND(fsae_BatteryModule, fsae_BatteryModule, AUTO)
 PB_BIND(fsae_BmsDetail, fsae_BmsDetail, 2)
 
 
+PB_BIND(fsae_ThermalRawChunk, fsae_ThermalRawChunk, AUTO)
+
+
 PB_BIND(fsae_ThermalSensorSummary, fsae_ThermalSensorSummary, AUTO)
 
 
 PB_BIND(fsae_ThermalSummary, fsae_ThermalSummary, 2)
 
 
-PB_BIND(fsae_ThermalRawChunk, fsae_ThermalRawChunk, AUTO)
-
-
 PB_BIND(fsae_MotorState, fsae_MotorState, AUTO)
 
 
 PB_BIND(fsae_VehicleState, fsae_VehicleState, AUTO)
+
+
+PB_BIND(fsae_TelemetryFrame, fsae_TelemetryFrame, 2)
 
 
 

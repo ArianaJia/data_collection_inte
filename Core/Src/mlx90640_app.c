@@ -2,131 +2,281 @@
 
 #include "MLX90640_API.h"
 #include "MLX90640_I2C_Driver.h"
-
-#include "i2c.h"
-#include "usart.h"
 #include "battery.h"
-#include "cmsis_os.h"
-#include "main.h"
-#include "gpio.h"
-#include <string.h>
 
-// Reflected temperature (Tr) approximation: use Ta
-static float g_tr = 23.15f;
+#include <stdio.h>
 
-static paramsMLX90640 g_params;
-static uint16_t g_eeData[MLX90640_EEPROM_DUMP_NUM];
-static uint16_t g_frameData[834];
+#define MLX90640_FRAME_ATTEMPTS_MAX 4U
+#define MLX90640_LOG_BUFFER_SIZE    160U
 
-// ------------------- UART DMA state -------------------
-static volatile uint8_t s_uart1_tx_busy = 0;
-
-uint8_t MLX90640_App_UartTxIdle(void)
+typedef struct
 {
-    return (s_uart1_tx_busy == 0);
+  uint16_t eeData[MLX90640_EEPROM_DUMP_NUM];
+  uint16_t frameData[834];
+  float tempMap[MLX90640_PIXEL_NUM];
+  paramsMLX90640 params;
+} MLX90640_RuntimeData_t;
+
+static MLX90640_RuntimeData_t g_runtime;
+static uint8_t g_sensorReady[MLX90640_SENSOR_COUNT];
+static char g_logLine[MLX90640_LOG_BUFFER_SIZE];
+static MLX90640_AppLogFn g_logCallback = NULL;
+
+static int32_t MLX90640_App_TempToCentiC(float temp_c)
+{
+  float scaled_temp = temp_c * (float)MLX90640_TEMP_SCALE;
+
+  if (scaled_temp >= 0.0f)
+  {
+    return (int32_t)(scaled_temp + 0.5f);
+  }
+
+  return (int32_t)(scaled_temp - 0.5f);
 }
 
-void MLX90640_App_Init(void)
+static void MLX90640_App_Log(const char *text)
 {
-    // I2C peripheral is already initialized by CubeMX: [`Core/Src/i2c.c`](Core/Src/i2c.c:32)
-    // UART1 peripheral is already initialized by CubeMX: [`Core/Src/usart.c`](Core/Src/usart.c:32)
+  if ((g_logCallback != NULL) && (text != NULL))
+  {
+    g_logCallback(text);
+  }
+}
 
-    // Init low-level driver
-    (void)MLX90640_I2CInit();
+static void MLX90640_App_LogInitError(uint8_t sensor_id, const char *step, int error)
+{
+  (void)snprintf(g_logLine, sizeof(g_logLine),
+      "MLX90640 init error, sensor=%u, channel=0x%02X, step=%s, status=%d, hal=%d, err=0x%08lX\r\n",
+      (unsigned int)sensor_id,
+      (unsigned int)MLX90640_GetSensorChannel(sensor_id),
+      step,
+      error,
+      (int)TCA9548A_GetLastHalStatus(),
+      (unsigned long)TCA9548A_GetLastErrorCode());
+  MLX90640_App_Log(g_logLine);
+}
 
-    // TCA9548A：默认先选CH0（避免总线悬空）
-    (void)TCA9548A_SelectChannel(0);
+static int MLX90640_App_LoadParametersOnChannel(uint8_t sensor_id)
+{
+  int status = MLX90640_SelectSensor(sensor_id);
+  if (status != MLX90640_NO_ERROR)
+  {
+    MLX90640_App_LogInitError(sensor_id, "select TCA9548A channel", status);
+    return status;
+  }
 
-    // 仅需初始化一次参数：4个MLX90640地址相同(0x33)，但参数可能略有差异。
-    // 这里先按“同型号同参数”处理：从CH0读取EEPROM并提取参数。
-    // 如你希望每路独立参数，需要扩展为 params[4] + eeData[4]。
-    if (MLX90640_DumpEE(MLX90640_ADDR, g_eeData) == MLX90640_NO_ERROR)
+  status = MLX90640_I2CProbe(MLX90640_ADDR);
+  (void)snprintf(g_logLine, sizeof(g_logLine),
+      "MLX90640 probe, sensor=%u, channel=0x%02X, status=%d, hal=%d, err=0x%08lX\r\n",
+      (unsigned int)sensor_id,
+      (unsigned int)MLX90640_GetSensorChannel(sensor_id),
+      status,
+      (int)MLX90640_GetLastHalStatus(),
+      (unsigned long)MLX90640_GetLastErrorCode());
+  MLX90640_App_Log(g_logLine);
+
+  if (status != MLX90640_NO_ERROR)
+  {
+    return status;
+  }
+
+  status = MLX90640_DumpEE(MLX90640_ADDR, g_runtime.eeData);
+  if (status != MLX90640_NO_ERROR)
+  {
+    MLX90640_App_LogInitError(sensor_id, "dump EEPROM", status);
+    return status;
+  }
+
+  status = MLX90640_ExtractParameters(g_runtime.eeData, &g_runtime.params);
+  if (status != MLX90640_NO_ERROR)
+  {
+    MLX90640_App_LogInitError(sensor_id, "extract parameters", status);
+  }
+
+  return status;
+}
+
+static int MLX90640_App_InitSensorOnChannel(uint8_t sensor_id)
+{
+  int status = MLX90640_App_LoadParametersOnChannel(sensor_id);
+  if (status != MLX90640_NO_ERROR)
+  {
+    return status;
+  }
+
+  status = MLX90640_SetChessMode(MLX90640_ADDR);
+  if (status != MLX90640_NO_ERROR)
+  {
+    MLX90640_App_LogInitError(sensor_id, "set chess mode", status);
+    return status;
+  }
+
+  status = MLX90640_SetRefreshRate(MLX90640_ADDR, MLX90640_REF_1HZ);
+  if (status != MLX90640_NO_ERROR)
+  {
+    MLX90640_App_LogInitError(sensor_id, "set refresh rate", status);
+    return status;
+  }
+
+  return MLX90640_NO_ERROR;
+}
+
+static void MLX90640_App_UpdateRegionTemp(uint8_t sensor_id, const float *pixel_temp)
+{
+  float region_sum[MLX90640_REGION_COUNT] = {0.0f};
+  uint16_t region_count[MLX90640_REGION_COUNT] = {0U};
+
+  for (uint16_t row = 0U; row < MLX90640_LINE_NUM; row++)
+  {
+    for (uint16_t col = 0U; col < MLX90640_COLUMN_NUM; col++)
     {
-        (void)MLX90640_ExtractParameters(g_eeData, &g_params);
+      uint16_t pixel_index = (uint16_t)(row * MLX90640_COLUMN_NUM + col);
+      uint8_t region_index = (uint8_t)((col * MLX90640_REGION_COUNT) / MLX90640_COLUMN_NUM);
+
+      region_sum[region_index] += pixel_temp[pixel_index];
+      region_count[region_index]++;
     }
+  }
+
+  for (uint8_t region_index = 0U; region_index < MLX90640_REGION_COUNT; region_index++)
+  {
+    if (region_count[region_index] > 0U)
+    {
+      g_MLX90640_Frame.RegionTemp[sensor_id][region_index] =
+          MLX90640_App_TempToCentiC(region_sum[region_index] / (float)region_count[region_index]);
+    }
+    else
+    {
+      g_MLX90640_Frame.RegionTemp[sensor_id][region_index] = 0;
+    }
+  }
+}
+
+void MLX90640_App_SetLogCallback(MLX90640_AppLogFn callback)
+{
+  g_logCallback = callback;
+}
+
+int MLX90640_App_Init(void)
+{
+  uint8_t initialized_count = 0U;
+
+  MLX90640_SetExtractScratch(g_runtime.tempMap);
+  (void)MLX90640_I2CInit();
+
+  for (uint8_t sensor_id = 0U; sensor_id < MLX90640_SENSOR_COUNT; sensor_id++)
+  {
+    int status = MLX90640_App_InitSensorOnChannel(sensor_id);
+    if (status != MLX90640_NO_ERROR)
+    {
+      g_sensorReady[sensor_id] = 0U;
+      g_MLX90640_Frame.LastError[sensor_id] = status;
+      continue;
+    }
+
+    g_sensorReady[sensor_id] = 1U;
+    initialized_count++;
+
+    (void)snprintf(g_logLine, sizeof(g_logLine),
+        "MLX90640 init ok, sensor=%u, channel=0x%02X\r\n",
+        (unsigned int)sensor_id,
+        (unsigned int)MLX90640_GetSensorChannel(sensor_id));
+    MLX90640_App_Log(g_logLine);
+  }
+
+  if (initialized_count == 0U)
+  {
+    MLX90640_App_Log("MLX90640 init failed\r\n");
+    return -MLX90640_I2C_WRITE_ERROR;
+  }
+
+  MLX90640_App_Log("MLX90640 initialized\r\n");
+  return MLX90640_NO_ERROR;
 }
 
 int MLX90640_App_CaptureOnce(uint8_t sensor_id)
 {
-    // 通过TCA9548A选择对应通道：sensor_id 0..3 => CH0..CH3
-    if (sensor_id > 3)
-        return -1;
-    if (TCA9548A_SelectChannel(sensor_id) != 0)
-        return -2;
+  if (sensor_id >= MLX90640_SENSOR_COUNT)
+  {
+    return -MLX90640_I2C_WRITE_ERROR;
+  }
 
-    int status = MLX90640_GetFrameData(MLX90640_ADDR, g_frameData);
+  if (g_sensorReady[sensor_id] == 0U)
+  {
+    return g_MLX90640_Frame.LastError[sensor_id];
+  }
+
+  int status = MLX90640_App_LoadParametersOnChannel(sensor_id);
+  if (status != MLX90640_NO_ERROR)
+  {
+    g_sensorReady[sensor_id] = 0U;
+    g_MLX90640_Frame.LastError[sensor_id] = status;
+    return status;
+  }
+
+  uint8_t subPageMask = 0U;
+  uint8_t frameAttempts = 0U;
+  float ta = 0.0f;
+  float tr = 0.0f;
+
+  while ((subPageMask != 0x03U) && (frameAttempts < MLX90640_FRAME_ATTEMPTS_MAX))
+  {
+    status = MLX90640_GetFrameData(MLX90640_ADDR, g_runtime.frameData);
     if (status != MLX90640_NO_ERROR)
-        return status;
-
-    float ta = MLX90640_GetTa(g_frameData, &g_params);
-    g_tr = ta - 8.0f; // typical approximation: Tr = Ta - 8
-
-    MLX90640_CalculateTo(g_frameData, &g_params, MLX90640_EMISSIVITY, g_tr, g_MLX90640_Frame.To[sensor_id]);
-
-    // optional: bad pixel correction
-    MLX90640_BadPixelsCorrection(g_params.brokenPixels, g_MLX90640_Frame.To[sensor_id], 1, &g_params);
-    MLX90640_BadPixelsCorrection(g_params.outlierPixels, g_MLX90640_Frame.To[sensor_id], 1, &g_params);
-
-    g_MLX90640_Frame.Ta[sensor_id] = ta;
-    g_MLX90640_Frame.Tr[sensor_id] = g_tr;
-    g_MLX90640_Frame.LastError[sensor_id] = 0;
-    g_MLX90640_Frame.FrameCounter[sensor_id]++;
-    g_MLX90640_Frame.ActiveSensorId = sensor_id;
-    g_MLX90640_Frame.ValidMask |= (uint8_t)(1U << sensor_id);
-    g_MLX90640_Frame.FrameState = MLX90640_FRAME_STATE_READY;
-
-    return 0;
-}
-
-int MLX90640_App_UartSendFrame_DMA(uint8_t sensor_id)
-{
-    if (s_uart1_tx_busy)
-        return -1;
-
-    // 第1字节：sensor_id；后续：768个float
-    g_MLX90640_Frame.UartTxBuf[0] = sensor_id;
-    memcpy(&g_MLX90640_Frame.UartTxBuf[1], (uint8_t *)g_MLX90640_Frame.To[sensor_id], sizeof(g_MLX90640_Frame.To[sensor_id]));
-
-    // MAX485: 发送前切到“写”(驱动使能)
-    HAL_GPIO_WritePin(EN_GPIO_Port, EN_Pin, GPIO_PIN_SET);
-
-    g_MLX90640_Frame.TxSensorId = sensor_id;
-    g_MLX90640_Frame.UartTxLen = MLX90640_UART_FRAME_BYTES;
-    g_MLX90640_Frame.FrameState = MLX90640_FRAME_STATE_BUSY;
-    s_uart1_tx_busy = 1;
-    if (HAL_UART_Transmit_DMA(&huart1, g_MLX90640_Frame.UartTxBuf, g_MLX90640_Frame.UartTxLen) != HAL_OK)
     {
-        g_MLX90640_Frame.FrameState = MLX90640_FRAME_STATE_READY;
-        s_uart1_tx_busy = 0;
-        // 失败则立即回到“读”(接收)
-        HAL_GPIO_WritePin(EN_GPIO_Port, EN_Pin, GPIO_PIN_RESET);
-        return -2;
+      (void)snprintf(g_logLine, sizeof(g_logLine), "Frame read error: %d\r\n", status);
+      MLX90640_App_Log(g_logLine);
+      g_MLX90640_Frame.LastError[sensor_id] = status;
+      return status;
     }
 
-    return 0;
+    subPageMask |= (uint8_t)(1U << (g_runtime.frameData[833] & 1U));
+    ta = MLX90640_GetTa(g_runtime.frameData, &g_runtime.params);
+    tr = ta - MLX90640_TA_SHIFT;
+    MLX90640_CalculateTo(
+        g_runtime.frameData,
+        &g_runtime.params,
+        MLX90640_EMISSIVITY,
+        tr,
+        g_runtime.tempMap);
+    frameAttempts++;
+  }
+
+  if (subPageMask != 0x03U)
+  {
+    g_MLX90640_Frame.LastError[sensor_id] = -MLX90640_FRAME_DATA_ERROR;
+    return -MLX90640_FRAME_DATA_ERROR;
+  }
+
+  MLX90640_BadPixelsCorrection(g_runtime.params.brokenPixels, g_runtime.tempMap, 1, &g_runtime.params);
+  MLX90640_BadPixelsCorrection(g_runtime.params.outlierPixels, g_runtime.tempMap, 1, &g_runtime.params);
+  MLX90640_App_UpdateRegionTemp(sensor_id, g_runtime.tempMap);
+
+  g_MLX90640_Frame.Ta[sensor_id] = MLX90640_App_TempToCentiC(ta);
+  g_MLX90640_Frame.Tr[sensor_id] = MLX90640_App_TempToCentiC(tr);
+  g_MLX90640_Frame.LastError[sensor_id] = 0;
+  g_MLX90640_Frame.FrameCounter[sensor_id]++;
+  g_MLX90640_Frame.ActiveSensorId = sensor_id;
+  g_MLX90640_Frame.ValidMask |= (uint8_t)(1U << sensor_id);
+
+  return MLX90640_NO_ERROR;
 }
 
-// HAL callback: clear busy flag
-void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+uint8_t MLX90640_App_IsSensorReady(uint8_t sensor_id)
 {
-    if (huart->Instance == USART1)
-    {
-        // DMA发送完成：延时10ms后切回“读”(接收)模式
-        osDelay(10);
-        HAL_GPIO_WritePin(EN_GPIO_Port, EN_Pin, GPIO_PIN_RESET);
+  if (sensor_id >= MLX90640_SENSOR_COUNT)
+  {
+    return 0U;
+  }
 
-        g_MLX90640_Frame.FrameState = MLX90640_FRAME_STATE_IDLE;
-        s_uart1_tx_busy = 0;
-    }
+  return g_sensorReady[sensor_id];
 }
 
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+const float *MLX90640_App_GetTempMap(void)
 {
-    if (huart->Instance == USART1)
-    {
-        // 出错：立即回到“读”(接收)模式，避免总线被占用
-        HAL_GPIO_WritePin(EN_GPIO_Port, EN_Pin, GPIO_PIN_RESET);
-        g_MLX90640_Frame.FrameState = MLX90640_FRAME_STATE_READY;
-        s_uart1_tx_busy = 0;
-    }
+  return g_runtime.tempMap;
 }
+
+
+
+
+

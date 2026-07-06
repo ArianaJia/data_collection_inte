@@ -1,4 +1,4 @@
-#ifndef __MLX90640_APP_H
+﻿#ifndef __MLX90640_APP_H
 #define __MLX90640_APP_H
 
 #ifdef __cplusplus
@@ -7,27 +7,19 @@ extern "C" {
 
 #include <stdint.h>
 
-
-// ------------------- MLX90640 config -------------------
-#define MLX90640_ADDR            0x33
+#define MLX90640_ADDR            0x33U
 #define MLX90640_EMISSIVITY      0.95f
 
-// 初始化 MLX90640（读取EEPROM并提取参数，设置默认刷新率/模式）
-void MLX90640_App_Init(void);
+typedef void (*MLX90640_AppLogFn)(const char *text);
 
-// 采集一帧并计算温度数组（当前实现会写入全局帧缓冲）
-// 返回 0 成功，非0失败
+void MLX90640_App_SetLogCallback(MLX90640_AppLogFn callback);
+int MLX90640_App_Init(void);
 int MLX90640_App_CaptureOnce(uint8_t sensor_id);
-
-// 将温度数组打包并通过 UART1 DMA 发送：第1字节为sensor_id，后续为768个float(小端)
-// 返回 0 成功启动发送，非0表示忙或失败
-int MLX90640_App_UartSendFrame_DMA(uint8_t sensor_id);
-
-// 查询 UART1 DMA 是否空闲（1=空闲可发送，0=忙）
-uint8_t MLX90640_App_UartTxIdle(void);
+uint8_t MLX90640_App_IsSensorReady(uint8_t sensor_id);
+const float *MLX90640_App_GetTempMap(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* __MLX90640_APP_H */
+#endif

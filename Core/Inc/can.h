@@ -60,6 +60,13 @@ typedef struct
     uint8_t is_ext_id;     // 0=标准帧，1=扩展帧
 } CAN_Msg_Queue_t;
 
+
+typedef struct
+{
+    uint32_t std_id;
+    uint8_t data[8];
+} CAN_Tx_Queue_t;
+
 // 声明CAN通信结构体实例（修正命名冲突）
 extern can_msg g_can_msg;
 /* USER CODE END Private defines */
@@ -73,6 +80,7 @@ void User_CAN1_Send(void);
 void CAN_Send_Msg(CAN_HandleTypeDef *canHandle, uint32_t SendStdId, uint8_t *pTxData);
 void CAN_Start(void);
 osStatus_t freertos_can_queue_send_from_isr(const CAN_Msg_Queue_t *pData);
+osStatus_t freertos_can1_tx_queue_put(const CAN_Tx_Queue_t *pData, uint32_t timeout_ms);
 
 
 /* USER CODE END Prototypes */

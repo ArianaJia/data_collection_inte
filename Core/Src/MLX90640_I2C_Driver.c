@@ -1,184 +1,340 @@
-/**
- * MLX90640 I2C driver (STM32 HAL) - DMA based implementation
- *
- * This file is missing in the current project, but the API header
- * [`Core/Inc/MLX90640_I2C_Driver.h`](Core/Inc/MLX90640_I2C_Driver.h:1) expects these functions.
- *
- * Implementation strategy:
- * - Use HAL_I2C_Master_Transmit_DMA + HAL_I2C_Master_Receive_DMA
- * - Perform a "register address write" (2 bytes) followed by repeated-start receive
- * - Use completion flags set in HAL_I2C callbacks
- * - Provide a blocking wait with timeout (safe for RTOS tasks)
- */
-
 #include "MLX90640_I2C_Driver.h"
+
+#include "i2c.h"
+#include "gpio.h"
 #include "cmsis_os.h"
-#include <string.h>
 
-int TCA9548A_SelectChannel(uint8_t ch)
+static HAL_StatusTypeDef tca9548aLastHalStatus = HAL_OK;
+static uint32_t tca9548aLastErrorCode = HAL_I2C_ERROR_NONE;
+static HAL_StatusTypeDef mlx90640LastHalStatus = HAL_OK;
+static uint32_t mlx90640LastErrorCode = HAL_I2C_ERROR_NONE;
+static volatile uint8_t mlx90640I2cRxDone = 0U;
+static volatile uint8_t mlx90640I2cError = 0U;
+static uint8_t i2c1StartupRecoveryDone = 0U;
+static uint8_t tca9548aConsecutiveBusyCount = 0U;
+static const uint8_t mlx90640SensorChannels[MLX90640_SENSOR_NUM] = {0U, 1U, 2U, 3U};
+
+static void mlx_delay_ms(uint32_t delay_ms)
 {
-    uint8_t ctrl;
-
-    if (ch == 0xFF)
-    {
-        ctrl = 0x00; // disable all channels
-    }
-    else if (ch <= 7)
-    {
-        ctrl = (uint8_t)(1U << ch);
-    }
-    else
-    {
-        return -1;
-    }
-
-    // TCA9548A control register write
-    if (HAL_I2C_Master_Transmit(MLX90640_I2C_HANDLE, (uint16_t)(TCA9548A_ADDR_7BIT << 1), &ctrl, 1, 10) != HAL_OK)
-    {
-        return -1;
-    }
-
-    // small settle delay (optional)
-    osDelay(1);
-    return 0;
+  if (osKernelGetState() == osKernelRunning)
+  {
+    osDelay(delay_ms);
+  }
+  else
+  {
+    HAL_Delay(delay_ms);
+  }
 }
 
-// ------------------- DMA global objects declared in header -------------------
-volatile int8_t mlx90640_dma_tx_flag = 0;
-volatile int8_t mlx90640_dma_rx_flag = 0;
-uint8_t mlx90640_dma_buf[MLX90640_DMA_BUF_SIZE];
-
-// ------------------- local config -------------------
-#ifndef MLX90640_I2C_TIMEOUT_MS
-#define MLX90640_I2C_TIMEOUT_MS 50U
-#endif
-
-static int mlx_wait_flag(volatile int8_t *flag, uint32_t timeout_ms)
+static void I2C1_RecoverBus(void)
 {
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GetTick() - t0 < timeout_ms)
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  HAL_I2C_DeInit(&hi2c1);
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6 | GPIO_PIN_7, GPIO_PIN_SET);
+  HAL_Delay(1);
+
+  for (uint8_t pulse = 0U; pulse < 9U; pulse++)
+  {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+    HAL_Delay(1);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+    HAL_Delay(1);
+  }
+
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+  HAL_Delay(1);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+  HAL_Delay(1);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+  HAL_Delay(1);
+
+  MX_I2C1_Init();
+}
+
+static uint8_t TCA9548A_IsBusyOrTimeout(void)
+{
+  return ((tca9548aLastHalStatus == HAL_BUSY) ||
+          ((tca9548aLastErrorCode & HAL_I2C_ERROR_TIMEOUT) != 0U)) ? 1U : 0U;
+}
+
+static HAL_StatusTypeDef TCA9548A_WriteChannelMask(uint8_t channelMask)
+{
+  tca9548aLastHalStatus = HAL_I2C_Master_Transmit(
+      &hi2c1, (uint16_t)(TCA9548A_ADDR_7BIT << 1), &channelMask, 1U, MLX90640_I2C_TIMEOUT_MS);
+  tca9548aLastErrorCode = hi2c1.ErrorCode;
+  return tca9548aLastHalStatus;
+}
+
+static HAL_StatusTypeDef MLX90640_I2CWaitForDmaRx(uint32_t tickstart)
+{
+  while ((mlx90640I2cRxDone == 0U) && (mlx90640I2cError == 0U))
+  {
+    if ((HAL_GetTick() - tickstart) > MLX90640_I2C_DMA_TIMEOUT_MS)
     {
-        if (*flag == 1)
-            return 0;
-        if (*flag < 0)
-            return -1;
-        // give time to other tasks/ISRs
-        osDelay(1);
+      mlx90640LastHalStatus = HAL_TIMEOUT;
+      mlx90640LastErrorCode = hi2c1.ErrorCode | HAL_I2C_ERROR_TIMEOUT;
+
+      if (hi2c1.hdmarx != NULL)
+      {
+        (void)HAL_DMA_Abort(hi2c1.hdmarx);
+      }
+
+      (void)HAL_I2C_DeInit(&hi2c1);
+      (void)HAL_I2C_Init(&hi2c1);
+      return HAL_TIMEOUT;
     }
-    return -1;
+
+    mlx_delay_ms(1U);
+  }
+
+  if (mlx90640I2cError != 0U)
+  {
+    mlx90640LastHalStatus = HAL_ERROR;
+    mlx90640LastErrorCode = hi2c1.ErrorCode;
+    return HAL_ERROR;
+  }
+
+  mlx90640LastHalStatus = HAL_OK;
+  mlx90640LastErrorCode = hi2c1.ErrorCode;
+  return HAL_OK;
+}
+
+static int MLX90640_HAL_StatusToError(HAL_StatusTypeDef status)
+{
+  if (status == HAL_OK)
+  {
+    return MLX90640_NO_ERROR;
+  }
+
+  if ((status == HAL_ERROR) && ((hi2c1.ErrorCode & HAL_I2C_ERROR_AF) != 0U))
+  {
+    return -MLX90640_I2C_NACK_ERROR;
+  }
+
+  return -MLX90640_I2C_WRITE_ERROR;
 }
 
 void MLX90640_I2CInit(void)
 {
-    // I2C is initialized by CubeMX: [`Core/Src/i2c.c`](Core/Src/i2c.c:1)
-    // Nothing to do here.
+  MX_I2C1_Init();
 }
 
 int MLX90640_I2CGeneralReset(void)
 {
-    // General Call Reset (0x00) + 0x06
-    uint8_t reset_cmd = 0x06;
+  uint8_t command = 0x06U;
+  HAL_StatusTypeDef status = HAL_I2C_Master_Transmit(&hi2c1, 0x00U, &command, 1U, MLX90640_I2C_TIMEOUT_MS);
+  mlx90640LastHalStatus = status;
+  mlx90640LastErrorCode = hi2c1.ErrorCode;
+  return MLX90640_HAL_StatusToError(status);
+}
 
-    mlx90640_dma_tx_flag = 0;
-    mlx90640_dma_rx_flag = 0;
+int TCA9548A_SelectChannel(uint8_t channel)
+{
+  if (channel > 7U)
+  {
+    tca9548aLastHalStatus = HAL_ERROR;
+    tca9548aLastErrorCode = HAL_I2C_ERROR_NONE;
+    return -MLX90640_I2C_WRITE_ERROR;
+  }
 
-    if (HAL_I2C_Master_Transmit_DMA(MLX90640_I2C_HANDLE, 0x00, &reset_cmd, 1) != HAL_OK)
-        return -MLX90640_I2C_NACK_ERROR;
+  uint8_t channelMask = (uint8_t)(1U << channel);
 
-    if (mlx_wait_flag(&mlx90640_dma_tx_flag, MLX90640_I2C_TIMEOUT_MS) != 0)
-        return -MLX90640_I2C_NACK_ERROR;
+  if (i2c1StartupRecoveryDone == 0U)
+  {
+    I2C1_RecoverBus();
+    (void)TCA9548A_WriteChannelMask(0U);
+    mlx_delay_ms(1U);
+    i2c1StartupRecoveryDone = 1U;
+  }
 
-    return MLX90640_NO_ERROR;
+  (void)TCA9548A_WriteChannelMask(channelMask);
+
+  if (TCA9548A_IsBusyOrTimeout() != 0U)
+  {
+    tca9548aConsecutiveBusyCount++;
+
+    if (tca9548aConsecutiveBusyCount >= 3U)
+    {
+      I2C1_RecoverBus();
+      (void)TCA9548A_WriteChannelMask(0U);
+      mlx_delay_ms(1U);
+      (void)TCA9548A_WriteChannelMask(channelMask);
+      tca9548aConsecutiveBusyCount = (TCA9548A_IsBusyOrTimeout() != 0U) ? 1U : 0U;
+    }
+  }
+  else
+  {
+    tca9548aConsecutiveBusyCount = 0U;
+  }
+
+  int status = MLX90640_HAL_StatusToError(tca9548aLastHalStatus);
+  if (status == MLX90640_NO_ERROR)
+  {
+    mlx_delay_ms(1U);
+  }
+
+  return status;
+}
+
+int MLX90640_SelectSensor(uint8_t sensorIndex)
+{
+  if (sensorIndex >= MLX90640_SENSOR_NUM)
+  {
+    return -MLX90640_I2C_WRITE_ERROR;
+  }
+
+  return TCA9548A_SelectChannel(mlx90640SensorChannels[sensorIndex]);
+}
+
+uint8_t MLX90640_GetSensorChannel(uint8_t sensorIndex)
+{
+  if (sensorIndex >= MLX90640_SENSOR_NUM)
+  {
+    return 0xFFU;
+  }
+
+  return mlx90640SensorChannels[sensorIndex];
+}
+
+HAL_StatusTypeDef TCA9548A_GetLastHalStatus(void)
+{
+  return tca9548aLastHalStatus;
+}
+
+uint32_t TCA9548A_GetLastErrorCode(void)
+{
+  return tca9548aLastErrorCode;
+}
+
+HAL_StatusTypeDef MLX90640_GetLastHalStatus(void)
+{
+  return mlx90640LastHalStatus;
+}
+
+uint32_t MLX90640_GetLastErrorCode(void)
+{
+  return mlx90640LastErrorCode;
 }
 
 int MLX90640_I2CRead(uint8_t slaveAddr, uint16_t startAddress, uint16_t nMemAddressRead, uint16_t *data)
 {
-    if (data == NULL)
-        return -MLX90640_FRAME_DATA_ERROR;
+  if (data == NULL)
+  {
+    return -MLX90640_FRAME_DATA_ERROR;
+  }
 
-    // Each memory word is 16-bit
-    uint32_t rx_bytes = (uint32_t)nMemAddressRead * 2U;
-    if (rx_bytes + 2U > MLX90640_DMA_BUF_SIZE)
-        return -MLX90640_FRAME_DATA_ERROR;
+  uint16_t wordsRemaining = nMemAddressRead;
+  uint16_t currentAddress = startAddress;
+  uint16_t dataIndex = 0U;
+  uint8_t rawBuffer[MLX90640_I2C_READ_CHUNK_WORDS * 2U];
 
-    // Prepare 2-byte register address (big endian)
-    mlx90640_dma_buf[0] = (uint8_t)((startAddress >> 8) & 0xFF);
-    mlx90640_dma_buf[1] = (uint8_t)(startAddress & 0xFF);
+  while (wordsRemaining > 0U)
+  {
+    uint16_t wordsToRead = (wordsRemaining > MLX90640_I2C_READ_CHUNK_WORDS) ?
+        MLX90640_I2C_READ_CHUNK_WORDS : wordsRemaining;
 
-    mlx90640_dma_tx_flag = 0;
-    mlx90640_dma_rx_flag = 0;
+    mlx90640I2cRxDone = 0U;
+    mlx90640I2cError = 0U;
 
-    // Write register address
-    if (HAL_I2C_Master_Transmit_DMA(MLX90640_I2C_HANDLE, (uint16_t)(slaveAddr << 1), mlx90640_dma_buf, 2) != HAL_OK)
-        return -MLX90640_I2C_NACK_ERROR;
+    HAL_StatusTypeDef status = HAL_I2C_Mem_Read_DMA(
+        &hi2c1,
+        (uint16_t)(slaveAddr << 1),
+        currentAddress,
+        I2C_MEMADD_SIZE_16BIT,
+        rawBuffer,
+        (uint16_t)(wordsToRead * 2U));
+    mlx90640LastHalStatus = status;
+    mlx90640LastErrorCode = hi2c1.ErrorCode;
 
-    if (mlx_wait_flag(&mlx90640_dma_tx_flag, MLX90640_I2C_TIMEOUT_MS) != 0)
-        return -MLX90640_I2C_NACK_ERROR;
-
-    // Receive data payload into same DMA buffer
-    if (HAL_I2C_Master_Receive_DMA(MLX90640_I2C_HANDLE, (uint16_t)(slaveAddr << 1), &mlx90640_dma_buf[0], (uint16_t)rx_bytes) != HAL_OK)
-        return -MLX90640_I2C_NACK_ERROR;
-
-    if (mlx_wait_flag(&mlx90640_dma_rx_flag, MLX90640_I2C_TIMEOUT_MS) != 0)
-        return -MLX90640_I2C_NACK_ERROR;
-
-    // Convert bytes -> uint16_t words (big endian)
-    for (uint16_t i = 0; i < nMemAddressRead; i++)
+    if (status != HAL_OK)
     {
-        uint16_t msb = mlx90640_dma_buf[(uint32_t)i * 2U + 0U];
-        uint16_t lsb = mlx90640_dma_buf[(uint32_t)i * 2U + 1U];
-        data[i] = (uint16_t)((msb << 8) | lsb);
+      return MLX90640_HAL_StatusToError(status);
     }
 
-    return MLX90640_NO_ERROR;
+    status = MLX90640_I2CWaitForDmaRx(HAL_GetTick());
+    if (status != HAL_OK)
+    {
+      return MLX90640_HAL_StatusToError(status);
+    }
+
+    for (uint16_t i = 0U; i < wordsToRead; ++i)
+    {
+      data[dataIndex + i] = (uint16_t)(((uint16_t)rawBuffer[2U * i] << 8) | rawBuffer[2U * i + 1U]);
+    }
+
+    dataIndex = (uint16_t)(dataIndex + wordsToRead);
+    currentAddress = (uint16_t)(currentAddress + wordsToRead);
+    wordsRemaining = (uint16_t)(wordsRemaining - wordsToRead);
+  }
+
+  return MLX90640_NO_ERROR;
+}
+
+int MLX90640_I2CProbe(uint8_t slaveAddr)
+{
+  mlx90640LastHalStatus = HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(slaveAddr << 1), 1U, MLX90640_I2C_TIMEOUT_MS);
+  mlx90640LastErrorCode = hi2c1.ErrorCode;
+  return MLX90640_HAL_StatusToError(mlx90640LastHalStatus);
 }
 
 int MLX90640_I2CWrite(uint8_t slaveAddr, uint16_t writeAddress, uint16_t data)
 {
-    // Payload: addr_hi addr_lo data_hi data_lo
-    uint8_t buf[4];
-    buf[0] = (uint8_t)((writeAddress >> 8) & 0xFF);
-    buf[1] = (uint8_t)(writeAddress & 0xFF);
-    buf[2] = (uint8_t)((data >> 8) & 0xFF);
-    buf[3] = (uint8_t)(data & 0xFF);
+  uint8_t rawBuffer[2];
+  rawBuffer[0] = (uint8_t)(data >> 8);
+  rawBuffer[1] = (uint8_t)(data & 0xFFU);
 
-    mlx90640_dma_tx_flag = 0;
-    mlx90640_dma_rx_flag = 0;
-
-    if (HAL_I2C_Master_Transmit_DMA(MLX90640_I2C_HANDLE, (uint16_t)(slaveAddr << 1), buf, 4) != HAL_OK)
-        return -MLX90640_I2C_NACK_ERROR;
-
-    if (mlx_wait_flag(&mlx90640_dma_tx_flag, MLX90640_I2C_TIMEOUT_MS) != 0)
-        return -MLX90640_I2C_NACK_ERROR;
-
-    return MLX90640_NO_ERROR;
+  HAL_StatusTypeDef status = HAL_I2C_Mem_Write(
+      &hi2c1,
+      (uint16_t)(slaveAddr << 1),
+      writeAddress,
+      I2C_MEMADD_SIZE_16BIT,
+      rawBuffer,
+      2U,
+      MLX90640_I2C_TIMEOUT_MS);
+  mlx90640LastHalStatus = status;
+  mlx90640LastErrorCode = hi2c1.ErrorCode;
+  return MLX90640_HAL_StatusToError(status);
 }
 
 void MLX90640_I2CFreqSet(int freq)
 {
-    // Project already configures I2C to 400k in [`Core/Src/i2c.c`](Core/Src/i2c.c:32)
-    // If you need dynamic frequency switching, regenerate CubeMX or re-init I2C here.
-    (void)freq;
+  if ((freq <= 0) || (hi2c1.Init.ClockSpeed == (uint32_t)freq))
+  {
+    return;
+  }
+
+  hi2c1.Init.ClockSpeed = (uint32_t)freq;
+  HAL_I2C_DeInit(&hi2c1);
+  HAL_I2C_Init(&hi2c1);
 }
 
-// ------------------- HAL callbacks: set flags -------------------
-void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c)
+void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
-    if (hi2c == MLX90640_I2C_HANDLE)
-        mlx90640_dma_tx_flag = 1;
-}
-
-void HAL_I2C_MasterRxCpltCallback(I2C_HandleTypeDef *hi2c)
-{
-    if (hi2c == MLX90640_I2C_HANDLE)
-        mlx90640_dma_rx_flag = 1;
+  if (hi2c->Instance == I2C1)
+  {
+    mlx90640I2cRxDone = 1U;
+    mlx90640I2cError = 0U;
+    mlx90640LastHalStatus = HAL_OK;
+    mlx90640LastErrorCode = hi2c->ErrorCode;
+  }
 }
 
 void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c)
 {
-    if (hi2c == MLX90640_I2C_HANDLE)
-    {
-        mlx90640_dma_tx_flag = -1;
-        mlx90640_dma_rx_flag = -1;
-    }
+  if (hi2c->Instance == I2C1)
+  {
+    mlx90640I2cError = 1U;
+    mlx90640LastHalStatus = HAL_ERROR;
+    mlx90640LastErrorCode = hi2c->ErrorCode;
+  }
 }
+

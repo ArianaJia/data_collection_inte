@@ -14,11 +14,8 @@ extern "C" {
 #define BAT_TEMP_POINT_PER_MOD 23
 #define BAT_TEMP_OFFSET        30
 #define MLX90640_SENSOR_COUNT  4U
-#define MLX90640_PIXEL_COUNT   768U
-#define MLX90640_UART_FRAME_BYTES (1U + (MLX90640_PIXEL_COUNT * sizeof(float)))
-#define MLX90640_FRAME_STATE_IDLE  0U
-#define MLX90640_FRAME_STATE_READY 1U
-#define MLX90640_FRAME_STATE_BUSY  2U
+#define MLX90640_REGION_COUNT  4U
+#define MLX90640_TEMP_SCALE    100L
 /************************** 电池箱全量数据结构体（整合SOC+充电机所有交互数据） **************************/
 typedef struct
 {
@@ -138,17 +135,13 @@ extern CANB_LoopAllData   g_CANB_LoopData;// CANB环路全量数据（ECU+IMU）
 // 统一放入结构体，便于扩展与传递
 typedef struct
 {
-    float    To[MLX90640_SENSOR_COUNT][MLX90640_PIXEL_COUNT];
-    float    Ta[MLX90640_SENSOR_COUNT];
-    float    Tr[MLX90640_SENSOR_COUNT];
+    int32_t  RegionTemp[MLX90640_SENSOR_COUNT][MLX90640_REGION_COUNT];
+    int32_t  Ta[MLX90640_SENSOR_COUNT];
+    int32_t  Tr[MLX90640_SENSOR_COUNT];
     int32_t  LastError[MLX90640_SENSOR_COUNT];
     uint32_t FrameCounter[MLX90640_SENSOR_COUNT];
     uint8_t  ValidMask;
     uint8_t  ActiveSensorId;
-    uint8_t  TxSensorId;
-    volatile uint8_t FrameState;
-    uint16_t UartTxLen;
-    uint8_t  UartTxBuf[MLX90640_UART_FRAME_BYTES];
 } MLX90640_FrameTypeDef;
 
 extern MLX90640_FrameTypeDef g_MLX90640_Frame;

@@ -61,8 +61,6 @@ void Error_Handler(void);
 #define EN__GPIO_Port GPIOB
 #define LED_GREEN_Pin GPIO_PIN_12
 #define LED_GREEN_GPIO_Port GPIOD
-#define LED_RED_Pin GPIO_PIN_13
-#define LED_RED_GPIO_Port GPIOD
 #define BLUE_LED_Pin GPIO_PIN_1
 #define BLUE_LED_GPIO_Port GPIOE
 
