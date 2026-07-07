@@ -1,40 +1,50 @@
 #include "publish.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
 #include <stdbool.h>
 #include <string.h>
 
-#include "battery.h"
+#include "telemetry_data.h"
 #include "pb.h"
 #include "pb_common.h"
 #include "pb_encode.h"
+#include "freertos_app.h"
 #include "usart.h"
-
-#define PUBLISH_FAST_PERIOD_MS         100U
-#define PUBLISH_MEDIUM_PERIOD_MS       200U
-#define PUBLISH_SLOW_PERIOD_MS         500U
-
-#define PUBLISH_FRAME_MAGIC_0          0x46U
-#define PUBLISH_FRAME_MAGIC_1          0x53U
-#define PUBLISH_FRAME_HEADER_SIZE         5U
-#define PUBLISH_MAX_TOPIC_LEN            32U
-#define PUBLISH_MAX_PAYLOAD_SIZE       FSAE_FSAE_TELEMETRY_PB_H_MAX_SIZE
-#define PUBLISH_MAX_FRAME_SIZE         (PUBLISH_FRAME_HEADER_SIZE + PUBLISH_MAX_TOPIC_LEN + PUBLISH_MAX_PAYLOAD_SIZE)
-#define PUBLISH_BMS_DETAIL_CELL_COUNT    23U
 
 extern osMessageQueueId_t myQueue04Handle;
 
+static fsae_FastTelemetry g_publishFastTelemetry;
+static fsae_TelemetryFrame g_publishTelemetryFrame;
+static fsae_VehicleState g_publishVehicleState;
+static fsae_ThermalSummary g_publishThermalSummary;
+static volatile uint32_t g_publishQueuedTopicMask = 0U;
+
 static fsae_DrivingMode Publish_MapDrivingMode(uint8_t raw_mode);
-static fsae_ImdState Publish_MapImdState(uint8_t raw_state);
-static fsae_WorkState Publish_MapWorkState(uint8_t raw_state);
+static uint32_t Publish_GetVehicleSpeedKmh(void);
 static fsae_MotorPosition Publish_MapCanbMotorPosition(uint8_t motor_index);
+static uint8_t Publish_MapMotorOrderToThermalSensorIndex(uint8_t motor_index);
 static void Publish_MapCanbMotorState(fsae_MotorState *motor_state, uint8_t motor_index);
 static void Publish_MapFastTelemetry(fsae_FastTelemetry *fast_telemetry);
-static void Publish_MapBmsSummary(fsae_BmsSummary *bms_summary);
-static void Publish_MapBmsDetail(fsae_BmsDetail *bms_detail);
+/* Export the raw IVT cache into protobuf form. */
+static bool Publish_MapIvtTelemetry(fsae_IvtTelemetry *ivt_telemetry);
+/* Export the unified energy meter view.
+ * Source may be IVT or FS, but protobuf sees one stable message shape.
+ */
+static bool Publish_MapEnergyMeterTelemetry(fsae_EnergyMeterTelemetry *energy_meter);
+/* Export the CANB/GPS/IMU subset currently used by protobuf motion telemetry. */
+static bool Publish_MapMotionTelemetry(fsae_MotionTelemetry *motion);
+/* Fill the shared TelemetryFrame fields used by both BMS summary and detail
+ * topics so they stay consistent on the wire.
+ */
+static void Publish_MapCommonTelemetryFrame(fsae_TelemetryFrame *frame);
+static void Publish_MapBmsSummaryFrame(fsae_TelemetryFrame *frame);
+static void Publish_MapBmsDetailFrame(fsae_TelemetryFrame *frame);
+static void Publish_MapBatteryModule(fsae_BatteryModule *module, uint8_t module_index);
 static void Publish_MapThermalSummary(fsae_ThermalSummary *thermal_summary);
 static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_buffer, size_t payload_capacity, size_t *payload_size);
-static bool Publish_SendFrame(PublishTopic_t topic, const uint8_t *payload, uint16_t payload_size);
 static const char *Publish_GetTopicName(PublishTopic_t topic);
+static bool Publish_IsTopicValid(PublishTopic_t topic);
 
 void Publish_Init(void)
 {
@@ -42,83 +52,100 @@ void Publish_Init(void)
 
 void Publish_Process(void)
 {
-    static bool first_run = true;
-    static uint32_t last_fast_tick = 0U;
-    static uint32_t last_medium_tick = 0U;
-    static uint32_t last_slow_tick = 0U;
-    uint32_t now = HAL_GetTick();
-
-    if (first_run)
-    {
-        last_fast_tick = now;
-        last_medium_tick = now;
-        last_slow_tick = now;
-        first_run = false;
-
-        (void)Publish_QueueTopic(PUBLISH_TOPIC_FAST_TELEMETRY);
-        (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
-        (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
-        (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_DETAIL);
-        (void)Publish_QueueTopic(PUBLISH_TOPIC_THERMAL_SUMMARY);
-        return;
-    }
-
-    if ((now - last_fast_tick) >= PUBLISH_FAST_PERIOD_MS)
-    {
-        last_fast_tick = now;
-        (void)Publish_QueueTopic(PUBLISH_TOPIC_FAST_TELEMETRY);
-    }
-
-    if ((now - last_medium_tick) >= PUBLISH_MEDIUM_PERIOD_MS)
-    {
-        last_medium_tick = now;
-        (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
-        (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
-    }
-
-    if ((now - last_slow_tick) >= PUBLISH_SLOW_PERIOD_MS)
-    {
-        last_slow_tick = now;
-        (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_DETAIL);
-        (void)Publish_QueueTopic(PUBLISH_TOPIC_THERMAL_SUMMARY);
-    }
+    /* Publish requests are now producer-driven:
+     * data-producing tasks enqueue topics for task08 after updating caches.
+     */
 }
 
 osStatus_t Publish_QueueTopic(PublishTopic_t topic)
 {
     PublishQueueItem_t item;
+    uint32_t topic_mask;
+    osStatus_t status;
 
-    if (myQueue04Handle == NULL)
+    if ((myQueue04Handle == NULL) || !Publish_IsTopicValid(topic))
     {
         return osErrorResource;
     }
 
+    topic_mask = (1UL << (uint32_t)topic);
+
+    taskENTER_CRITICAL();
+    if ((g_publishQueuedTopicMask & topic_mask) != 0U)
+    {
+        taskEXIT_CRITICAL();
+        return osOK;
+    }
+    g_publishQueuedTopicMask |= topic_mask;
+    taskEXIT_CRITICAL();
+
     item.topic = topic;
-    return osMessageQueuePut(myQueue04Handle, &item, 0U, 0U);
+    status = osMessageQueuePut(myQueue04Handle, &item, 0U, 0U);
+    if (status != osOK)
+    {
+        taskENTER_CRITICAL();
+        g_publishQueuedTopicMask &= ~topic_mask;
+        taskEXIT_CRITICAL();
+    }
+
+    return status;
 }
 
-void Publish_TxTaskStep(uint32_t timeout_ms)
+void Publish_OnTopicDequeued(PublishTopic_t topic)
 {
-    PublishQueueItem_t item;
-    uint8_t payload_buffer[PUBLISH_MAX_PAYLOAD_SIZE];
+    if (!Publish_IsTopicValid(topic))
+    {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    g_publishQueuedTopicMask &= ~(1UL << (uint32_t)topic);
+    taskEXIT_CRITICAL();
+}
+
+bool Publish_BuildFrame(PublishTopic_t topic, uint8_t *frame_buffer, uint16_t frame_capacity, uint16_t *frame_size)
+{
+    const char *topic_name = Publish_GetTopicName(topic);
+    size_t topic_len;
+    size_t header_offset = PUBLISH_FRAME_HEADER_SIZE;
+    size_t payload_offset;
     size_t payload_size = 0U;
 
-    if (myQueue04Handle == NULL)
+    if ((topic_name == NULL) || (frame_buffer == NULL) || (frame_size == NULL))
     {
-        return;
+        return false;
     }
 
-    if (osMessageQueueGet(myQueue04Handle, &item, NULL, timeout_ms) != osOK)
+    topic_len = strlen(topic_name);
+    if (topic_len > PUBLISH_MAX_TOPIC_LEN)
     {
-        return;
+        return false;
     }
 
-    if (!Publish_EncodeTopicPayload(item.topic, payload_buffer, sizeof(payload_buffer), &payload_size))
+    payload_offset = header_offset + topic_len;
+    if (payload_offset > frame_capacity)
     {
-        return;
+        return false;
     }
 
-    (void)Publish_SendFrame(item.topic, payload_buffer, (uint16_t)payload_size);
+    memcpy(&frame_buffer[header_offset], topic_name, topic_len);
+
+    if (!Publish_EncodeTopicPayload(topic,
+                                    &frame_buffer[payload_offset],
+                                    frame_capacity - payload_offset,
+                                    &payload_size))
+    {
+        return false;
+    }
+
+    frame_buffer[0] = PUBLISH_FRAME_MAGIC_0;
+    frame_buffer[1] = PUBLISH_FRAME_MAGIC_1;
+    frame_buffer[2] = (uint8_t)topic_len;
+    frame_buffer[3] = (uint8_t)(payload_size & 0xFFU);
+    frame_buffer[4] = (uint8_t)((payload_size >> 8) & 0xFFU);
+    *frame_size = (uint16_t)(payload_offset + payload_size);
+
+    return true;
 }
 
 void Publish_MapCanbVehicleState(fsae_VehicleState *vehicle_state)
@@ -129,14 +156,12 @@ void Publish_MapCanbVehicleState(fsae_VehicleState *vehicle_state)
     }
 
     *vehicle_state = (fsae_VehicleState)fsae_VehicleState_init_zero;
-    vehicle_state->speed_kmh = g_CANB_LoopData.ECU.Vehicle_Speed;
+    vehicle_state->speed_kmh = Publish_GetVehicleSpeedKmh();
     vehicle_state->driving_mode = Publish_MapDrivingMode(g_CANB_LoopData.ECU.driving_mode);
     vehicle_state->motors_count = 4U;
 
-    /* Current CANB loop data does not provide throttle/brake/VCU/RTD fields yet. */
-    vehicle_state->throttle_position = 0U;
+    vehicle_state->throttle_position = (uint32_t)((g_CANB_LoopData.ECU.ThrottlePositionDeciPct + 5U) / 10U);
     vehicle_state->brake_position = 0U;
-    vehicle_state->ready_to_drive = false;
     vehicle_state->vcu_status = fsae_VcuStatus_VCU_STATUS_UNSPECIFIED;
 
     for (uint8_t i = 0U; i < vehicle_state->motors_count; i++)
@@ -145,52 +170,35 @@ void Publish_MapCanbVehicleState(fsae_VehicleState *vehicle_state)
     }
 }
 
+static uint32_t Publish_GetVehicleSpeedKmh(void)
+{
+    /* GPS speed is preferred when available because it is less ambiguous than
+     * the legacy vehicle-speed byte carried by older CANB packets.
+     */
+    if ((g_CANB_LoopData.IMU.ValidFlags & CANB_MOTION_VALID_GPS) != 0U)
+    {
+        return (uint32_t)g_CANB_LoopData.IMU.GpsSpeedKmh;
+    }
+
+    return (uint32_t)g_CANB_LoopData.ECU.Vehicle_Speed;
+}
+
 static fsae_DrivingMode Publish_MapDrivingMode(uint8_t raw_mode)
 {
     switch (raw_mode)
     {
         case 1U:
-            return fsae_DrivingMode_DRIVING_MODE_STANDBY;
+            return fsae_DrivingMode_DRIVING_MODE_DEFAULT;
         case 2U:
-            return fsae_DrivingMode_DRIVING_MODE_READY;
+            return fsae_DrivingMode_DRIVING_MODE_STRAIGHT;
         case 3U:
-            return fsae_DrivingMode_DRIVING_MODE_DRIVE;
+            return fsae_DrivingMode_DRIVING_MODE_AUTOCROSS;
         case 4U:
-            return fsae_DrivingMode_DRIVING_MODE_FAULT;
+            return fsae_DrivingMode_DRIVING_MODE_SKIDPAD;
+        case 5U:
+            return fsae_DrivingMode_DRIVING_MODE_ENDURANCE;
         default:
             return fsae_DrivingMode_DRIVING_MODE_UNSPECIFIED;
-    }
-}
-
-static fsae_ImdState Publish_MapImdState(uint8_t raw_state)
-{
-    switch (raw_state)
-    {
-        case 1U:
-            return fsae_ImdState_IMD_STATE_NORMAL;
-        case 2U:
-            return fsae_ImdState_IMD_STATE_WARNING;
-        case 3U:
-            return fsae_ImdState_IMD_STATE_FAULT;
-        default:
-            return fsae_ImdState_IMD_STATE_UNSPECIFIED;
-    }
-}
-
-static fsae_WorkState Publish_MapWorkState(uint8_t raw_state)
-{
-    switch (raw_state)
-    {
-        case 1U:
-            return fsae_WorkState_WORK_STATE_OFF;
-        case 2U:
-            return fsae_WorkState_WORK_STATE_PRECHARGE;
-        case 3U:
-            return fsae_WorkState_WORK_STATE_ON;
-        case 4U:
-            return fsae_WorkState_WORK_STATE_FAULT;
-        default:
-            return fsae_WorkState_WORK_STATE_UNSPECIFIED;
     }
 }
 
@@ -201,13 +209,30 @@ static fsae_MotorPosition Publish_MapCanbMotorPosition(uint8_t motor_index)
         case 0U:
             return fsae_MotorPosition_MOTOR_POSITION_REAR_LEFT;
         case 1U:
-            return fsae_MotorPosition_MOTOR_POSITION_FRONT_LEFT;
-        case 2U:
             return fsae_MotorPosition_MOTOR_POSITION_REAR_RIGHT;
+        case 2U:
+            return fsae_MotorPosition_MOTOR_POSITION_FRONT_LEFT;
         case 3U:
             return fsae_MotorPosition_MOTOR_POSITION_FRONT_RIGHT;
         default:
             return fsae_MotorPosition_MOTOR_POSITION_UNSPECIFIED;
+    }
+}
+
+static uint8_t Publish_MapMotorOrderToThermalSensorIndex(uint8_t motor_index)
+{
+    switch (motor_index)
+    {
+        case 0U:
+            return 2U;
+        case 1U:
+            return 3U;
+        case 2U:
+            return 0U;
+        case 3U:
+            return 1U;
+        default:
+            return 0xFFU;
     }
 }
 
@@ -225,9 +250,12 @@ static void Publish_MapCanbMotorState(fsae_MotorState *motor_state, uint8_t moto
     motor_state->power_w = (int32_t)(g_CANB_LoopData.ECU.Motor_Power[motor_index] * 1000.0f);
     motor_state->motor_error = (int32_t)g_CANB_LoopData.ECU.ERRO[motor_index];
 
-    /* Current CANB loop data has no motor/inverter temperature fields yet. */
-    motor_state->motor_temp_dc = 0;
-    motor_state->inverter_temp_dc = 0;
+    motor_state->motor_temp_dc = (int32_t)g_CANB_LoopData.ECU.MotorTempDc[motor_index];
+    motor_state->inverter_temp_dc = (int32_t)g_CANB_LoopData.ECU.InverterTempDc[motor_index];
+    motor_state->igbt_temp_dc = (int32_t)g_CANB_LoopData.ECU.IgbtTempDc[motor_index];
+    motor_state->diagnostic_number = g_CANB_LoopData.ECU.DiagnosticNumber[motor_index];
+    motor_state->has_logic_state = true;
+    motor_state->logic_state = (uint32_t)g_CANB_LoopData.ECU.LogicState[motor_index];
 }
 
 static void Publish_MapFastTelemetry(fsae_FastTelemetry *fast_telemetry)
@@ -240,60 +268,335 @@ static void Publish_MapFastTelemetry(fsae_FastTelemetry *fast_telemetry)
     *fast_telemetry = (fsae_FastTelemetry)fsae_FastTelemetry_init_zero;
     fast_telemetry->hv_voltage_dv = (int32_t)((g_BatteryInfo.TotalVolt + 50U) / 100U);
     fast_telemetry->hv_current_ma = (int32_t)g_BatteryInfo.TotalCurrent;
-    fast_telemetry->battery_temp_max_c = (int32_t)g_BatteryInfo.MaxTemp;
+    fast_telemetry->battery_temp_max_dc = (int32_t)g_BatteryInfo.MaxTemp * 10;
     fast_telemetry->driving_mode = Publish_MapDrivingMode(g_CANB_LoopData.ECU.driving_mode);
-    fast_telemetry->speed_kmh = (uint32_t)g_CANB_LoopData.ECU.Vehicle_Speed;
+    fast_telemetry->speed_kmh = Publish_GetVehicleSpeedKmh();
 }
 
-static void Publish_MapBmsSummary(fsae_BmsSummary *bms_summary)
+static bool Publish_MapIvtTelemetry(fsae_IvtTelemetry *ivt_telemetry)
 {
-    if (bms_summary == NULL)
+    uint8_t valid_flags = g_CANB_LoopData.IVT.ValidFlags;
+
+    if ((ivt_telemetry == NULL) || (valid_flags == 0U))
+    {
+        return false;
+    }
+
+    *ivt_telemetry = (fsae_IvtTelemetry)fsae_IvtTelemetry_init_zero;
+
+    if ((valid_flags & CANB_IVT_VALID_CURRENT) != 0U)
+    {
+        ivt_telemetry->current_ma = g_CANB_LoopData.IVT.CurrentMa;
+        ivt_telemetry->current_state = g_CANB_LoopData.IVT.CurrentState;
+    }
+
+    if ((valid_flags & CANB_IVT_VALID_U1) != 0U)
+    {
+        ivt_telemetry->voltage_u1_mv = g_CANB_LoopData.IVT.VoltageU1Mv;
+        ivt_telemetry->voltage_u1_state = g_CANB_LoopData.IVT.VoltageU1State;
+    }
+
+    if ((valid_flags & CANB_IVT_VALID_POWER) != 0U)
+    {
+        ivt_telemetry->power_w = g_CANB_LoopData.IVT.PowerW;
+    }
+    else if ((valid_flags & (CANB_IVT_VALID_CURRENT | CANB_IVT_VALID_U1)) ==
+             (CANB_IVT_VALID_CURRENT | CANB_IVT_VALID_U1))
+    {
+        ivt_telemetry->power_w =
+            (int32_t)(((int64_t)g_CANB_LoopData.IVT.CurrentMa * (int64_t)g_CANB_LoopData.IVT.VoltageU1Mv) / 1000000LL);
+    }
+
+    if ((valid_flags & CANB_IVT_VALID_ENERGY) != 0U)
+    {
+        ivt_telemetry->energy_wh = g_CANB_LoopData.IVT.EnergyWh;
+        ivt_telemetry->energy_state = g_CANB_LoopData.IVT.EnergyState;
+    }
+
+    return true;
+}
+
+static bool Publish_MapEnergyMeterTelemetry(fsae_EnergyMeterTelemetry *energy_meter)
+{
+    uint8_t valid_flags;
+    uint8_t source;
+
+    if (energy_meter == NULL)
+    {
+        return false;
+    }
+
+    source = g_CANB_LoopData.EnergyMeter.AutoSource;
+    if (source == CANB_ENERGY_METER_SOURCE_UNKNOWN)
+    {
+        return false;
+    }
+
+    *energy_meter = (fsae_EnergyMeterTelemetry)fsae_EnergyMeterTelemetry_init_zero;
+    energy_meter->source = (uint32_t)source;
+
+    if (source == CANB_ENERGY_METER_SOURCE_IVT)
+    {
+        /* IVT source reads directly from the private team meter cache. */
+        valid_flags = g_CANB_LoopData.IVT.ValidFlags;
+        if (valid_flags == 0U)
+        {
+            return false;
+        }
+
+        if ((valid_flags & CANB_IVT_VALID_CURRENT) != 0U)
+        {
+            energy_meter->current_ma = g_CANB_LoopData.IVT.CurrentMa;
+            energy_meter->status = g_CANB_LoopData.IVT.CurrentState;
+        }
+
+        if ((valid_flags & CANB_IVT_VALID_U1) != 0U)
+        {
+            energy_meter->voltage_mv = g_CANB_LoopData.IVT.VoltageU1Mv;
+        }
+
+        if ((valid_flags & CANB_IVT_VALID_ENERGY) != 0U)
+        {
+            energy_meter->energy_wh = g_CANB_LoopData.IVT.EnergyWh;
+        }
+
+        if ((valid_flags & CANB_IVT_VALID_POWER) != 0U)
+        {
+            energy_meter->power_w = g_CANB_LoopData.IVT.PowerW;
+        }
+        else if ((valid_flags & (CANB_IVT_VALID_CURRENT | CANB_IVT_VALID_U1)) ==
+                 (CANB_IVT_VALID_CURRENT | CANB_IVT_VALID_U1))
+        {
+            energy_meter->power_w =
+                (int32_t)(((int64_t)g_CANB_LoopData.IVT.CurrentMa *
+                           (int64_t)g_CANB_LoopData.IVT.VoltageU1Mv) / 1000000LL);
+        }
+
+        return true;
+    }
+
+    /* FS source reads from the generic energy meter cache populated by the
+     * FS status/result frames.
+     */
+    valid_flags = g_CANB_LoopData.EnergyMeter.ValidFlags;
+    if (valid_flags == 0U)
+    {
+        return false;
+    }
+
+    if ((valid_flags & CANB_ENERGY_VALID_CURRENT) != 0U)
+    {
+        energy_meter->current_ma = g_CANB_LoopData.EnergyMeter.CurrentMa;
+    }
+
+    if ((valid_flags & CANB_ENERGY_VALID_VOLTAGE) != 0U)
+    {
+        energy_meter->voltage_mv = g_CANB_LoopData.EnergyMeter.VoltageMv;
+    }
+
+    if ((valid_flags & CANB_ENERGY_VALID_ENERGY) != 0U)
+    {
+        energy_meter->energy_wh = g_CANB_LoopData.EnergyMeter.EnergyWh;
+    }
+
+    if ((valid_flags & CANB_ENERGY_VALID_POWER) != 0U)
+    {
+        energy_meter->power_w = g_CANB_LoopData.EnergyMeter.PowerW;
+    }
+    else if ((valid_flags & (CANB_ENERGY_VALID_CURRENT | CANB_ENERGY_VALID_VOLTAGE)) ==
+             (CANB_ENERGY_VALID_CURRENT | CANB_ENERGY_VALID_VOLTAGE))
+    {
+        energy_meter->power_w =
+            (int32_t)(((int64_t)g_CANB_LoopData.EnergyMeter.CurrentMa *
+                       (int64_t)g_CANB_LoopData.EnergyMeter.VoltageMv) / 1000000LL);
+    }
+
+    if ((valid_flags & CANB_ENERGY_VALID_STATUS) != 0U)
+    {
+        energy_meter->status = g_CANB_LoopData.EnergyMeter.Status;
+        energy_meter->msg_counter = (uint32_t)g_CANB_LoopData.EnergyMeter.MsgCounter;
+    }
+
+    return true;
+}
+
+static bool Publish_MapMotionTelemetry(fsae_MotionTelemetry *motion)
+{
+    uint8_t valid_flags = g_CANB_LoopData.IMU.ValidFlags;
+
+    if ((motion == NULL) || (valid_flags == 0U))
+    {
+        return false;
+    }
+
+    *motion = (fsae_MotionTelemetry)fsae_MotionTelemetry_init_zero;
+
+    if ((valid_flags & CANB_MOTION_VALID_GPS) != 0U)
+    {
+        motion->gps_speed_kmh = (uint32_t)g_CANB_LoopData.IMU.GpsSpeedKmh;
+    }
+
+    if ((valid_flags & CANB_MOTION_VALID_ACCEL) != 0U)
+    {
+        motion->accel_x_g = g_CANB_LoopData.IMU.Acc_X_Act;
+        motion->accel_y_g = g_CANB_LoopData.IMU.Acc_Y_Act;
+        motion->accel_z_g = g_CANB_LoopData.IMU.Acc_Z_Act;
+    }
+
+    if ((valid_flags & CANB_MOTION_VALID_GYRO) != 0U)
+    {
+        motion->yaw_rate_dps = (float)g_CANB_LoopData.IMU.YawRateRaw * 0.0610352f;
+    }
+
+    if ((valid_flags & CANB_MOTION_VALID_YAW) != 0U)
+    {
+        motion->yaw_deg = (float)g_CANB_LoopData.IMU.YawRaw * 0.005493f;
+    }
+
+    return true;
+}
+
+static void Publish_MapCommonTelemetryFrame(fsae_TelemetryFrame *frame)
+{
+    uint32_t now;
+
+    if (frame == NULL)
     {
         return;
     }
 
-    *bms_summary = (fsae_BmsSummary)fsae_BmsSummary_init_zero;
-    bms_summary->total_voltage = (uint32_t)((g_BatteryInfo.TotalVolt + 50U) / 100U);
-    bms_summary->total_current = (int32_t)g_BatteryInfo.TotalCurrent;
-    bms_summary->soc_pct = (uint32_t)g_BatteryInfo.SOC;
-    bms_summary->max_temp_c = (int32_t)g_BatteryInfo.MaxTemp;
-    bms_summary->min_temp_c = (int32_t)g_BatteryInfo.MinTemp;
-    bms_summary->max_cell_mv = (uint32_t)g_BatteryInfo.MaxCellVolt;
-    bms_summary->min_cell_mv = (uint32_t)g_BatteryInfo.MinCellVolt;
-    bms_summary->imd_state = Publish_MapImdState(g_BatteryInfo.IMD_State);
-    bms_summary->work_state = Publish_MapWorkState(g_BatteryInfo.Work_State);
+    *frame = (fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
+    now = HAL_GetTick();
+
+    frame->timestamp_ms = now;
+    frame->apps_position = (float)g_CANB_LoopData.ECU.ThrottlePositionDeciPct / 10.0f;
+    frame->brake_pressure = (float)g_CANB_LoopData.ECU.OilPressureMilliKpa / 1000.0f;
+    frame->steering_angle = (float)g_CANB_LoopData.ECU.SteeringAngleDeciDeg / 10.0f;
+    frame->hv_voltage = (float)g_BatteryInfo.TotalVolt / 1000.0f;
+    frame->hv_current = (float)g_BatteryInfo.TotalCurrent / 1000.0f;
+    frame->battery_temp_max = (float)g_BatteryInfo.MaxTemp;
+    frame->fault_code = g_BatteryInfo.BatteryFaultCode;
+    frame->motor_rpm = (int32_t)g_CANB_LoopData.ECU.Motor_RPM[0];
+    frame->motor_temp = (float)g_CANB_LoopData.ECU.MotorTempDc[0] / 10.0f;
+    frame->inverter_temp = (float)g_CANB_LoopData.ECU.InverterTempDc[0] / 10.0f;
+    frame->ready_to_drive = 0U;
+    frame->vcu_status = 0U;
+    frame->battery_soc = (uint32_t)g_BatteryInfo.SOC;
+    frame->max_cell_voltage = (uint32_t)g_BatteryInfo.MaxCellVolt;
+    frame->min_cell_voltage = (uint32_t)g_BatteryInfo.MinCellVolt;
+    frame->max_cell_voltage_no = (uint32_t)g_BatteryInfo.MaxCellVoltNo;
+    frame->min_cell_voltage_no = (uint32_t)g_BatteryInfo.MinCellVoltNo;
+    frame->max_temp = (int32_t)g_BatteryInfo.MaxTemp;
+    frame->min_temp = (int32_t)g_BatteryInfo.MinTemp;
+    frame->max_temp_no = (uint32_t)g_BatteryInfo.MaxTempNo;
+    frame->min_temp_no = (uint32_t)g_BatteryInfo.MinTempNo;
+    frame->battery_fault_code = g_BatteryInfo.BatteryFaultCode;
+    frame->has_header = true;
+    frame->header.timestamp_ms = now;
+    frame->has_fast_telemetry = true;
+    Publish_MapFastTelemetry(&frame->fast_telemetry);
+    frame->has_vehicle_state = true;
+    Publish_MapCanbVehicleState(&frame->vehicle_state);
+
+    /* These nested messages are emitted only when their backing caches carry
+     * at least one valid sample.
+     */
+    if (Publish_MapIvtTelemetry(&frame->ivt_telemetry))
+    {
+        frame->has_ivt_telemetry = true;
+    }
+
+    if (Publish_MapEnergyMeterTelemetry(&frame->energy_meter))
+    {
+        frame->has_energy_meter = true;
+    }
+
+    if (Publish_MapMotionTelemetry(&frame->motion))
+    {
+        frame->has_motion = true;
+    }
 }
 
-static void Publish_MapBmsDetail(fsae_BmsDetail *bms_detail)
+static void Publish_MapBmsSummaryFrame(fsae_TelemetryFrame *frame)
 {
-    if (bms_detail == NULL)
+    if (frame == NULL)
     {
         return;
     }
 
-    *bms_detail = (fsae_BmsDetail)fsae_BmsDetail_init_zero;
-    bms_detail->modules_count = 6U;
+    Publish_MapCommonTelemetryFrame(frame);
+}
 
-    for (uint8_t module_index = 0U; module_index < bms_detail->modules_count; module_index++)
+static void Publish_MapBmsDetailFrame(fsae_TelemetryFrame *frame)
+{
+    if (frame == NULL)
     {
-        fsae_BatteryModule *module = &bms_detail->modules[module_index];
-        module->module_id = (uint32_t)(module_index + 1U);
-        module->cell_mv_count = PUBLISH_BMS_DETAIL_CELL_COUNT;
-        module->temp_dc_count = 8U;
+        return;
+    }
 
-        /*
-         * Local battery struct keeps 24 cells, while the current protobuf schema
-         * reserves 23 values. Keep the first 23 entries to match the schema.
-         */
-        for (uint8_t cell_index = 0U; cell_index < module->cell_mv_count; cell_index++)
-        {
-            module->cell_mv[cell_index] = (uint32_t)g_BatteryInfo.CellVolt[module_index][cell_index];
-        }
+    Publish_MapBmsSummaryFrame(frame);
+    frame->modules_count = 6U;
 
-        for (uint8_t temp_index = 0U; temp_index < module->temp_dc_count; temp_index++)
-        {
-            module->temp_dc[temp_index] = (int32_t)g_BatteryInfo.ModTemp[module_index][temp_index] * 10;
-        }
+    for (uint8_t module_index = 0U; module_index < frame->modules_count; module_index++)
+    {
+        Publish_MapBatteryModule(&frame->modules[module_index], module_index);
+    }
+}
+
+static void Publish_MapBatteryModule(fsae_BatteryModule *module, uint8_t module_index)
+{
+    uint32_t *cell_fields[PUBLISH_BMS_DETAIL_CELL_COUNT];
+    int32_t *temp_fields[8U];
+
+    if (module == NULL || module_index >= 6U)
+    {
+        return;
+    }
+
+    *module = (fsae_BatteryModule)fsae_BatteryModule_init_zero;
+    module->module_id = (uint32_t)(module_index + 1U);
+
+    cell_fields[0] = &module->v01;
+    cell_fields[1] = &module->v02;
+    cell_fields[2] = &module->v03;
+    cell_fields[3] = &module->v04;
+    cell_fields[4] = &module->v05;
+    cell_fields[5] = &module->v06;
+    cell_fields[6] = &module->v07;
+    cell_fields[7] = &module->v08;
+    cell_fields[8] = &module->v09;
+    cell_fields[9] = &module->v10;
+    cell_fields[10] = &module->v11;
+    cell_fields[11] = &module->v12;
+    cell_fields[12] = &module->v13;
+    cell_fields[13] = &module->v14;
+    cell_fields[14] = &module->v15;
+    cell_fields[15] = &module->v16;
+    cell_fields[16] = &module->v17;
+    cell_fields[17] = &module->v18;
+    cell_fields[18] = &module->v19;
+    cell_fields[19] = &module->v20;
+    cell_fields[20] = &module->v21;
+    cell_fields[21] = &module->v22;
+    cell_fields[22] = &module->v23;
+
+    for (uint8_t cell_index = 0U; cell_index < PUBLISH_BMS_DETAIL_CELL_COUNT; cell_index++)
+    {
+        *cell_fields[cell_index] = (uint32_t)g_BatteryInfo.CellVolt[module_index][cell_index];
+    }
+
+    temp_fields[0] = &module->t1;
+    temp_fields[1] = &module->t2;
+    temp_fields[2] = &module->t3;
+    temp_fields[3] = &module->t4;
+    temp_fields[4] = &module->t5;
+    temp_fields[5] = &module->t6;
+    temp_fields[6] = &module->t7;
+    temp_fields[7] = &module->t8;
+
+    for (uint8_t temp_index = 0U; temp_index < 8U; temp_index++)
+    {
+        *temp_fields[temp_index] = (int32_t)g_BatteryInfo.ModTemp[module_index][temp_index];
     }
 }
 
@@ -310,26 +613,27 @@ static void Publish_MapThermalSummary(fsae_ThermalSummary *thermal_summary)
     for (uint8_t sensor_index = 0U; sensor_index < thermal_summary->sensors_count; sensor_index++)
     {
         fsae_ThermalSensorSummary *sensor = &thermal_summary->sensors[sensor_index];
+        uint8_t source_sensor_index = Publish_MapMotorOrderToThermalSensorIndex(sensor_index);
         int32_t temp_sum = 0;
         int32_t temp_min = 0;
         int32_t temp_max = 0;
 
-        /* Assume sensor order follows the same wheel order used by CANB motor arrays. */
         sensor->position = Publish_MapCanbMotorPosition(sensor_index);
 
-        if ((g_MLX90640_Frame.ValidMask & (uint8_t)(1U << sensor_index)) == 0U)
+        if ((source_sensor_index >= MLX90640_SENSOR_COUNT) ||
+            ((g_MLX90640_Frame.ValidMask & (uint8_t)(1U << source_sensor_index)) == 0U))
         {
             sensor->chunks_count = 0U;
             continue;
         }
 
         sensor->chunks_count = MLX90640_REGION_COUNT;
-        temp_min = g_MLX90640_Frame.RegionTemp[sensor_index][0];
-        temp_max = g_MLX90640_Frame.RegionTemp[sensor_index][0];
+        temp_min = g_MLX90640_Frame.RegionTemp[source_sensor_index][0];
+        temp_max = g_MLX90640_Frame.RegionTemp[source_sensor_index][0];
 
         for (uint8_t region_index = 0U; region_index < MLX90640_REGION_COUNT; region_index++)
         {
-            int32_t region_temp = g_MLX90640_Frame.RegionTemp[sensor_index][region_index];
+            int32_t region_temp = g_MLX90640_Frame.RegionTemp[source_sensor_index][region_index];
             fsae_ThermalRawChunk *chunk = &sensor->chunks[region_index];
 
             if (region_temp < temp_min)
@@ -346,15 +650,15 @@ static void Publish_MapThermalSummary(fsae_ThermalSummary *thermal_summary)
 
             *chunk = (fsae_ThermalRawChunk)fsae_ThermalRawChunk_init_zero;
             chunk->position = sensor->position;
-            chunk->frame_id = g_MLX90640_Frame.FrameCounter[sensor_index];
+            chunk->frame_id = g_MLX90640_Frame.FrameCounter[source_sensor_index];
             chunk->chunk_index = region_index;
             chunk->chunk_count = MLX90640_REGION_COUNT;
-            chunk->pixel_temp_dc = region_temp;
+            chunk->pixel_temp_centi_c = region_temp;
         }
 
-        sensor->min_temp_dc = temp_min;
-        sensor->max_temp_dc = temp_max;
-        sensor->avg_temp_dc = temp_sum / (int32_t)MLX90640_REGION_COUNT;
+        sensor->min_temp_centi_c = temp_min;
+        sensor->max_temp_centi_c = temp_max;
+        sensor->avg_temp_centi_c = temp_sum / (int32_t)MLX90640_REGION_COUNT;
     }
 }
 
@@ -374,41 +678,41 @@ static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_bu
     {
         case PUBLISH_TOPIC_FAST_TELEMETRY:
         {
-            fsae_FastTelemetry fast_telemetry = fsae_FastTelemetry_init_zero;
-            Publish_MapFastTelemetry(&fast_telemetry);
-            encode_status = pb_encode(&stream, fsae_FastTelemetry_fields, &fast_telemetry);
+            g_publishFastTelemetry = (fsae_FastTelemetry)fsae_FastTelemetry_init_zero;
+            Publish_MapFastTelemetry(&g_publishFastTelemetry);
+            encode_status = pb_encode(&stream, fsae_FastTelemetry_fields, &g_publishFastTelemetry);
             break;
         }
 
         case PUBLISH_TOPIC_BMS_SUMMARY:
         {
-            fsae_BmsSummary bms_summary = fsae_BmsSummary_init_zero;
-            Publish_MapBmsSummary(&bms_summary);
-            encode_status = pb_encode(&stream, fsae_BmsSummary_fields, &bms_summary);
+            g_publishTelemetryFrame = (fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
+            Publish_MapBmsSummaryFrame(&g_publishTelemetryFrame);
+            encode_status = pb_encode(&stream, fsae_TelemetryFrame_fields, &g_publishTelemetryFrame);
             break;
         }
 
         case PUBLISH_TOPIC_VEHICLE_STATE:
         {
-            fsae_VehicleState vehicle_state = fsae_VehicleState_init_zero;
-            Publish_MapCanbVehicleState(&vehicle_state);
-            encode_status = pb_encode(&stream, fsae_VehicleState_fields, &vehicle_state);
+            g_publishVehicleState = (fsae_VehicleState)fsae_VehicleState_init_zero;
+            Publish_MapCanbVehicleState(&g_publishVehicleState);
+            encode_status = pb_encode(&stream, fsae_VehicleState_fields, &g_publishVehicleState);
             break;
         }
 
         case PUBLISH_TOPIC_BMS_DETAIL:
         {
-            fsae_BmsDetail bms_detail = fsae_BmsDetail_init_zero;
-            Publish_MapBmsDetail(&bms_detail);
-            encode_status = pb_encode(&stream, fsae_BmsDetail_fields, &bms_detail);
+            g_publishTelemetryFrame = (fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
+            Publish_MapBmsDetailFrame(&g_publishTelemetryFrame);
+            encode_status = pb_encode(&stream, fsae_TelemetryFrame_fields, &g_publishTelemetryFrame);
             break;
         }
 
         case PUBLISH_TOPIC_THERMAL_SUMMARY:
         {
-            fsae_ThermalSummary thermal_summary = fsae_ThermalSummary_init_zero;
-            Publish_MapThermalSummary(&thermal_summary);
-            encode_status = pb_encode(&stream, fsae_ThermalSummary_fields, &thermal_summary);
+            g_publishThermalSummary = (fsae_ThermalSummary)fsae_ThermalSummary_init_zero;
+            Publish_MapThermalSummary(&g_publishThermalSummary);
+            encode_status = pb_encode(&stream, fsae_ThermalSummary_fields, &g_publishThermalSummary);
             break;
         }
 
@@ -425,45 +729,6 @@ static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_bu
     *payload_size = stream.bytes_written;
     return true;
 }
-
-static bool Publish_SendFrame(PublishTopic_t topic, const uint8_t *payload, uint16_t payload_size)
-{
-    uint8_t frame_buffer[PUBLISH_MAX_FRAME_SIZE];
-    const char *topic_name = Publish_GetTopicName(topic);
-    size_t topic_len;
-    size_t frame_size = 0U;
-
-    if (topic_name == NULL || payload == NULL)
-    {
-        return false;
-    }
-
-    topic_len = strlen(topic_name);
-    if (topic_len > PUBLISH_MAX_TOPIC_LEN)
-    {
-        return false;
-    }
-
-    if ((PUBLISH_FRAME_HEADER_SIZE + topic_len + payload_size) > sizeof(frame_buffer))
-    {
-        return false;
-    }
-
-    frame_buffer[frame_size++] = PUBLISH_FRAME_MAGIC_0;
-    frame_buffer[frame_size++] = PUBLISH_FRAME_MAGIC_1;
-    frame_buffer[frame_size++] = (uint8_t)topic_len;
-    frame_buffer[frame_size++] = (uint8_t)(payload_size & 0xFFU);
-    frame_buffer[frame_size++] = (uint8_t)((payload_size >> 8) & 0xFFU);
-
-    memcpy(&frame_buffer[frame_size], topic_name, topic_len);
-    frame_size += topic_len;
-
-    memcpy(&frame_buffer[frame_size], payload, payload_size);
-    frame_size += payload_size;
-
-    return (HAL_UART_Transmit(&huart1, frame_buffer, (uint16_t)frame_size, 1000U) == HAL_OK);
-}
-
 static const char *Publish_GetTopicName(PublishTopic_t topic)
 {
     switch (topic)
@@ -481,4 +746,9 @@ static const char *Publish_GetTopicName(PublishTopic_t topic)
         default:
             return NULL;
     }
+}
+
+static bool Publish_IsTopicValid(PublishTopic_t topic)
+{
+    return ((uint32_t)topic < (uint32_t)PUBLISH_TOPIC_COUNT);
 }

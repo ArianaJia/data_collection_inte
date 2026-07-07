@@ -53,6 +53,9 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOE_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, MCP2518_CS_A_Pin|MCP2518_CS_B_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(EN__GPIO_Port, EN__Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
@@ -60,6 +63,13 @@ void MX_GPIO_Init(void)
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(BLUE_LED_GPIO_Port, BLUE_LED_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pins : MCP2518_CS_A_Pin MCP2518_CS_B_Pin */
+  GPIO_InitStruct.Pin = MCP2518_CS_A_Pin|MCP2518_CS_B_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : EN__Pin */
   GPIO_InitStruct.Pin = EN__Pin;

@@ -76,16 +76,24 @@ endif
 # C sources
 C_SOURCES =  \
 Core/Src/adc.c \
-Core/Src/battery.c \
+Core/Src/telemetry_data.c \
+Core/Src/can_decode.c \
 Core/Src/can.c \
 Core/Src/dma.c \
+Core/Src/fdcan.c \
 Core/Src/freertos.c \
+Core/Src/fsae_telemetry.pb.c \
 Core/Src/gpio.c \
 Core/Src/i2c.c \
 Core/Src/main.c \
 Core/Src/MLX90640_API.c \
+Core/Src/mcp2518fd.c \
 Core/Src/mlx90640_app.c \
 Core/Src/MLX90640_I2C_Driver.c \
+Core/Src/pb_common.c \
+Core/Src/pb_decode.c \
+Core/Src/pb_encode.c \
+Core/Src/publish.c \
 Core/Src/rtc.c \
 Core/Src/spi.c \
 Core/Src/stm32f4xx_hal_msp.c \
@@ -389,3 +397,4 @@ clean:
 -include $(wildcard $(RELEASE_DIRECTORY)/*.d)
 
 # *** EOF ***
+

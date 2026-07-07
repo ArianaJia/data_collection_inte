@@ -25,8 +25,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "battery.h"
+#include "telemetry_data.h"
 #include "can.h"
+#include "can_decode.h"
+#include "fdcan.h"
 #include "gpio.h"
 #include "mlx90640_app.h"
 #include "MLX90640_API.h"
@@ -36,29 +38,21 @@
 #include "queue.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
+#include "freertos_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef struct
-{
-  uint16_t length;
-  uint8_t data[64];
-} Peripheral_Rx_Frame_t;
 
-typedef struct
-{
-  uint16_t length;
-  uint8_t data[288U];
-} App_Uart_Tx_Item_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define APP_UART_TX_MAX_PAYLOAD        288U
-#define TASK01_DEBUG_QUEUE_DEPTH       2U
-#define TASK08_USART1_QUEUE_DEPTH      2U
-#define TASK04_MLX_LINE_BUFFER_SIZE    APP_UART_TX_MAX_PAYLOAD
+#define TASK05_RS485_DMA_BUFFER_SIZE    256U
+#define TASK05_FLAG_RS485_RX_READY      (1UL << 0)
+#define TASK05_FLAG_RS485_RX_RESTART    (1UL << 1)
+#define TASK08_PUBLISH_COOLDOWN_MS      10U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -69,9 +63,14 @@ typedef struct
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
 static App_Uart_Tx_Item_t g_task01DebugTxItem;
-static App_Uart_Tx_Item_t g_task08Usart1TxItem;
 static App_Uart_Tx_Item_t g_uartQueueWorkItem;
 static char g_task04MlxLineBuffer[APP_UART_TX_MAX_PAYLOAD];
+static uint8_t g_task05Rs485DmaBuffer[TASK05_RS485_DMA_BUFFER_SIZE];
+static volatile uint16_t g_task05Rs485DmaLastEventPos = 0U;
+static volatile uint16_t g_task05Rs485DmaPendingBytes = 0U;
+static volatile uint8_t g_task05Rs485DmaOverflow = 0U;
+static uint16_t g_task05Rs485DmaReadPos = 0U;
+static uint8_t g_task08PublishFrameBuffer[PUBLISH_MAX_FRAME_SIZE];
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -85,35 +84,35 @@ osThreadId_t myTask02Handle;
 const osThreadAttr_t myTask02_attributes = {
   .name = "myTask02",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityAboveNormal,
+  .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for myTask03 */
 osThreadId_t myTask03Handle;
 const osThreadAttr_t myTask03_attributes = {
   .name = "myTask03",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for myTask04 */
 osThreadId_t myTask04Handle;
 const osThreadAttr_t myTask04_attributes = {
   .name = "myTask04",
   .stack_size = 384 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 /* Definitions for myTask05 */
 osThreadId_t myTask05Handle;
 const osThreadAttr_t myTask05_attributes = {
   .name = "myTask05",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityHigh,
+  .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for myTask06 */
 osThreadId_t myTask06Handle;
 const osThreadAttr_t myTask06_attributes = {
   .name = "myTask06",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 /* Definitions for myTask07 */
 osThreadId_t myTask07Handle;
@@ -127,19 +126,14 @@ osThreadId_t myTask08Handle;
 const osThreadAttr_t myTask08_attributes = {
   .name = "myTask08",
   .stack_size = 192 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityRealtime,
 };
 /* Definitions for myTask09 */
 osThreadId_t myTask09Handle;
 const osThreadAttr_t myTask09_attributes = {
   .name = "myTask09",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityLow,
-};
-/* Definitions for myQueue01 */
-osMessageQueueId_t myQueue01Handle;
-const osMessageQueueAttr_t myQueue01_attributes = {
-  .name = "myQueue01"
+  .priority = (osPriority_t) osPriorityRealtime,
 };
 /* Definitions for myQueue02 */
 osMessageQueueId_t myQueue02Handle;
@@ -176,7 +170,6 @@ static void Task03_ParseCan2Message(const CAN_Msg_Queue_t *recv_data);
 static void Task05_ParseRs485Message(const Peripheral_Rx_Frame_t *recv_data);
 static void Task06_ParseSpi1Message(const Peripheral_Rx_Frame_t *recv_data);
 static void Task07_ParseSpi3Message(const Peripheral_Rx_Frame_t *recv_data);
-static void Task08_SendUsart1Message(const App_Uart_Tx_Item_t *tx_data);
 static void Task09_SendCan1Message(const CAN_Tx_Queue_t *tx_data);
 static osStatus_t App_QueueBytes(osMessageQueueId_t queue_handle, const uint8_t *data, uint16_t length, uint32_t timeout_ms);
 static osStatus_t App_QueueText(osMessageQueueId_t queue_handle, const char *text, uint32_t timeout_ms);
@@ -185,6 +178,16 @@ static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart,
 static uint16_t App_AppendTemperature(char *buffer, uint16_t offset, uint16_t size, float temperature);
 static void Task04_SendMlxDebugMatrix(uint8_t sensor_id, const float *temp_map);
 static void Task04_SendMlxSummary(uint8_t sensor_id);
+static void Task04_SendMlxCanSummary(uint8_t sensor_id);
+static uint32_t Task04_GetMlxCanSummaryId(uint8_t sensor_id);
+static void Task04_EncodeCanSummaryPair(int32_t centi_c, uint8_t *integer_part, uint8_t *fraction_part);
+static void TaskSpiPollCan(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus, osMessageQueueId_t queue_handle, uint8_t can_channel);
+static bool TaskSpiPollControllerCana(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus);
+static void TaskSpiPollCdcMonitor(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus);
+static HAL_StatusTypeDef App_Task05_StartRs485Dma(void);
+static void App_Task05_ProcessRs485DmaBuffer(void);
+static void App_Task05_ProcessRs485Span(uint16_t start, uint16_t end);
+static void App_Task05_DispatchRs485Bytes(const uint8_t *data, uint16_t length);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -206,7 +209,10 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
-  /* Publish is intentionally bypassed while task08 sends queued USART1 DMA frames. */
+  /* Task08 owns the whole publish egress path:
+   * myQueue04 -> protobuf/frame assembly -> USART1 DMA.
+   */
+  CDC_Data_Clear();
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -222,9 +228,6 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_TIMERS */
 
   /* Create the queue(s) */
-  /* creation of myQueue01 */
-  myQueue01Handle = osMessageQueueNew (TASK08_USART1_QUEUE_DEPTH, sizeof(App_Uart_Tx_Item_t), &myQueue01_attributes);
-
   /* creation of myQueue02 */
   myQueue02Handle = osMessageQueueNew (16, sizeof(CAN_Msg_Queue_t), &myQueue02_attributes);
 
@@ -237,8 +240,11 @@ void MX_FREERTOS_Init(void) {
   /* creation of myQueue05 */
   myQueue05Handle = osMessageQueueNew (8, sizeof(CAN_Tx_Queue_t), &myQueue05_attributes);
 
-  /* USER CODE BEGIN RTOS_QUEUES */
+  /* creation of task01DebugQueue */
   task01DebugQueueHandle = osMessageQueueNew (TASK01_DEBUG_QUEUE_DEPTH, sizeof(App_Uart_Tx_Item_t), &task01DebugQueue_attributes);
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -268,7 +274,6 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of myTask09 */
   myTask09Handle = osThreadNew(StartTask09, NULL, &myTask09_attributes);
-
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -289,10 +294,22 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+  uint32_t mlx_health_tick_ms = HAL_GetTick();
+
+  MLX90640_App_SetLogCallback(App_DebugLogString);
+  (void)MLX90640_App_ServiceHealth();
+
   for(;;)
   {
     TaskDefault_ParseUsart3Message();
     Task01_SendUsart3DebugMessage();
+
+    if ((HAL_GetTick() - mlx_health_tick_ms) >= 500U)
+    {
+      (void)MLX90640_App_ServiceHealth();
+      mlx_health_tick_ms = HAL_GetTick();
+    }
+
     HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
     osDelay(10);
   }
@@ -353,11 +370,10 @@ void StartTask03(void *argument)
 void StartTask04(void *argument)
 {
   /* USER CODE BEGIN StartTask04 */
-  MLX90640_App_SetLogCallback(App_DebugLogString);
-  (void)MLX90640_App_Init();
-
   for(;;)
   {
+    uint8_t thermal_summary_updated = 0U;
+
     for (uint8_t sensor_id = 0U; sensor_id < MLX90640_SENSOR_COUNT; sensor_id++)
     {
       if (MLX90640_App_IsSensorReady(sensor_id) == 0U)
@@ -369,7 +385,9 @@ void StartTask04(void *argument)
       if (status == MLX90640_NO_ERROR)
       {
         Task04_SendMlxSummary(sensor_id);
+        Task04_SendMlxCanSummary(sensor_id);
         Task04_SendMlxDebugMatrix(sensor_id, MLX90640_App_GetTempMap());
+        thermal_summary_updated = 1U;
       }
       else
       {
@@ -379,6 +397,12 @@ void StartTask04(void *argument)
 
       osDelay(50);
     }
+
+    if (thermal_summary_updated != 0U)
+    {
+      (void)Publish_QueueTopic(PUBLISH_TOPIC_THERMAL_SUMMARY);
+    }
+
     HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
     osDelay(125);
   }
@@ -395,20 +419,43 @@ void StartTask04(void *argument)
 void StartTask05(void *argument)
 {
   /* USER CODE BEGIN StartTask05 */
-  uint8_t rx_byte = 0U;
-  Peripheral_Rx_Frame_t recv_data = {0};
+  uint32_t flags = 0U;
+  uint8_t dma_running = 0U;
 
   HAL_GPIO_WritePin(EN_GPIO_Port, EN_Pin, GPIO_PIN_RESET);
+  g_task05Rs485DmaLastEventPos = 0U;
+  g_task05Rs485DmaPendingBytes = 0U;
+  g_task05Rs485DmaOverflow = 0U;
+  g_task05Rs485DmaReadPos = 0U;
 
   for(;;)
   {
-    if (HAL_UART_Receive(&huart2, &rx_byte, 1U, 20U) == HAL_OK)
+    if (dma_running == 0U)
     {
-      recv_data.length = 1U;
-      recv_data.data[0] = rx_byte;
-      Task05_ParseRs485Message(&recv_data);
+      if (App_Task05_StartRs485Dma() != HAL_OK)
+      {
+        App_DebugLogString("USART2 RX DMA start failed\r\n");
+        osDelay(100);
+        continue;
+      }
+
+      dma_running = 1U;
     }
-    osDelay(1);
+
+    flags = osThreadFlagsWait(TASK05_FLAG_RS485_RX_READY | TASK05_FLAG_RS485_RX_RESTART,
+                              osFlagsWaitAny,
+                              osWaitForever);
+
+    if ((flags & TASK05_FLAG_RS485_RX_READY) != 0U)
+    {
+      App_Task05_ProcessRs485DmaBuffer();
+    }
+
+    if ((flags & TASK05_FLAG_RS485_RX_RESTART) != 0U)
+    {
+      dma_running = 0U;
+      App_DebugLogString("USART2 RX DMA restart\r\n");
+    }
   }
   /* USER CODE END StartTask05 */
 }
@@ -423,12 +470,34 @@ void StartTask05(void *argument)
 void StartTask06(void *argument)
 {
   /* USER CODE BEGIN StartTask06 */
+  uint8_t fdcan_initialized = 0U;
+  uint8_t fdcan_init_error_logged = 0U;
   Peripheral_Rx_Frame_t recv_data = {0};
 
   for(;;)
   {
+    if (fdcan_initialized == 0U)
+    {
+      if (FDCAN_Init(FDCAN_BUS_A) == HAL_OK)
+      {
+        fdcan_initialized = 1U;
+        fdcan_init_error_logged = 0U;
+        App_DebugLogString("MCP2518FD A init ok\r\n");
+      }
+      else
+      {
+        if (fdcan_init_error_logged == 0U)
+        {
+          App_DebugLogString("MCP2518FD A init failed\r\n");
+          fdcan_init_error_logged = 1U;
+        }
+        osDelay(250);
+        continue;
+      }
+    }
+
     Task06_ParseSpi1Message(&recv_data);
-    osDelay(10);
+    osDelay(1);
   }
   /* USER CODE END StartTask06 */
 }
@@ -443,12 +512,34 @@ void StartTask06(void *argument)
 void StartTask07(void *argument)
 {
   /* USER CODE BEGIN StartTask07 */
+  uint8_t fdcan_initialized = 0U;
+  uint8_t fdcan_init_error_logged = 0U;
   Peripheral_Rx_Frame_t recv_data = {0};
 
   for(;;)
   {
+    if (fdcan_initialized == 0U)
+    {
+      if (FDCAN_Init(FDCAN_BUS_B) == HAL_OK)
+      {
+        fdcan_initialized = 1U;
+        fdcan_init_error_logged = 0U;
+        App_DebugLogString("MCP2518FD B init ok\r\n");
+      }
+      else
+      {
+        if (fdcan_init_error_logged == 0U)
+        {
+          App_DebugLogString("MCP2518FD B init failed\r\n");
+          fdcan_init_error_logged = 1U;
+        }
+        osDelay(250);
+        continue;
+      }
+    }
+
     Task07_ParseSpi3Message(&recv_data);
-    osDelay(10);
+    osDelay(1);
   }
   /* USER CODE END StartTask07 */
 }
@@ -463,11 +554,35 @@ void StartTask07(void *argument)
 void StartTask08(void *argument)
 {
   /* USER CODE BEGIN StartTask08 */
+  PublishQueueItem_t item;
+  uint16_t frame_length = 0U;
+  HAL_StatusTypeDef tx_status = HAL_OK;
+
   for(;;)
   {
-    if (osMessageQueueGet(myQueue01Handle, &g_task08Usart1TxItem, NULL, osWaitForever) == osOK)
+    if (osMessageQueueGet(myQueue04Handle, &item, NULL, osWaitForever) == osOK)
     {
-      Task08_SendUsart1Message(&g_task08Usart1TxItem);
+      Publish_OnTopicDequeued(item.topic);
+
+      if (Publish_BuildFrame(item.topic,
+                             g_task08PublishFrameBuffer,
+                             (uint16_t)sizeof(g_task08PublishFrameBuffer),
+                             &frame_length))
+      {
+        tx_status = App_UART_TransmitDmaBlocking(&huart1, g_task08PublishFrameBuffer, frame_length);
+        if (tx_status == HAL_OK)
+        {
+          osDelay(TASK08_PUBLISH_COOLDOWN_MS);
+        }
+        else
+        {
+          (void)Publish_QueueTopic(item.topic);
+        }
+      }
+      else
+      {
+        (void)Publish_QueueTopic(item.topic);
+      }
     }
   }
   /* USER CODE END StartTask08 */
@@ -494,7 +609,6 @@ void StartTask09(void *argument)
   }
   /* USER CODE END StartTask09 */
 }
-
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
 static osStatus_t App_QueueBytes(osMessageQueueId_t queue_handle, const uint8_t *data, uint16_t length, uint32_t timeout_ms)
@@ -558,6 +672,171 @@ static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart,
   }
 
   return HAL_OK;
+}
+
+static HAL_StatusTypeDef App_Task05_StartRs485Dma(void)
+{
+  (void)HAL_UART_DMAStop(&huart2);
+  __HAL_UART_CLEAR_OREFLAG(&huart2);
+
+  g_task05Rs485DmaLastEventPos = 0U;
+  g_task05Rs485DmaPendingBytes = 0U;
+  g_task05Rs485DmaOverflow = 0U;
+  g_task05Rs485DmaReadPos = 0U;
+
+  return HAL_UARTEx_ReceiveToIdle_DMA(&huart2,
+                                      g_task05Rs485DmaBuffer,
+                                      (uint16_t)sizeof(g_task05Rs485DmaBuffer));
+}
+
+static void App_Task05_ProcessRs485DmaBuffer(void)
+{
+  for (;;)
+  {
+    uint16_t pending_bytes = 0U;
+    uint16_t contiguous_bytes = 0U;
+
+    taskENTER_CRITICAL();
+    pending_bytes = g_task05Rs485DmaPendingBytes;
+    taskEXIT_CRITICAL();
+
+    if (pending_bytes == 0U)
+    {
+      break;
+    }
+
+    contiguous_bytes = pending_bytes;
+    if ((uint16_t)(sizeof(g_task05Rs485DmaBuffer) - g_task05Rs485DmaReadPos) < contiguous_bytes)
+    {
+      contiguous_bytes = (uint16_t)(sizeof(g_task05Rs485DmaBuffer) - g_task05Rs485DmaReadPos);
+    }
+
+    App_Task05_ProcessRs485Span(g_task05Rs485DmaReadPos,
+                                (uint16_t)(g_task05Rs485DmaReadPos + contiguous_bytes));
+
+    taskENTER_CRITICAL();
+    if (g_task05Rs485DmaPendingBytes >= contiguous_bytes)
+    {
+      g_task05Rs485DmaPendingBytes = (uint16_t)(g_task05Rs485DmaPendingBytes - contiguous_bytes);
+    }
+    else
+    {
+      g_task05Rs485DmaPendingBytes = 0U;
+    }
+    g_task05Rs485DmaReadPos = (uint16_t)((g_task05Rs485DmaReadPos + contiguous_bytes) % sizeof(g_task05Rs485DmaBuffer));
+    taskEXIT_CRITICAL();
+  }
+
+  if (g_task05Rs485DmaOverflow != 0U)
+  {
+    g_task05Rs485DmaOverflow = 0U;
+    App_DebugLogString("USART2 RX DMA overflow\r\n");
+  }
+}
+
+static void App_Task05_ProcessRs485Span(uint16_t start, uint16_t end)
+{
+  if (start == end)
+  {
+    return;
+  }
+
+  if (end > start)
+  {
+    App_Task05_DispatchRs485Bytes(&g_task05Rs485DmaBuffer[start], (uint16_t)(end - start));
+    return;
+  }
+
+  App_Task05_DispatchRs485Bytes(&g_task05Rs485DmaBuffer[start],
+                                (uint16_t)(sizeof(g_task05Rs485DmaBuffer) - start));
+  if (end > 0U)
+  {
+    App_Task05_DispatchRs485Bytes(&g_task05Rs485DmaBuffer[0], end);
+  }
+}
+
+static void App_Task05_DispatchRs485Bytes(const uint8_t *data, uint16_t length)
+{
+  Peripheral_Rx_Frame_t recv_data = {0};
+
+  if ((data == NULL) || (length == 0U))
+  {
+    return;
+  }
+
+  while (length > 0U)
+  {
+    uint16_t chunk = length;
+    if (chunk > (uint16_t)sizeof(recv_data.data))
+    {
+      chunk = (uint16_t)sizeof(recv_data.data);
+    }
+
+    recv_data.length = chunk;
+    (void)memcpy(recv_data.data, data, chunk);
+    Task05_ParseRs485Message(&recv_data);
+
+    data += chunk;
+    length = (uint16_t)(length - chunk);
+  }
+}
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+{
+  if ((huart != NULL) && (huart->Instance == USART2))
+  {
+    HAL_UART_RxEventTypeTypeDef event_type = HAL_UARTEx_GetRxEventType(huart);
+    uint16_t current_pos = Size;
+    uint16_t delta = 0U;
+    uint16_t pending = 0U;
+
+    if (current_pos > (uint16_t)sizeof(g_task05Rs485DmaBuffer))
+    {
+      current_pos = (uint16_t)sizeof(g_task05Rs485DmaBuffer);
+    }
+
+    if (event_type == HAL_UART_RXEVENT_TC)
+    {
+      delta = (uint16_t)(sizeof(g_task05Rs485DmaBuffer) - g_task05Rs485DmaLastEventPos);
+      current_pos = 0U;
+    }
+    else if (current_pos >= g_task05Rs485DmaLastEventPos)
+    {
+      delta = (uint16_t)(current_pos - g_task05Rs485DmaLastEventPos);
+    }
+    else
+    {
+      delta = (uint16_t)((sizeof(g_task05Rs485DmaBuffer) - g_task05Rs485DmaLastEventPos) + current_pos);
+    }
+
+    g_task05Rs485DmaLastEventPos = current_pos;
+    pending = (uint16_t)(g_task05Rs485DmaPendingBytes + delta);
+    if (pending > (uint16_t)sizeof(g_task05Rs485DmaBuffer))
+    {
+      g_task05Rs485DmaPendingBytes = (uint16_t)sizeof(g_task05Rs485DmaBuffer);
+      g_task05Rs485DmaOverflow = 1U;
+    }
+    else
+    {
+      g_task05Rs485DmaPendingBytes = pending;
+    }
+
+    if (myTask05Handle != NULL)
+    {
+      (void)osThreadFlagsSet(myTask05Handle, TASK05_FLAG_RS485_RX_READY);
+    }
+  }
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if ((huart != NULL) && (huart->Instance == USART2))
+  {
+    if (myTask05Handle != NULL)
+    {
+      (void)osThreadFlagsSet(myTask05Handle, TASK05_FLAG_RS485_RX_RESTART);
+    }
+  }
 }
 
 static void Task01_SendUsart3DebugMessage(void)
@@ -632,7 +911,7 @@ static void Task04_SendMlxDebugMatrix(uint8_t sensor_id, const float *temp_map)
     return;
   }
 
-  (void)snprintf(line, sizeof(line), "----- Sensor %u Temperature Matrix -----\r\n", (unsigned int)sensor_id);
+  (void)snprintf(line, TASK04_MLX_LINE_BUFFER_SIZE, "----- Sensor %u Temperature Matrix -----\r\n", (unsigned int)sensor_id);
   App_DebugLogString(line);
 
   for (uint16_t row = 0U; row < MLX90640_LINE_NUM; row++)
@@ -654,7 +933,7 @@ static void Task04_SendMlxDebugMatrix(uint8_t sensor_id, const float *temp_map)
     App_DebugLogString(line);
   }
 
-  (void)snprintf(line, sizeof(line), "----- Sensor %u Temperature Matrix End -----\r\n", (unsigned int)sensor_id);
+  (void)snprintf(line, TASK04_MLX_LINE_BUFFER_SIZE, "----- Sensor %u Temperature Matrix End -----\r\n", (unsigned int)sensor_id);
   App_DebugLogString(line);
 }
 
@@ -673,7 +952,67 @@ static void Task04_SendMlxSummary(uint8_t sensor_id)
       (long)g_MLX90640_Frame.RegionTemp[sensor_id][3],
       (unsigned long)g_MLX90640_Frame.FrameCounter[sensor_id]);
 
-  (void)App_QueueText(myQueue01Handle, line, 250U);
+  App_DebugLogString(line);
+}
+
+static void Task04_SendMlxCanSummary(uint8_t sensor_id)
+{
+  CAN_Tx_Queue_t tx_data = {0};
+
+  tx_data.std_id = Task04_GetMlxCanSummaryId(sensor_id);
+  if (tx_data.std_id == 0U)
+  {
+    return;
+  }
+
+  for (uint8_t region_index = 0U; region_index < MLX90640_REGION_COUNT; region_index++)
+  {
+    Task04_EncodeCanSummaryPair(
+        g_MLX90640_Frame.RegionTemp[sensor_id][region_index],
+        &tx_data.data[region_index * 2U],
+        &tx_data.data[(region_index * 2U) + 1U]);
+  }
+
+  (void)freertos_can1_tx_queue_put(&tx_data, 0U);
+}
+
+static uint32_t Task04_GetMlxCanSummaryId(uint8_t sensor_id)
+{
+  switch (sensor_id)
+  {
+    case 0U:
+      return CAN_ID_CANB_THERMAL_SUMMARY_FL;
+    case 1U:
+      return CAN_ID_CANB_THERMAL_SUMMARY_FR;
+    case 2U:
+      return CAN_ID_CANB_THERMAL_SUMMARY_RL;
+    case 3U:
+      return CAN_ID_CANB_THERMAL_SUMMARY_RR;
+    default:
+      return 0U;
+  }
+}
+
+static void Task04_EncodeCanSummaryPair(int32_t centi_c, uint8_t *integer_part, uint8_t *fraction_part)
+{
+  uint32_t value;
+
+  if ((integer_part == NULL) || (fraction_part == NULL))
+  {
+    return;
+  }
+
+  if (centi_c < 0)
+  {
+    value = 0U;
+  }
+  else
+  {
+    value = (uint32_t)centi_c;
+  }
+
+  *integer_part = (uint8_t)(((value / 100U) > 255U) ? 255U : (value / 100U));
+  *fraction_part = (uint8_t)(value % 100U);
 }
 osStatus_t freertos_can_queue_send_from_isr(const CAN_Msg_Queue_t *pData)
 {
@@ -684,11 +1023,11 @@ osStatus_t freertos_can_queue_send_from_isr(const CAN_Msg_Queue_t *pData)
     return osErrorParameter;
   }
 
-  if(pData->can_channel == 1U)
+  if(pData->can_channel == CAN_CHANNEL_VEHICLE_CANB)
   {
     queue_handle = myQueue02Handle;
   }
-  else if(pData->can_channel == 2U)
+  else if(pData->can_channel == CAN_CHANNEL_BATTERY_BOX)
   {
     queue_handle = myQueue03Handle;
   }
@@ -717,6 +1056,109 @@ osStatus_t freertos_can1_tx_queue_put(const CAN_Tx_Queue_t *pData, uint32_t time
   return osMessageQueuePut(myQueue05Handle, pData, 0U, timeout_ms);
 }
 
+static void TaskSpiPollCan(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus, osMessageQueueId_t queue_handle, uint8_t can_channel)
+{
+  CAN_Msg_Queue_t queue_item;
+  FDCAN_StdFrame_t rx_frame;
+  uint8_t received = 0U;
+
+  if ((recv_data == NULL) || (queue_handle == NULL) || (FDCAN_IsReady(bus) == 0U))
+  {
+    return;
+  }
+
+  do
+  {
+    if (FDCAN_Poll(bus, &rx_frame, &received) != HAL_OK || (received == 0U))
+    {
+      return;
+    }
+
+    if ((rx_frame.frame_format != FDCAN_FRAME_CLASSIC) || (rx_frame.length > 8U))
+    {
+      continue;
+    }
+
+    queue_item.can_channel = can_channel;
+    queue_item.msg_id = rx_frame.std_id;
+    queue_item.dlc = rx_frame.length;
+    queue_item.is_ext_id = 0U;
+    (void)memset(queue_item.msg_data, 0, sizeof(queue_item.msg_data));
+    (void)memcpy(queue_item.msg_data, rx_frame.data, rx_frame.length);
+    (void)osMessageQueuePut(queue_handle, &queue_item, 0U, 0U);
+  } while (received != 0U);
+}
+
+static bool TaskSpiPollControllerCana(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus)
+{
+  CAN_Msg_Queue_t frame_data;
+  FDCAN_StdFrame_t rx_frame;
+  uint8_t received = 0U;
+  bool decoded_any = false;
+
+  if ((recv_data == NULL) || (FDCAN_IsReady(bus) == 0U))
+  {
+    return false;
+  }
+
+  do
+  {
+    if (FDCAN_Poll(bus, &rx_frame, &received) != HAL_OK || (received == 0U))
+    {
+      return decoded_any;
+    }
+
+    if ((rx_frame.frame_format != FDCAN_FRAME_CLASSIC) || (rx_frame.length > 8U))
+    {
+      continue;
+    }
+
+    frame_data.can_channel = CAN_CHANNEL_CONTROLLER_CANA;
+    frame_data.msg_id = rx_frame.std_id;
+    frame_data.dlc = rx_frame.length;
+    frame_data.is_ext_id = 0U;
+    (void)memset(frame_data.msg_data, 0, sizeof(frame_data.msg_data));
+    (void)memcpy(frame_data.msg_data, rx_frame.data, rx_frame.length);
+    CAN_DecodeControllerCanaMessage(&frame_data);
+    decoded_any = true;
+  } while (received != 0U);
+
+  return decoded_any;
+}
+
+static void TaskSpiPollCdcMonitor(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus)
+{
+  CAN_Msg_Queue_t frame_data;
+  FDCAN_StdFrame_t rx_frame;
+  uint8_t received = 0U;
+
+  if ((recv_data == NULL) || (FDCAN_IsReady(bus) == 0U))
+  {
+    return;
+  }
+
+  do
+  {
+    if (FDCAN_Poll(bus, &rx_frame, &received) != HAL_OK || (received == 0U))
+    {
+      return;
+    }
+
+    if ((rx_frame.frame_format != FDCAN_FRAME_CLASSIC) || (rx_frame.length > 8U))
+    {
+      continue;
+    }
+
+    frame_data.can_channel = CAN_CHANNEL_CDC_MONITOR;
+    frame_data.msg_id = rx_frame.std_id;
+    frame_data.dlc = rx_frame.length;
+    frame_data.is_ext_id = 0U;
+    (void)memset(frame_data.msg_data, 0, sizeof(frame_data.msg_data));
+    (void)memcpy(frame_data.msg_data, rx_frame.data, rx_frame.length);
+    CAN_DecodeCdcMonitorMessage(&frame_data);
+  } while (received != 0U);
+}
+
 static void TaskDefault_ParseUsart3Message(void)
 {
   /* USART3 parser entry. */
@@ -724,144 +1166,26 @@ static void TaskDefault_ParseUsart3Message(void)
 
 static void Task02_ParseCan1Message(const CAN_Msg_Queue_t *recv_data)
 {
-  if (recv_data == NULL || recv_data->can_channel != 1U || recv_data->is_ext_id != 0U)
+  if (recv_data == NULL)
   {
     return;
   }
 
-  switch (recv_data->msg_id)
+  if (recv_data->can_channel == CAN_CHANNEL_VEHICLE_CANB)
   {
-    case 0x401:
-      break;
-
-    case 0x501:
-      g_CANB_LoopData.ECU.Vehicle_Speed = (int)recv_data->msg_data[0];
-      g_CANB_LoopData.IMU.Long_Accel = (int)recv_data->msg_data[1];
-      g_CANB_LoopData.IMU.Lat_Accel = (int)recv_data->msg_data[2];
-      for (int i = 0; i < 4; i++)
-      {
-        g_CANB_LoopData.ECU.Motor_Torque[i] = (int)recv_data->msg_data[i + 3];
-      }
-      g_CANB_LoopData.ECU.driving_mode = (int)recv_data->msg_data[7];
-      break;
-
-    case 0x502:
-      for (int i = 0; i < 4; i++)
-      {
-        g_CANB_LoopData.ECU.Motor_RPM[i] = (int)recv_data->msg_data[i];
-        g_CANB_LoopData.ECU.Motor_Power[i] = (256 * (int)recv_data->msg_data[2 * i + 1] + (int)recv_data->msg_data[2 * i]) / 9549;
-      }
-      break;
-
-    case 0x503:
-      for (int i = 0; i < 4; i++)
-      {
-        g_CANB_LoopData.ECU.ERRO[i] = (256 * (int)recv_data->msg_data[2 * i] + (int)recv_data->msg_data[2 * i + 1]);
-      }
-      break;
-
-    case 0x50:
-      break;
-
-    default:
-      break;
+    CAN_DecodeVehicleCanbMessage(recv_data);
+    (void)Publish_QueueTopic(PUBLISH_TOPIC_FAST_TELEMETRY);
+    (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
+    (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
   }
 }
 
 static void Task03_ParseCan2Message(const CAN_Msg_Queue_t *recv_data)
 {
-  if (recv_data == NULL || recv_data->can_channel != 2U || recv_data->is_ext_id != 1U)
-  {
-    return;
-  }
-
-  if (recv_data->msg_id >= 0x180050F3 && recv_data->msg_id <= 0x184550F3)
-  {
-    int module_id = 0;
-    if (recv_data->msg_id >= 0x184050F3)
-    {
-      module_id = (int)((recv_data->msg_id >> 16) & 0x000F);
-      for (int i = 0; i < BAT_TEMP_POINT_PER_MOD; i++)
-      {
-        g_BatteryInfo.ModTemp[module_id][i] = (int8_t)(recv_data->msg_data[i] - BAT_TEMP_OFFSET);
-      }
-    }
-    else
-    {
-      int middle = (int)((recv_data->msg_id - 0x180050F3) >> 16);
-      module_id = middle / 6;
-      switch (middle % 6)
-      {
-        case 0:
-          for (int i = 0; i <= 3; i++)
-            g_BatteryInfo.CellVolt[module_id][i] = (uint16_t)(recv_data->msg_data[2 * i] + recv_data->msg_data[2 * i + 1] * 256);
-          break;
-        case 1:
-          for (int i = 0; i <= 3; i++)
-            g_BatteryInfo.CellVolt[module_id][i + 4] = (uint16_t)(recv_data->msg_data[2 * i] + recv_data->msg_data[2 * i + 1] * 256);
-          break;
-        case 2:
-          for (int i = 0; i <= 3; i++)
-            g_BatteryInfo.CellVolt[module_id][i + 8] = (uint16_t)(recv_data->msg_data[2 * i] + recv_data->msg_data[2 * i + 1] * 256);
-          break;
-        case 3:
-          for (int i = 0; i <= 3; i++)
-            g_BatteryInfo.CellVolt[module_id][i + 12] = (uint16_t)(recv_data->msg_data[2 * i] + recv_data->msg_data[2 * i + 1] * 256);
-          break;
-        case 4:
-          for (int i = 0; i <= 3; i++)
-            g_BatteryInfo.CellVolt[module_id][i + 16] = (uint16_t)(recv_data->msg_data[2 * i] + recv_data->msg_data[2 * i + 1] * 256);
-          break;
-        case 5:
-          for (int i = 0; i <= 3; i++)
-            g_BatteryInfo.CellVolt[module_id][i + 20] = (uint16_t)(recv_data->msg_data[2 * i] + recv_data->msg_data[2 * i + 1] * 256);
-          break;
-        default:
-          break;
-      }
-    }
-  }
-
-  if (recv_data->msg_id >= 0x186050F4 && recv_data->msg_id <= 0x186350F4)
-  {
-    switch (recv_data->msg_id)
-    {
-      case 0x186050F4:
-        g_BatteryInfo.TotalVolt = (uint16_t)(recv_data->msg_data[0] * 256 + recv_data->msg_data[1]);
-        g_BatteryInfo.TotalCurrent = (int16_t)(recv_data->msg_data[2] * 256 + recv_data->msg_data[3]);
-        g_BatteryInfo.SOC = recv_data->msg_data[4];
-        g_BatteryInfo.IMD_State = recv_data->msg_data[5];
-        g_BatteryInfo.Work_State = (uint8_t)(((recv_data->msg_data[6] & 0xF0) >> 4) - 2);
-        if (g_BatteryInfo.Work_State == 3)
-        {
-          g_BatteryInfo.Work_State = g_BatteryInfo.Charge_Enable ? 4 : 3;
-        }
-        break;
-
-      case 0x186150F4:
-        g_BatteryInfo.MaxCellVolt = (uint16_t)(256 * recv_data->msg_data[0] + recv_data->msg_data[1]);
-        g_BatteryInfo.MinCellVolt = (uint16_t)(256 * recv_data->msg_data[2] + recv_data->msg_data[3]);
-        break;
-
-      case 0x186250F4:
-        g_BatteryInfo.MaxTemp = (int8_t)(recv_data->msg_data[0] - BAT_TEMP_OFFSET);
-        g_BatteryInfo.MinTemp = (int8_t)(recv_data->msg_data[1] - BAT_TEMP_OFFSET);
-        break;
-
-      case 0x186350F4:
-        g_BatteryInfo.Air1_State = (uint8_t)((recv_data->msg_data[0] & 0x0C) >> 2);
-        g_BatteryInfo.Air2_State = (uint8_t)((recv_data->msg_data[0] & 0x30) >> 4);
-        g_BatteryInfo.Air3_State = (uint8_t)((recv_data->msg_data[0] & 0xC0) >> 6);
-        g_BatteryInfo.Charge_Enable = (uint8_t)((recv_data->msg_data[1] & 0x3F) >> 5);
-        g_BatteryInfo.Charge_ReqVolt = (uint16_t)(256 * recv_data->msg_data[2] + recv_data->msg_data[3]);
-        g_BatteryInfo.Charge_ReqCurr = (int16_t)((256 * recv_data->msg_data[4] + recv_data->msg_data[5]) * CHARGER_CURR_SCALE);
-        g_BatteryInfo.Charger_OutVolt = (uint16_t)(256 * recv_data->msg_data[6] + recv_data->msg_data[7]);
-        break;
-
-      default:
-        break;
-    }
-  }
+  CAN_DecodeBatteryBoxMessage(recv_data);
+  (void)Publish_QueueTopic(PUBLISH_TOPIC_FAST_TELEMETRY);
+  (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
+  (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_DETAIL);
 }
 
 static void Task05_ParseRs485Message(const Peripheral_Rx_Frame_t *recv_data)
@@ -872,26 +1196,16 @@ static void Task05_ParseRs485Message(const Peripheral_Rx_Frame_t *recv_data)
 
 static void Task06_ParseSpi1Message(const Peripheral_Rx_Frame_t *recv_data)
 {
-  (void)recv_data;
-  (void)hspi1;
-  /* SPI1 parser entry. */
+  if (TaskSpiPollControllerCana(recv_data, FDCAN_BUS_A))
+  {
+    (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
+    (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
+  }
 }
 
 static void Task07_ParseSpi3Message(const Peripheral_Rx_Frame_t *recv_data)
 {
-  (void)recv_data;
-  (void)hspi3;
-  /* SPI3 parser entry. */
-}
-
-static void Task08_SendUsart1Message(const App_Uart_Tx_Item_t *tx_data)
-{
-  if (tx_data == NULL)
-  {
-    return;
-  }
-
-  (void)App_UART_TransmitDmaBlocking(&huart1, (uint8_t *)tx_data->data, tx_data->length);
+  TaskSpiPollCdcMonitor(recv_data, FDCAN_BUS_B);
 }
 
 static void Task09_SendCan1Message(const CAN_Tx_Queue_t *tx_data)
@@ -904,7 +1218,6 @@ static void Task09_SendCan1Message(const CAN_Tx_Queue_t *tx_data)
   CAN_Send_Msg(&hcan1, tx_data->std_id, (uint8_t *)tx_data->data);
 }
 /* USER CODE END Application */
-
 
 
 

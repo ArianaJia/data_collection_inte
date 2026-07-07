@@ -21,6 +21,7 @@ Release/
 *.log
 *.tmp
 *.bak
+.codex_backup_*/
 
 # OS / editor files
 .DS_Store

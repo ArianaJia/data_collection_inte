@@ -1,0 +1,211 @@
+syntax = "proto3";
+package fsae;
+
+enum AlarmSeverity { // 告警等级
+    ALARM_SEVERITY_UNSPECIFIED = 0; // 未知等级
+    ALARM_SEVERITY_INFO = 1; // 提示
+    ALARM_SEVERITY_WARNING = 2; // 警告
+    ALARM_SEVERITY_ERROR = 3; // 错误
+    ALARM_SEVERITY_FATAL = 4; // 严重故障
+}
+
+enum DrivingMode { // 车辆模式
+    DRIVING_MODE_UNSPECIFIED = 0; // 未知模式
+    DRIVING_MODE_DEFAULT = 1; // 默认模式
+    DRIVING_MODE_STRAIGHT = 2; // 直线
+    DRIVING_MODE_AUTOCROSS = 3; // 高速避障
+    DRIVING_MODE_SKIDPAD = 4; // 八字绕环
+    DRIVING_MODE_ENDURANCE = 5; // 耐久
+}
+
+enum VcuStatus { // VCU 状态
+    VCU_STATUS_UNSPECIFIED = 0; // 未知状态
+    VCU_STATUS_OFF = 1; // 关闭
+    VCU_STATUS_PRECHARGE = 2; // 预充中
+    VCU_STATUS_HV_ENABLED = 3; // 高压已建立
+    VCU_STATUS_FAULT = 4; // 故障
+}
+
+enum MotorPosition { // 电机/轮位位置
+    MOTOR_POSITION_UNSPECIFIED = 0; // 未知位置
+    MOTOR_POSITION_FRONT_LEFT = 1; // 左前
+    MOTOR_POSITION_FRONT_RIGHT = 2; // 右前
+    MOTOR_POSITION_REAR_LEFT = 3; // 左后
+    MOTOR_POSITION_REAR_RIGHT = 4; // 右后
+}
+
+message PacketHeader { // 通用报文头
+    uint32 timestamp_ms = 1; // 时间戳，单位 ms
+    uint32 seq = 2; // 报文序列号
+    uint32 source_id = 3; // 数据源设备 ID
+}
+
+message Alarm { // 告警信息
+    uint32 alarm_id = 1; // 告警 ID
+    AlarmSeverity severity = 2; // 告警等级
+    string message = 3; // 告警内容
+}
+
+message FastTelemetry { // 快速遥测摘要
+    sint32 hv_voltage_dv = 1; // 高压电压，单位 0.1V
+    sint32 hv_current_ma = 2; // 总电流，单位 mA
+    sint32 battery_temp_max_dc = 3; // 电池最高温度，单位 0.1 摄氏度
+    DrivingMode driving_mode = 4; // 当前车辆模式
+    uint32 speed_kmh = 5; // 车速，单位 km/h
+}
+
+message IvtTelemetry { // IVT-S 电流/电压/能量计
+    sint32 current_ma = 1; // IVT-S Result_I，单位 mA
+    sint32 voltage_u1_mv = 2; // IVT-S Result_U1，单位 mV
+    sint32 energy_wh = 3; // IVT-S Result_Wh，单位 Wh
+    uint32 current_state = 4; // IVT-S Result_I 状态位
+    uint32 voltage_u1_state = 5; // IVT-S Result_U1 状态位
+    uint32 energy_state = 6; // IVT-S Result_Wh 状态位
+    sint32 power_w = 7; // IVT-S U1 * I，单位 W
+}
+
+message EnergyMeterTelemetry { // CANB 上当前生效的能量计
+    uint32 source = 1; // 0 unknown, 1 IVT-S, 2 FS Datalogger
+    sint32 current_ma = 2; // 电流，单位 mA
+    sint32 voltage_mv = 3; // 电压，单位 mV
+    sint32 energy_wh = 4; // 能量，单位 Wh；FS Datalogger 不提供
+    sint32 power_w = 5; // 电压 * 电流，单位 W
+    uint32 status = 6; // 原始状态位：IVT-S Result_state 或 FS status bits
+    uint32 msg_counter = 7; // FS Datalogger MsgCnt；IVT-S 不提供
+}
+
+message MotionTelemetry { // CANB GPS/IMU 运动状态
+    uint32 gps_speed_kmh = 1; // GPS GroundSpeed，单位 km/h
+    float accel_x_g = 2; // IMU X 轴加速度，单位 g
+    float accel_y_g = 3; // IMU Y 轴加速度，单位 g
+    float accel_z_g = 4; // IMU Z 轴加速度，单位 g
+    float yaw_rate_dps = 5; // IMU Z 轴角速度，单位 deg/s
+    float yaw_deg = 6; // IMU 横摆角，单位 deg
+}
+
+message ThermalRawChunk { // 热成像原始数据分片
+    MotorPosition position = 1; // 对应电机/轮位
+    uint32 frame_id = 2; // 帧编号
+    uint32 chunk_index = 3; // 当前分片索引
+    uint32 chunk_count = 4; // 总分片数量
+    sint32 pixel_temp_centi_c = 5; // 当前分片像素温度，单位 0.01 摄氏度
+}
+
+message ThermalSensorSummary { // 单个轮位的红外温度摘要
+    MotorPosition position = 1; // 对应电机/轮位
+    sint32 min_temp_centi_c = 2; // 最低温度，单位 0.01 摄氏度
+    sint32 max_temp_centi_c = 3; // 最高温度，单位 0.01 摄氏度
+    sint32 avg_temp_centi_c = 4; // 平均温度，单位 0.01 摄氏度
+    repeated ThermalRawChunk chunks = 5; // 原始温度分片列表
+}
+
+message ThermalSummary { // 热成像摘要
+    repeated ThermalSensorSummary sensors = 1; // 四个轮位的红外温度摘要
+}
+
+message MotorState { // 单个电机状态
+    reserved 8; // 曾用于 actual_torque_0p1pct，已废弃，避免复用造成兼容歧义
+    MotorPosition position = 1; // 电机位置
+    sint32 rpm = 2; // 电机转速
+    sint32 torque_nm = 3; // AMK 实际扭矩原始值，单位 0.1%Mn；显示 Nm 时乘 9.8 / 1000
+    sint32 power_w = 4; // 电机功率，单位 W
+    sint32 motor_temp_dc = 5; // 电机温度，单位 0.1 摄氏度
+    sint32 inverter_temp_dc = 6; // 电机控制器温度，单位 0.1 摄氏度
+    sint32 motor_error = 7; // 兼容旧表的 AMK 诊断码有符号镜像
+    sint32 igbt_temp_dc = 9; // IGBT 温度，单位 0.1 摄氏度
+    uint32 diagnostic_number = 10; // AMK 诊断码
+    optional uint32 logic_state = 11; // CANB Debug9 LogicState，原始值 0..15；0 也必须显式上报
+}
+
+message VehicleState { // 整车状态
+    reserved 5; // 顶层 TelemetryFrame.ready_to_drive 是唯一上报源
+    uint32 speed_kmh = 1; // 车速，单位 km/h
+    DrivingMode driving_mode = 2; // 当前车辆模式
+    uint32 throttle_position = 3; // 油门开度
+    uint32 brake_position = 4; // 刹车开度
+    VcuStatus vcu_status = 6; // VCU 状态
+    repeated MotorState motors = 7; // 四个电机状态列表，按 position 区分
+}
+
+message BatteryModule {
+
+    uint32 module_id = 1;
+    // 23 节电芯电压
+    uint32 v01 = 2;
+    uint32 v02 = 3;
+    uint32 v03 = 4;
+    uint32 v04 = 5;
+    uint32 v05 = 6;
+    uint32 v06 = 7;
+    uint32 v07 = 8;
+    uint32 v08 = 9;
+    uint32 v09 = 10;
+    uint32 v10 = 11;
+    uint32 v11 = 12;
+    uint32 v12 = 13;
+    uint32 v13 = 14;
+    uint32 v14 = 15;
+    uint32 v15 = 16;
+    uint32 v16 = 17;
+    uint32 v17 = 18;
+    uint32 v18 = 19;
+    uint32 v19 = 20;
+    uint32 v20 = 21;
+    uint32 v21 = 22;
+    uint32 v22 = 23;
+    uint32 v23 = 24;
+
+    // 8 个温度
+    sint32 t1 = 30;
+    sint32 t2 = 31;
+    sint32 t3 = 32;
+    sint32 t4 = 33;
+    sint32 t5 = 34;
+    sint32 t6 = 35;
+    sint32 t7 = 36;
+    sint32 t8 = 37;
+}
+message TelemetryFrame {
+    // --- 0. STM32 legacy fields, kept for CAN2RS485 firmware compatibility ---
+    uint32 timestamp_ms = 1;
+    uint32 frame_id = 2;
+    float apps_position = 3;
+    float brake_pressure = 4;
+    float steering_angle = 5;
+    float hv_voltage = 6;
+    float hv_current = 7;
+    float battery_temp_max = 8;
+    uint32 fault_code = 9;
+    int32 motor_rpm = 10;
+    float motor_temp = 11;
+    float inverter_temp = 12;
+    uint32 ready_to_drive = 13;
+    uint32 vcu_status = 14;
+
+    // --- 1. BMS 详细数据（保持现网结构，兼容现有 modules 拆表） ---
+    repeated BatteryModule modules = 15;
+
+    // --- 2. 电池包摘要（保持现网结构） ---
+    uint32 battery_soc = 16;
+    uint32 max_cell_voltage = 17;
+    uint32 min_cell_voltage = 18;
+    uint32 max_cell_voltage_no = 19;
+    uint32 min_cell_voltage_no = 20;
+    sint32 max_temp = 21;
+    sint32 min_temp = 22;
+    uint32 max_temp_no = 23;
+    uint32 min_temp_no = 24;
+
+    // --- 3. 简化故障字 ---
+    uint32 battery_fault_code = 25;
+
+    // --- 4. 追加嵌套字段（保持单 Topic，统一挂在 TelemetryFrame 顶层） ---
+    PacketHeader header = 26;
+    FastTelemetry fast_telemetry = 27;
+    VehicleState vehicle_state = 28;
+    ThermalSummary thermal_summary = 29;
+    repeated Alarm alarms = 30;
+    IvtTelemetry ivt_telemetry = 31;
+    EnergyMeterTelemetry energy_meter = 32;
+    MotionTelemetry motion = 33;
+}

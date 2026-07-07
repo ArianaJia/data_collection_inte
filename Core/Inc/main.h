@@ -57,10 +57,14 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define MCP2518_CS_A_Pin GPIO_PIN_4
+#define MCP2518_CS_A_GPIO_Port GPIOA
 #define EN__Pin GPIO_PIN_0
 #define EN__GPIO_Port GPIOB
 #define LED_GREEN_Pin GPIO_PIN_12
 #define LED_GREEN_GPIO_Port GPIOD
+#define MCP2518_CS_B_Pin GPIO_PIN_15
+#define MCP2518_CS_B_GPIO_Port GPIOA
 #define BLUE_LED_Pin GPIO_PIN_1
 #define BLUE_LED_GPIO_Port GPIOE
 

@@ -93,7 +93,8 @@ includeDirectories:
 # these should be escaped with a: \ or the name should be in double quotes e.g. "HARDWARE_DRIVER*.c"
 sourceFiles:
   - Core/Src/adc.c
-  - Core/Src/battery.c
+  - Core/Src/telemetry_data.c
+  - Core/Src/can_decode.c
   - Core/Src/can.c
   - Core/Src/dma.c
   - Core/Src/freertos.c

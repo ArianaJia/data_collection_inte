@@ -1,0 +1,6 @@
+fsae.Alarm.message                 max_size:64
+fsae.TelemetryFrame.modules        max_count:6
+fsae.TelemetryFrame.alarms         max_count:8
+fsae.ThermalSensorSummary.chunks   max_count:4
+fsae.ThermalSummary.sensors        max_count:4
+fsae.VehicleState.motors           max_count:4

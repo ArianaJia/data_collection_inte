@@ -4,9 +4,9 @@
   * @file    can.c
   * @brief   STM32F407 CAN1/CAN2控制器驱动：底层配置、滤波初始化、
   *          报文收发/中断处理，支持标准帧/扩展帧通信，适配电池箱、
-  *          电机、IMU等外设；电池数据已抽离至battery.c/h，解耦设计
-  *          CAN1：PA11(RX)/PA12(TX) 标准帧 处理0x401/0x501/0x502/0x503
-  *          CAN2：PB12(RX)/PB13(TX) 扩展帧 处理电池箱0x18xxx0F3/0x18xxx0F4系列ID
+  *          电机、IMU等外设；遥测数据已抽离至telemetry_data.c/h，解耦设计
+  *          CAN1: vehicle CANB bus.
+  *          CAN2: battery-box bus, mapped from reference project CAN1.
   ******************************************************************************
   * @attention
   * Copyright (c) 2025 STMicroelectronics. All rights reserved.
@@ -24,10 +24,8 @@
 can_msg g_can_msg = {
   .g_CANTxData = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77},
   .g_CANRxData = {0},
-  .g_CAN1DefSendID = 0x102 // 原默认标准ID初始化值
+  .g_CAN1DefSendID = CAN_ID_CANB_BATTERY_POWER_STATUS
 };
-
-const uint16_t       g_CAN1FilterID[4] = {0x401, 0x501, 0x502, 0x503}; // CAN1过滤ID列表（只读，防止误修改）
 
 /* USER CODE END 0 */
 
@@ -237,8 +235,8 @@ void HAL_CAN_MspDeInit(CAN_HandleTypeDef* canHandle)
 /**
   * @brief CAN通用滤波配置函数（整合CAN1/CAN2，统一入口，无电池相关逻辑）
   * @param canHandle CAN句柄指针（&hcan1/&hcan2）
-  * @note CAN1：16位ID列表模式，仅接收g_CAN1FilterID中4个标准ID，存入FIFO0
-  *       CAN2：32位掩码模式，全接收所有扩展帧，存入FIFO0（适配电池箱所有帧）
+  * @note CAN1 uses filter bank 0 and accepts the vehicle CANB bus into FIFO0.
+  *       CAN2 uses filter bank 14 and accepts the battery-box bus into FIFO0.
   */
 void CAN_Filter_Config(CAN_HandleTypeDef *canHandle)
 {
@@ -249,19 +247,19 @@ void CAN_Filter_Config(CAN_HandleTypeDef *canHandle)
     CAN_FilterInitStructure.FilterActivation = ENABLE;
     CAN_FilterInitStructure.FilterBank = 0x00;
     CAN_FilterInitStructure.FilterFIFOAssignment = CAN_FILTER_FIFO0;
-    CAN_FilterInitStructure.FilterIdHigh = g_CAN1FilterID[0] << 5;
-    CAN_FilterInitStructure.FilterIdLow = g_CAN1FilterID[1] << 5;
-    CAN_FilterInitStructure.FilterMaskIdHigh = g_CAN1FilterID[2] << 5;
-    CAN_FilterInitStructure.FilterMaskIdLow = g_CAN1FilterID[3] << 5;
-    CAN_FilterInitStructure.FilterMode = CAN_FILTERMODE_IDLIST;
-    CAN_FilterInitStructure.FilterScale = CAN_FILTERSCALE_16BIT;
-    CAN_FilterInitStructure.SlaveStartFilterBank = 0;
+    CAN_FilterInitStructure.FilterIdHigh = 0x0000;
+    CAN_FilterInitStructure.FilterIdLow = 0x0000;
+    CAN_FilterInitStructure.FilterMaskIdHigh = 0x0000;
+    CAN_FilterInitStructure.FilterMaskIdLow = 0x0000;
+    CAN_FilterInitStructure.FilterMode = CAN_FILTERMODE_IDMASK;
+    CAN_FilterInitStructure.FilterScale = CAN_FILTERSCALE_32BIT;
+    CAN_FilterInitStructure.SlaveStartFilterBank = 14;
   }
   else if(canHandle->Instance == CAN2) // CAN2滤波配置：32位掩码全接收模式
   {
     CAN_FilterInitStructure.FilterMode = CAN_FILTERMODE_IDMASK;
     CAN_FilterInitStructure.FilterActivation = ENABLE;
-    CAN_FilterInitStructure.FilterBank = 0x00;
+    CAN_FilterInitStructure.FilterBank = 14;
     CAN_FilterInitStructure.FilterFIFOAssignment = CAN_FILTER_FIFO0;
     CAN_FilterInitStructure.FilterIdHigh = 0x0000;
     CAN_FilterInitStructure.FilterIdLow = 0x0000;
@@ -336,40 +334,32 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 
   // 2. 封装CAN报文到队列结构体，在freertos中执行解析部分，节省中断时间，避免卡顿
       CAN_Msg_Queue_t can_queue_data = {0};
-      can_queue_data.can_channel = 1;                  // 标记CAN1
-      can_queue_data.msg_id = g_can_msg.g_CANRxHeader.StdId; // CAN1是标准帧
-      can_queue_data.is_ext_id = 0;                    // 标准帧
+      can_queue_data.can_channel = CAN_CHANNEL_VEHICLE_CANB;
+      can_queue_data.dlc = (uint8_t)g_can_msg.g_CANRxHeader.DLC;
+      if (g_can_msg.g_CANRxHeader.IDE == CAN_ID_EXT)
+      {
+        can_queue_data.msg_id = g_can_msg.g_CANRxHeader.ExtId;
+        can_queue_data.is_ext_id = 1U;
+      }
+      else
+      {
+        can_queue_data.msg_id = g_can_msg.g_CANRxHeader.StdId;
+        can_queue_data.is_ext_id = 0U;
+      }
       memcpy(can_queue_data.msg_data, g_can_msg.g_CANRxData, 8); // 拷贝8字节数据
 
       // 3. 中断中发送到FreeRTOS队列（CMSIS-RTOS V2中断安全API）
-      // 3. 调用接口函数发送数据（完全不接触myQueue01Handle）
+      // 3. 调用统一队列接口发送数据，不直接耦合具体任务内部实现
         osStatus_t send_status = freertos_can_queue_send_from_isr(&can_queue_data);
         (void)send_status;
-//  // 根据接收的标准ID执行对应业务逻辑（原有入口保留，可自行扩展）
-//  switch(can_msg.g_CANRxHeader.StdId)
-//  {
-//    case 0x401:
-//      // 预留：0x401 ID报文处理逻辑
-//      break;
-//    case 0x501:
-//      // 预留：电机扭矩与常态化驾驶模式处理逻辑
-//      break;
-//    case 0x502:
-//      // 预留：0x502 ID报文处理逻辑
-//      break;
-//    case 0x50:
-//      // 预留：IMU数据回发与处理逻辑
-//      break;
-//    default:
-//      break;
-//  }
+
 }
 
 /**
   * @brief CAN2 FIFO0报文挂起中断回调函数（唯一处理电池箱扩展帧，更新全局电池数据）
   * @param hcan CAN句柄指针（仅处理hcan2实例）
   * @note 1. 所有解析后的数据直接更新至g_BatteryInfo全局结构体
-  *       2. 数据已按battery.h中的宏完成校准，上层可直接使用，无需再处理
+  *       2. 数据已按telemetry_data.h中的宏完成校准，上层可直接使用，无需再处理
   *       3. 保留原有解析逻辑，仅修改变量为结构体成员，无功能变化
   */
 void HAL_CAN2_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
@@ -385,101 +375,25 @@ void HAL_CAN2_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 //CAN2同理即是
   // 2. 封装CAN报文到队列结构体
       CAN_Msg_Queue_t can_queue_data = {0};
-      can_queue_data.can_channel = 2;                  // 标记CAN2
-      can_queue_data.msg_id = g_can_msg.g_CANRxHeader.ExtId; // CAN2是扩展帧
-      can_queue_data.is_ext_id = 1;                    // 扩展帧
+      can_queue_data.can_channel = CAN_CHANNEL_BATTERY_BOX;
+      can_queue_data.dlc = (uint8_t)g_can_msg.g_CANRxHeader.DLC;
+      if (g_can_msg.g_CANRxHeader.IDE == CAN_ID_EXT)
+      {
+        can_queue_data.msg_id = g_can_msg.g_CANRxHeader.ExtId;
+        can_queue_data.is_ext_id = 1U;
+      }
+      else
+      {
+        can_queue_data.msg_id = g_can_msg.g_CANRxHeader.StdId;
+        can_queue_data.is_ext_id = 0U;
+      }
       memcpy(can_queue_data.msg_data, g_can_msg.g_CANRxData, 8); // 拷贝8字节数据
 
       // 3. 中断中发送到FreeRTOS队列
-      // 3. 调用接口函数发送数据（完全不接触myQueue01Handle）
+      // 3. 调用统一队列接口发送数据，不直接耦合具体任务内部实现
         osStatus_t send_status = freertos_can_queue_send_from_isr(&can_queue_data);
         (void)send_status;
-//  // 处理电池模组电压/温度扩展帧：0x180050F3 ~ 0x184550F3
-//  if(can_msg.g_CANRxHeader.ExtId >= 0x180050F3 && can_msg.g_CANRxHeader.ExtId <= 0x184550F3)
-//  {
-//    int module_id = 0;
-//    if(can_msg.g_CANRxHeader.ExtId >= 0x184050F3) // 温度帧：解析后直接更新校准后温度
-//    {
-//      module_id = (int)((can_msg.g_CANRxHeader.ExtId >> 16) & 0x000F);
-//      for(int i=0; i<BAT_TEMP_POINT_PER_MOD; i++)
-//      {
-//        // 校准：原始值 - BAT_TEMP_OFFSET = 实际温度（℃），直接存入结构体
-//        g_BatteryInfo.ModTemp[module_id][i] = (int8_t)(can_msg.g_CANRxData[i] - BAT_TEMP_OFFSET);
-//      }
-//    }
-//    else // 电压帧：解析单体电压，直接存入结构体（原始值，mV）
-//    {
-//      int middle = (int)((can_msg.g_CANRxHeader.ExtId - 0x180050F3) >> 16);
-//      module_id = middle / 6;
-//      switch(middle % 6)
-//      {
-//        case 0: // 第1-4个单体（原逻辑保留，数组维度由宏控制）
-//          for(int i=0;i<=3;i++) g_BatteryInfo.CellVolt[module_id][i] = (uint16_t)(can_msg.g_CANRxData[2*i] + can_msg.g_CANRxData[2*i+1]*256);
-//          break;
-//        case 1: // 第5-8个单体
-//          for(int i=0;i<=3;i++) g_BatteryInfo.CellVolt[module_id][i+4] = (uint16_t)(can_msg.g_CANRxData[2*i] + can_msg.g_CANRxData[2*i+1]*256);
-//          break;
-//        case 2: // 第9-12个单体
-//          for(int i=0;i<=3;i++) g_BatteryInfo.CellVolt[module_id][i+8] = (uint16_t)(can_msg.g_CANRxData[2*i] + can_msg.g_CANRxData[2*i+1]*256);
-//          break;
-//        case 3: // 第13-16个单体
-//          for(int i=0;i<=3;i++) g_BatteryInfo.CellVolt[module_id][i+12] = (uint16_t)(can_msg.g_CANRxData[2*i] + can_msg.g_CANRxData[2*i+1]*256);
-//          break;
-//        case 4: // 第17-20个单体
-//          for(int i=0;i<=3;i++) g_BatteryInfo.CellVolt[module_id][i+16] = (uint16_t)(can_msg.g_CANRxData[2*i] + can_msg.g_CANRxData[2*i+1]*256);
-//          break;
-//        case 5: // 第21-24个单体
-//          for(int i=0;i<=3;i++) g_BatteryInfo.CellVolt[module_id][i+20] = (uint16_t)(can_msg.g_CANRxData[2*i] + can_msg.g_CANRxData[2*i+1]*256);
-//          break;
-//        default:
-//          break;
-//      }
-//    }
-//  }
-//
-//  // 处理电池整体参数扩展帧：0x186050F4 ~ 0x186350F4，直接更新结构体成员
-//  if(can_msg.g_CANRxHeader.ExtId >= 0x186050F4 && can_msg.g_CANRxHeader.ExtId <= 0x186350F4)
-//  {
-//    switch(can_msg.g_CANRxHeader.ExtId)
-//    {
-//      case 0x186050F4: // 总电压/总电流/SOC/绝缘状态/工作状态
-//        g_BatteryInfo.TotalVolt = (uint16_t)(can_msg.g_CANRxData[0]*256 + can_msg.g_CANRxData[1]);
-//        g_BatteryInfo.TotalCurrent = (int16_t)(can_msg.g_CANRxData[2]*256 + can_msg.g_CANRxData[3]);
-//        g_BatteryInfo.SOC = can_msg.g_CANRxData[4];
-//        g_BatteryInfo.IMD_State = can_msg.g_CANRxData[5];
-//        g_BatteryInfo.Work_State = (uint8_t)(((can_msg.g_CANRxData[6] & 0xF0) >> 4) - 2);
-//        // 充电状态修正
-//        if(g_BatteryInfo.Work_State == 3)
-//        {
-//          g_BatteryInfo.Work_State = g_BatteryInfo.Charge_Enable ? 4 : 3;
-//        }
-//        break;
-//
-//      case 0x186150F4: // 单体最高/最低电压
-//        g_BatteryInfo.MaxCellVolt = (uint16_t)(256*can_msg.g_CANRxData[0] + can_msg.g_CANRxData[1]);
-//        g_BatteryInfo.MinCellVolt = (uint16_t)(256*can_msg.g_CANRxData[2] + can_msg.g_CANRxData[3]);
-//        break;
-//
-//      case 0x186250F4: // 最高/最低温度（已校准）
-//        g_BatteryInfo.MaxTemp = (int8_t)(can_msg.g_CANRxData[0] - BAT_TEMP_OFFSET);
-//        g_BatteryInfo.MinTemp = (int8_t)(can_msg.g_CANRxData[1] - BAT_TEMP_OFFSET);
-//        break;
-//
-//      case 0x186350F4: // 继电器/充电信号/充电参数（电流已校准）
-//        g_BatteryInfo.Air1_State = (uint8_t)((can_msg.g_CANRxData[0] & 0x0C) >> 2);
-//        g_BatteryInfo.Air2_State = (uint8_t)((can_msg.g_CANRxData[0] & 0x30) >> 4);
-//        g_BatteryInfo.Air3_State = (uint8_t)((can_msg.g_CANRxData[0] & 0xC0) >> 6);
-//        g_BatteryInfo.Charge_Enable = (uint8_t)((can_msg.g_CANRxData[1] & 0x3F) >> 5);
-//        g_BatteryInfo.Charge_ReqVolt = (uint16_t)(256*can_msg.g_CANRxData[2] + can_msg.g_CANRxData[3]);
-//        // 校准：原始值 / BAT_CHARGE_I_DIV = 实际充电电流（mA）
-//        g_BatteryInfo.Charge_ReqCurr = (int16_t)((256*can_msg.g_CANRxData[4] + can_msg.g_CANRxData[5]) * CHARGER_CURR_SCALE);
-//        g_BatteryInfo.Charger_OutVolt = (uint16_t)(256*can_msg.g_CANRxData[6] + can_msg.g_CANRxData[7]);
-//        break;
-//
-//      default:
-//        break;
-//    }
-//  }
+
 }
 /* USER CODE BEGIN 1 */
 

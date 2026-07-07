@@ -15,13 +15,13 @@ PB_BIND(fsae_Alarm, fsae_Alarm, AUTO)
 PB_BIND(fsae_FastTelemetry, fsae_FastTelemetry, AUTO)
 
 
-PB_BIND(fsae_BmsSummary, fsae_BmsSummary, AUTO)
+PB_BIND(fsae_IvtTelemetry, fsae_IvtTelemetry, AUTO)
 
 
-PB_BIND(fsae_BatteryModule, fsae_BatteryModule, AUTO)
+PB_BIND(fsae_EnergyMeterTelemetry, fsae_EnergyMeterTelemetry, AUTO)
 
 
-PB_BIND(fsae_BmsDetail, fsae_BmsDetail, 2)
+PB_BIND(fsae_MotionTelemetry, fsae_MotionTelemetry, AUTO)
 
 
 PB_BIND(fsae_ThermalRawChunk, fsae_ThermalRawChunk, AUTO)
@@ -39,11 +39,10 @@ PB_BIND(fsae_MotorState, fsae_MotorState, AUTO)
 PB_BIND(fsae_VehicleState, fsae_VehicleState, AUTO)
 
 
+PB_BIND(fsae_BatteryModule, fsae_BatteryModule, AUTO)
+
+
 PB_BIND(fsae_TelemetryFrame, fsae_TelemetryFrame, 2)
-
-
-
-
 
 
 

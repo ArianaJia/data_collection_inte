@@ -6,10 +6,23 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "cmsis_os2.h"
 #include "fsae_telemetry.pb.h"
 
+
+#define PUBLISH_FAST_PERIOD_MS         100U
+#define PUBLISH_MEDIUM_PERIOD_MS       200U
+#define PUBLISH_SLOW_PERIOD_MS         500U
+
+#define PUBLISH_FRAME_MAGIC_0          0x46U
+#define PUBLISH_FRAME_MAGIC_1          0x53U
+#define PUBLISH_FRAME_HEADER_SIZE         5U
+#define PUBLISH_MAX_TOPIC_LEN            32U
+#define PUBLISH_MAX_PAYLOAD_SIZE       FSAE_FSAE_TELEMETRY_PB_H_MAX_SIZE
+#define PUBLISH_MAX_FRAME_SIZE         (PUBLISH_FRAME_HEADER_SIZE + PUBLISH_MAX_TOPIC_LEN + PUBLISH_MAX_PAYLOAD_SIZE)
+#define PUBLISH_BMS_DETAIL_CELL_COUNT    23U
 typedef enum
 {
     PUBLISH_TOPIC_FAST_TELEMETRY = 0,
@@ -19,6 +32,8 @@ typedef enum
     PUBLISH_TOPIC_THERMAL_SUMMARY
 } PublishTopic_t;
 
+#define PUBLISH_TOPIC_COUNT  ((uint8_t)PUBLISH_TOPIC_THERMAL_SUMMARY + 1U)
+
 typedef struct
 {
     PublishTopic_t topic;
@@ -27,7 +42,8 @@ typedef struct
 void Publish_Init(void);
 void Publish_Process(void);
 osStatus_t Publish_QueueTopic(PublishTopic_t topic);
-void Publish_TxTaskStep(uint32_t timeout_ms);
+void Publish_OnTopicDequeued(PublishTopic_t topic);
+bool Publish_BuildFrame(PublishTopic_t topic, uint8_t *frame_buffer, uint16_t frame_capacity, uint16_t *frame_size);
 
 /*
  * CANB loop -> fsae_VehicleState mapping
@@ -44,8 +60,8 @@ void Publish_TxTaskStep(uint32_t timeout_ms);
  * vehicle_state.motors[i].position
  *   <- CANB motor array order:
  *      i=0 -> REAR_LEFT
- *      i=1 -> FRONT_LEFT
- *      i=2 -> REAR_RIGHT
+ *      i=1 -> REAR_RIGHT
+ *      i=2 -> FRONT_LEFT
  *      i=3 -> FRONT_RIGHT
  *
  * vehicle_state.motors[i].rpm
@@ -61,14 +77,10 @@ void Publish_TxTaskStep(uint32_t timeout_ms);
  * vehicle_state.motors[i].motor_error
  *   <- g_CANB_LoopData.ECU.ERRO[i]
  *
- * Fields that currently have no CANB source are initialized to zero or
+ * Fields that currently have no direct CANB source are initialized to zero or
  * UNSPECIFIED:
- *   throttle_position
  *   brake_position
- *   ready_to_drive
  *   vcu_status
- *   motor_temp_dc
- *   inverter_temp_dc
  */
 void Publish_MapCanbVehicleState(fsae_VehicleState *vehicle_state);
 

@@ -1,13 +1,15 @@
 #include "mlx90640_app.h"
 
+#include "cmsis_os.h"
+#include "FreeRTOS.h"
 #include "MLX90640_API.h"
 #include "MLX90640_I2C_Driver.h"
-#include "battery.h"
+#include "main.h"
+#include "task.h"
+#include "telemetry_data.h"
 
 #include <stdio.h>
 
-#define MLX90640_FRAME_ATTEMPTS_MAX 4U
-#define MLX90640_LOG_BUFFER_SIZE    160U
 
 typedef struct
 {
@@ -21,6 +23,107 @@ static MLX90640_RuntimeData_t g_runtime;
 static uint8_t g_sensorReady[MLX90640_SENSOR_COUNT];
 static char g_logLine[MLX90640_LOG_BUFFER_SIZE];
 static MLX90640_AppLogFn g_logCallback = NULL;
+static volatile uint8_t g_mlx90640Busy = 0U;
+static uint8_t g_mlx90640RuntimePrepared = 0U;
+
+static uint8_t MLX90640_App_IsSchedulerRunning(void)
+{
+  return (osKernelGetState() == osKernelRunning) ? 1U : 0U;
+}
+
+static uint32_t MLX90640_App_GetTimeMs(void)
+{
+  return HAL_GetTick();
+}
+
+static void MLX90640_App_SleepMs(uint32_t delay_ms)
+{
+  if (delay_ms == 0U)
+  {
+    return;
+  }
+
+  if (MLX90640_App_IsSchedulerRunning() != 0U)
+  {
+    osDelay(delay_ms);
+    return;
+  }
+
+  HAL_Delay(delay_ms);
+}
+
+static uint8_t MLX90640_App_TryLock(uint32_t timeout_ms)
+{
+  uint32_t start_ms = MLX90640_App_GetTimeMs();
+
+  for (;;)
+  {
+    uint8_t lock_acquired = 0U;
+
+    taskENTER_CRITICAL();
+    if (g_mlx90640Busy == 0U)
+    {
+      g_mlx90640Busy = 1U;
+      lock_acquired = 1U;
+    }
+    taskEXIT_CRITICAL();
+
+    if (lock_acquired != 0U)
+    {
+      return 1U;
+    }
+
+    if ((MLX90640_App_GetTimeMs() - start_ms) >= timeout_ms)
+    {
+      return 0U;
+    }
+
+    MLX90640_App_SleepMs(1U);
+  }
+}
+
+static void MLX90640_App_Unlock(void)
+{
+  taskENTER_CRITICAL();
+  g_mlx90640Busy = 0U;
+  taskEXIT_CRITICAL();
+}
+
+static void MLX90640_App_SetSensorOffline(uint8_t sensor_id, int32_t error)
+{
+  if (sensor_id >= MLX90640_SENSOR_COUNT)
+  {
+    return;
+  }
+
+  g_sensorReady[sensor_id] = 0U;
+  g_MLX90640_Frame.LastError[sensor_id] = error;
+  g_MLX90640_Frame.ValidMask &= (uint8_t)(~(1U << sensor_id));
+}
+
+static void MLX90640_App_PrepareRuntime(void)
+{
+  if (g_mlx90640RuntimePrepared != 0U)
+  {
+    return;
+  }
+
+  MLX90640_SetExtractScratch(g_runtime.tempMap);
+  (void)MLX90640_I2CInit();
+  g_mlx90640RuntimePrepared = 1U;
+}
+
+static void MLX90640_App_LogRecoverStatus(uint8_t sensor_id, int status)
+{
+  (void)snprintf(g_logLine, sizeof(g_logLine),
+      "MLX90640 recover status, sensor=%u, channel=0x%02X, status=%d, hal=%d, err=0x%08lX\r\n",
+      (unsigned int)sensor_id,
+      (unsigned int)MLX90640_GetSensorChannel(sensor_id),
+      status,
+      (int)TCA9548A_GetLastHalStatus(),
+      (unsigned long)TCA9548A_GetLastErrorCode());
+  MLX90640_App_Log(g_logLine);
+}
 
 static int32_t MLX90640_App_TempToCentiC(float temp_c)
 {
@@ -34,7 +137,7 @@ static int32_t MLX90640_App_TempToCentiC(float temp_c)
   return (int32_t)(scaled_temp - 0.5f);
 }
 
-static void MLX90640_App_Log(const char *text)
+ void MLX90640_App_Log(const char *text)
 {
   if ((g_logCallback != NULL) && (text != NULL))
   {
@@ -124,14 +227,20 @@ static void MLX90640_App_UpdateRegionTemp(uint8_t sensor_id, const float *pixel_
 {
   float region_sum[MLX90640_REGION_COUNT] = {0.0f};
   uint16_t region_count[MLX90640_REGION_COUNT] = {0U};
+  const uint16_t rows_per_region = (uint16_t)(MLX90640_LINE_NUM / MLX90640_REGION_COUNT);
 
   for (uint16_t row = 0U; row < MLX90640_LINE_NUM; row++)
   {
+    uint8_t region_index = (uint8_t)(row / rows_per_region);
+
+    if (region_index >= MLX90640_REGION_COUNT)
+    {
+      region_index = (uint8_t)(MLX90640_REGION_COUNT - 1U);
+    }
+
     for (uint16_t col = 0U; col < MLX90640_COLUMN_NUM; col++)
     {
       uint16_t pixel_index = (uint16_t)(row * MLX90640_COLUMN_NUM + col);
-      uint8_t region_index = (uint8_t)((col * MLX90640_REGION_COUNT) / MLX90640_COLUMN_NUM);
-
       region_sum[region_index] += pixel_temp[pixel_index];
       region_count[region_index]++;
     }
@@ -160,20 +269,24 @@ int MLX90640_App_Init(void)
 {
   uint8_t initialized_count = 0U;
 
-  MLX90640_SetExtractScratch(g_runtime.tempMap);
-  (void)MLX90640_I2CInit();
+  if (MLX90640_App_TryLock(MLX90640_APP_LOCK_TIMEOUT_MS) == 0U)
+  {
+    return -MLX90640_I2C_WRITE_ERROR;
+  }
+
+  MLX90640_App_PrepareRuntime();
 
   for (uint8_t sensor_id = 0U; sensor_id < MLX90640_SENSOR_COUNT; sensor_id++)
   {
     int status = MLX90640_App_InitSensorOnChannel(sensor_id);
     if (status != MLX90640_NO_ERROR)
     {
-      g_sensorReady[sensor_id] = 0U;
-      g_MLX90640_Frame.LastError[sensor_id] = status;
+      MLX90640_App_SetSensorOffline(sensor_id, status);
       continue;
     }
 
     g_sensorReady[sensor_id] = 1U;
+    g_MLX90640_Frame.LastError[sensor_id] = 0;
     initialized_count++;
 
     (void)snprintf(g_logLine, sizeof(g_logLine),
@@ -185,11 +298,13 @@ int MLX90640_App_Init(void)
 
   if (initialized_count == 0U)
   {
-    MLX90640_App_Log("MLX90640 init failed\r\n");
-    return -MLX90640_I2C_WRITE_ERROR;
+    MLX90640_App_Log("MLX90640 init pending, all sensors offline\r\n");
+    MLX90640_App_Unlock();
+    return MLX90640_NO_ERROR;
   }
 
   MLX90640_App_Log("MLX90640 initialized\r\n");
+  MLX90640_App_Unlock();
   return MLX90640_NO_ERROR;
 }
 
@@ -205,11 +320,16 @@ int MLX90640_App_CaptureOnce(uint8_t sensor_id)
     return g_MLX90640_Frame.LastError[sensor_id];
   }
 
+  if (MLX90640_App_TryLock(MLX90640_APP_LOCK_TIMEOUT_MS) == 0U)
+  {
+    return -MLX90640_I2C_WRITE_ERROR;
+  }
+
   int status = MLX90640_App_LoadParametersOnChannel(sensor_id);
   if (status != MLX90640_NO_ERROR)
   {
-    g_sensorReady[sensor_id] = 0U;
-    g_MLX90640_Frame.LastError[sensor_id] = status;
+    MLX90640_App_SetSensorOffline(sensor_id, status);
+    MLX90640_App_Unlock();
     return status;
   }
 
@@ -225,7 +345,8 @@ int MLX90640_App_CaptureOnce(uint8_t sensor_id)
     {
       (void)snprintf(g_logLine, sizeof(g_logLine), "Frame read error: %d\r\n", status);
       MLX90640_App_Log(g_logLine);
-      g_MLX90640_Frame.LastError[sensor_id] = status;
+      MLX90640_App_SetSensorOffline(sensor_id, status);
+      MLX90640_App_Unlock();
       return status;
     }
 
@@ -243,7 +364,8 @@ int MLX90640_App_CaptureOnce(uint8_t sensor_id)
 
   if (subPageMask != 0x03U)
   {
-    g_MLX90640_Frame.LastError[sensor_id] = -MLX90640_FRAME_DATA_ERROR;
+    MLX90640_App_SetSensorOffline(sensor_id, -MLX90640_FRAME_DATA_ERROR);
+    MLX90640_App_Unlock();
     return -MLX90640_FRAME_DATA_ERROR;
   }
 
@@ -258,6 +380,50 @@ int MLX90640_App_CaptureOnce(uint8_t sensor_id)
   g_MLX90640_Frame.ActiveSensorId = sensor_id;
   g_MLX90640_Frame.ValidMask |= (uint8_t)(1U << sensor_id);
 
+  MLX90640_App_Unlock();
+  return MLX90640_NO_ERROR;
+}
+
+int MLX90640_App_ServiceHealth(void)
+{
+  if (MLX90640_App_TryLock(0U) == 0U)
+  {
+    return MLX90640_NO_ERROR;
+  }
+
+  MLX90640_App_PrepareRuntime();
+
+  for (uint8_t sensor_id = 0U; sensor_id < MLX90640_SENSOR_COUNT; sensor_id++)
+  {
+    int status;
+
+    if (g_sensorReady[sensor_id] != 0U)
+    {
+      continue;
+    }
+
+    status = MLX90640_App_InitSensorOnChannel(sensor_id);
+    if (status == MLX90640_NO_ERROR)
+    {
+      g_sensorReady[sensor_id] = 1U;
+      g_MLX90640_Frame.LastError[sensor_id] = 0;
+      (void)snprintf(g_logLine, sizeof(g_logLine),
+          "MLX90640 recover ok, sensor=%u, channel=0x%02X\r\n",
+          (unsigned int)sensor_id,
+          (unsigned int)MLX90640_GetSensorChannel(sensor_id));
+      MLX90640_App_Log(g_logLine);
+    }
+    else
+    {
+      MLX90640_App_SetSensorOffline(sensor_id, status);
+      MLX90640_App_LogRecoverStatus(sensor_id, status);
+    }
+
+    MLX90640_App_Unlock();
+    return status;
+  }
+
+  MLX90640_App_Unlock();
   return MLX90640_NO_ERROR;
 }
 

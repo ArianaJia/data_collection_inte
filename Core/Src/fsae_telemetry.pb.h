@@ -10,156 +10,220 @@
 #endif
 
 /* Enum definitions */
-typedef enum _fsae_AlarmSeverity {
-    fsae_AlarmSeverity_ALARM_SEVERITY_UNSPECIFIED = 0,
-    fsae_AlarmSeverity_ALARM_SEVERITY_INFO = 1,
-    fsae_AlarmSeverity_ALARM_SEVERITY_WARNING = 2,
-    fsae_AlarmSeverity_ALARM_SEVERITY_ERROR = 3,
-    fsae_AlarmSeverity_ALARM_SEVERITY_FATAL = 4
+typedef enum _fsae_AlarmSeverity { /* 告警等级 */
+    fsae_AlarmSeverity_ALARM_SEVERITY_UNSPECIFIED = 0, /* 未知等级 */
+    fsae_AlarmSeverity_ALARM_SEVERITY_INFO = 1, /* 提示 */
+    fsae_AlarmSeverity_ALARM_SEVERITY_WARNING = 2, /* 警告 */
+    fsae_AlarmSeverity_ALARM_SEVERITY_ERROR = 3, /* 错误 */
+    fsae_AlarmSeverity_ALARM_SEVERITY_FATAL = 4 /* 严重故障 */
 } fsae_AlarmSeverity;
 
-typedef enum _fsae_DrivingMode {
-    fsae_DrivingMode_DRIVING_MODE_UNSPECIFIED = 0,
-    fsae_DrivingMode_DRIVING_MODE_STANDBY = 1,
-    fsae_DrivingMode_DRIVING_MODE_READY = 2,
-    fsae_DrivingMode_DRIVING_MODE_DRIVE = 3,
-    fsae_DrivingMode_DRIVING_MODE_FAULT = 4
+typedef enum _fsae_DrivingMode { /* 车辆模式 */
+    fsae_DrivingMode_DRIVING_MODE_UNSPECIFIED = 0, /* 未知模式 */
+    fsae_DrivingMode_DRIVING_MODE_DEFAULT = 1, /* 默认模式 */
+    fsae_DrivingMode_DRIVING_MODE_STRAIGHT = 2, /* 直线 */
+    fsae_DrivingMode_DRIVING_MODE_AUTOCROSS = 3, /* 高速避障 */
+    fsae_DrivingMode_DRIVING_MODE_SKIDPAD = 4, /* 八字绕环 */
+    fsae_DrivingMode_DRIVING_MODE_ENDURANCE = 5 /* 耐久 */
 } fsae_DrivingMode;
 
-typedef enum _fsae_ImdState {
-    fsae_ImdState_IMD_STATE_UNSPECIFIED = 0,
-    fsae_ImdState_IMD_STATE_NORMAL = 1,
-    fsae_ImdState_IMD_STATE_WARNING = 2,
-    fsae_ImdState_IMD_STATE_FAULT = 3
-} fsae_ImdState;
-
-typedef enum _fsae_WorkState {
-    fsae_WorkState_WORK_STATE_UNSPECIFIED = 0,
-    fsae_WorkState_WORK_STATE_OFF = 1,
-    fsae_WorkState_WORK_STATE_PRECHARGE = 2,
-    fsae_WorkState_WORK_STATE_ON = 3,
-    fsae_WorkState_WORK_STATE_FAULT = 4
-} fsae_WorkState;
-
-typedef enum _fsae_VcuStatus {
-    fsae_VcuStatus_VCU_STATUS_UNSPECIFIED = 0,
-    fsae_VcuStatus_VCU_STATUS_OFF = 1,
-    fsae_VcuStatus_VCU_STATUS_PRECHARGE = 2,
-    fsae_VcuStatus_VCU_STATUS_HV_ENABLED = 3,
-    fsae_VcuStatus_VCU_STATUS_FAULT = 4
+typedef enum _fsae_VcuStatus { /* VCU 状态 */
+    fsae_VcuStatus_VCU_STATUS_UNSPECIFIED = 0, /* 未知状态 */
+    fsae_VcuStatus_VCU_STATUS_OFF = 1, /* 关闭 */
+    fsae_VcuStatus_VCU_STATUS_PRECHARGE = 2, /* 预充中 */
+    fsae_VcuStatus_VCU_STATUS_HV_ENABLED = 3, /* 高压已建立 */
+    fsae_VcuStatus_VCU_STATUS_FAULT = 4 /* 故障 */
 } fsae_VcuStatus;
 
-typedef enum _fsae_MotorPosition {
-    fsae_MotorPosition_MOTOR_POSITION_UNSPECIFIED = 0,
-    fsae_MotorPosition_MOTOR_POSITION_FRONT_LEFT = 1,
-    fsae_MotorPosition_MOTOR_POSITION_FRONT_RIGHT = 2,
-    fsae_MotorPosition_MOTOR_POSITION_REAR_LEFT = 3,
-    fsae_MotorPosition_MOTOR_POSITION_REAR_RIGHT = 4
+typedef enum _fsae_MotorPosition { /* 电机/轮位位置 */
+    fsae_MotorPosition_MOTOR_POSITION_UNSPECIFIED = 0, /* 未知位置 */
+    fsae_MotorPosition_MOTOR_POSITION_FRONT_LEFT = 1, /* 左前 */
+    fsae_MotorPosition_MOTOR_POSITION_FRONT_RIGHT = 2, /* 右前 */
+    fsae_MotorPosition_MOTOR_POSITION_REAR_LEFT = 3, /* 左后 */
+    fsae_MotorPosition_MOTOR_POSITION_REAR_RIGHT = 4 /* 右后 */
 } fsae_MotorPosition;
 
 /* Struct definitions */
-typedef struct _fsae_PacketHeader {
-    uint32_t timestamp_ms;
-    uint32_t seq;
-    uint32_t source_id;
+typedef struct _fsae_PacketHeader { /* 通用报文头 */
+    uint32_t timestamp_ms; /* 时间戳，单位 ms */
+    uint32_t seq; /* 报文序列号 */
+    uint32_t source_id; /* 数据源设备 ID */
 } fsae_PacketHeader;
 
-typedef struct _fsae_Alarm {
-    uint32_t alarm_id;
-    fsae_AlarmSeverity severity;
-    char message[64];
+typedef struct _fsae_Alarm { /* 告警信息 */
+    uint32_t alarm_id; /* 告警 ID */
+    fsae_AlarmSeverity severity; /* 告警等级 */
+    char message[64]; /* 告警内容 */
 } fsae_Alarm;
 
-typedef struct _fsae_FastTelemetry {
-    int32_t hv_voltage_dv;
-    int32_t hv_current_ma;
-    int32_t battery_temp_max_c;
-    fsae_DrivingMode driving_mode;
-    uint32_t speed_kmh;
+typedef struct _fsae_FastTelemetry { /* 快速遥测摘要 */
+    int32_t hv_voltage_dv; /* 高压电压，单位 0.1V */
+    int32_t hv_current_ma; /* 总电流，单位 mA */
+    int32_t battery_temp_max_dc; /* 电池最高温度，单位 0.1 摄氏度 */
+    fsae_DrivingMode driving_mode; /* 当前车辆模式 */
+    uint32_t speed_kmh; /* 车速，单位 km/h */
 } fsae_FastTelemetry;
 
-typedef struct _fsae_BmsSummary {
-    uint32_t total_voltage;
-    int32_t total_current;
-    uint32_t soc_pct;
-    int32_t max_temp_c;
-    int32_t min_temp_c;
-    uint32_t max_cell_mv;
-    uint32_t min_cell_mv;
-    fsae_ImdState imd_state;
-    fsae_WorkState work_state;
-} fsae_BmsSummary;
+typedef struct _fsae_IvtTelemetry { /* IVT-S 电流/电压/能量计 */
+    int32_t current_ma; /* IVT-S Result_I，单位 mA */
+    int32_t voltage_u1_mv; /* IVT-S Result_U1，单位 mV */
+    int32_t energy_wh; /* IVT-S Result_Wh，单位 Wh */
+    uint32_t current_state; /* IVT-S Result_I 状态位 */
+    uint32_t voltage_u1_state; /* IVT-S Result_U1 状态位 */
+    uint32_t energy_state; /* IVT-S Result_Wh 状态位 */
+    int32_t power_w; /* IVT-S U1 * I，单位 W */
+} fsae_IvtTelemetry;
+
+typedef struct _fsae_EnergyMeterTelemetry { /* CANB 上当前生效的能量计 */
+    uint32_t source; /* 0 unknown, 1 IVT-S, 2 FS Datalogger */
+    int32_t current_ma; /* 电流，单位 mA */
+    int32_t voltage_mv; /* 电压，单位 mV */
+    int32_t energy_wh; /* 能量，单位 Wh；FS Datalogger 不提供 */
+    int32_t power_w; /* 电压 * 电流，单位 W */
+    uint32_t status; /* 原始状态位：IVT-S Result_state 或 FS status bits */
+    uint32_t msg_counter; /* FS Datalogger MsgCnt；IVT-S 不提供 */
+} fsae_EnergyMeterTelemetry;
+
+typedef struct _fsae_MotionTelemetry { /* CANB GPS/IMU 运动状态 */
+    uint32_t gps_speed_kmh; /* GPS GroundSpeed，单位 km/h */
+    float accel_x_g; /* IMU X 轴加速度，单位 g */
+    float accel_y_g; /* IMU Y 轴加速度，单位 g */
+    float accel_z_g; /* IMU Z 轴加速度，单位 g */
+    float yaw_rate_dps; /* IMU Z 轴角速度，单位 deg/s */
+    float yaw_deg; /* IMU 横摆角，单位 deg */
+} fsae_MotionTelemetry;
+
+typedef struct _fsae_ThermalRawChunk { /* 热成像原始数据分片 */
+    fsae_MotorPosition position; /* 对应电机/轮位 */
+    uint32_t frame_id; /* 帧编号 */
+    uint32_t chunk_index; /* 当前分片索引 */
+    uint32_t chunk_count; /* 总分片数量 */
+    int32_t pixel_temp_centi_c; /* 当前分片像素温度，单位 0.01 摄氏度 */
+} fsae_ThermalRawChunk;
+
+typedef struct _fsae_ThermalSensorSummary { /* 单个轮位的红外温度摘要 */
+    fsae_MotorPosition position; /* 对应电机/轮位 */
+    int32_t min_temp_centi_c; /* 最低温度，单位 0.01 摄氏度 */
+    int32_t max_temp_centi_c; /* 最高温度，单位 0.01 摄氏度 */
+    int32_t avg_temp_centi_c; /* 平均温度，单位 0.01 摄氏度 */
+    pb_size_t chunks_count;
+    fsae_ThermalRawChunk chunks[4]; /* 原始温度分片列表 */
+} fsae_ThermalSensorSummary;
+
+typedef struct _fsae_ThermalSummary { /* 热成像摘要 */
+    pb_size_t sensors_count;
+    fsae_ThermalSensorSummary sensors[4]; /* 四个轮位的红外温度摘要 */
+} fsae_ThermalSummary;
+
+typedef struct _fsae_MotorState { /* 单个电机状态 */
+    fsae_MotorPosition position; /* 电机位置 */
+    int32_t rpm; /* 电机转速 */
+    int32_t torque_nm; /* AMK 实际扭矩原始值，单位 0.1%Mn；显示 Nm 时乘 9.8 / 1000 */
+    int32_t power_w; /* 电机功率，单位 W */
+    int32_t motor_temp_dc; /* 电机温度，单位 0.1 摄氏度 */
+    int32_t inverter_temp_dc; /* 电机控制器温度，单位 0.1 摄氏度 */
+    int32_t motor_error; /* 兼容旧表的 AMK 诊断码有符号镜像 */
+    int32_t igbt_temp_dc; /* IGBT 温度，单位 0.1 摄氏度 */
+    uint32_t diagnostic_number; /* AMK 诊断码 */
+    bool has_logic_state;
+    uint32_t logic_state; /* CANB Debug9 LogicState，原始值 0..15；0 也必须显式上报 */
+} fsae_MotorState;
+
+typedef struct _fsae_VehicleState { /* 整车状态 */
+    uint32_t speed_kmh; /* 车速，单位 km/h */
+    fsae_DrivingMode driving_mode; /* 当前车辆模式 */
+    uint32_t throttle_position; /* 油门开度 */
+    uint32_t brake_position; /* 刹车开度 */
+    fsae_VcuStatus vcu_status; /* VCU 状态 */
+    pb_size_t motors_count;
+    fsae_MotorState motors[4]; /* 四个电机状态列表，按 position 区分 */
+} fsae_VehicleState;
 
 typedef struct _fsae_BatteryModule {
     uint32_t module_id;
-    pb_size_t cell_mv_count;
-    uint32_t cell_mv[23];
-    pb_size_t temp_dc_count;
-    int32_t temp_dc[8];
+    /* 23 节电芯电压 */
+    uint32_t v01;
+    uint32_t v02;
+    uint32_t v03;
+    uint32_t v04;
+    uint32_t v05;
+    uint32_t v06;
+    uint32_t v07;
+    uint32_t v08;
+    uint32_t v09;
+    uint32_t v10;
+    uint32_t v11;
+    uint32_t v12;
+    uint32_t v13;
+    uint32_t v14;
+    uint32_t v15;
+    uint32_t v16;
+    uint32_t v17;
+    uint32_t v18;
+    uint32_t v19;
+    uint32_t v20;
+    uint32_t v21;
+    uint32_t v22;
+    uint32_t v23;
+    /* 8 个温度 */
+    int32_t t1;
+    int32_t t2;
+    int32_t t3;
+    int32_t t4;
+    int32_t t5;
+    int32_t t6;
+    int32_t t7;
+    int32_t t8;
 } fsae_BatteryModule;
 
-typedef struct _fsae_BmsDetail {
+typedef struct _fsae_TelemetryFrame {
+    /* --- 0. STM32 legacy fields, kept for CAN2RS485 firmware compatibility --- */
+    uint32_t timestamp_ms;
+    uint32_t frame_id;
+    float apps_position;
+    float brake_pressure;
+    float steering_angle;
+    float hv_voltage;
+    float hv_current;
+    float battery_temp_max;
+    uint32_t fault_code;
+    int32_t motor_rpm;
+    float motor_temp;
+    float inverter_temp;
+    uint32_t ready_to_drive;
+    uint32_t vcu_status;
+    /* --- 1. BMS 详细数据（保持现网结构，兼容现有 modules 拆表） --- */
     pb_size_t modules_count;
     fsae_BatteryModule modules[6];
-} fsae_BmsDetail;
-
-typedef struct _fsae_ThermalRawChunk {
-    fsae_MotorPosition position;
-    uint32_t frame_id;
-    uint32_t chunk_index;
-    uint32_t chunk_count;
-    int32_t pixel_temp_dc;
-} fsae_ThermalRawChunk;
-
-typedef struct _fsae_ThermalSensorSummary {
-    fsae_MotorPosition position;
-    int32_t min_temp_dc;
-    int32_t max_temp_dc;
-    int32_t avg_temp_dc;
-    pb_size_t chunks_count;
-    fsae_ThermalRawChunk chunks[4];
-} fsae_ThermalSensorSummary;
-
-typedef struct _fsae_ThermalSummary {
-    pb_size_t sensors_count;
-    fsae_ThermalSensorSummary sensors[4];
-} fsae_ThermalSummary;
-
-typedef struct _fsae_MotorState {
-    fsae_MotorPosition position;
-    int32_t rpm;
-    int32_t torque_nm;
-    int32_t power_w;
-    int32_t motor_temp_dc;
-    int32_t inverter_temp_dc;
-    int32_t motor_error;
-} fsae_MotorState;
-
-typedef struct _fsae_VehicleState {
-    uint32_t speed_kmh;
-    fsae_DrivingMode driving_mode;
-    uint32_t throttle_position;
-    uint32_t brake_position;
-    bool ready_to_drive;
-    fsae_VcuStatus vcu_status;
-    pb_size_t motors_count;
-    fsae_MotorState motors[4];
-} fsae_VehicleState;
-
-typedef struct _fsae_TelemetryFrame {
-    bool has_packet_header;
-    fsae_PacketHeader packet_header;
+    /* --- 2. 电池包摘要（保持现网结构） --- */
+    uint32_t battery_soc;
+    uint32_t max_cell_voltage;
+    uint32_t min_cell_voltage;
+    uint32_t max_cell_voltage_no;
+    uint32_t min_cell_voltage_no;
+    int32_t max_temp;
+    int32_t min_temp;
+    uint32_t max_temp_no;
+    uint32_t min_temp_no;
+    /* --- 3. 简化故障字 --- */
+    uint32_t battery_fault_code;
+    /* --- 4. 追加嵌套字段（保持单 Topic，统一挂在 TelemetryFrame 顶层） --- */
+    bool has_header;
+    fsae_PacketHeader header;
     bool has_fast_telemetry;
     fsae_FastTelemetry fast_telemetry;
     bool has_vehicle_state;
     fsae_VehicleState vehicle_state;
-    bool has_bms_summary;
-    fsae_BmsSummary bms_summary;
-    bool has_bms_detail;
-    fsae_BmsDetail bms_detail;
     bool has_thermal_summary;
     fsae_ThermalSummary thermal_summary;
-    pb_callback_t alarm;
+    pb_size_t alarms_count;
+    fsae_Alarm alarms[8];
+    bool has_ivt_telemetry;
+    fsae_IvtTelemetry ivt_telemetry;
+    bool has_energy_meter;
+    fsae_EnergyMeterTelemetry energy_meter;
+    bool has_motion;
+    fsae_MotionTelemetry motion;
 } fsae_TelemetryFrame;
 
 
@@ -173,16 +237,8 @@ extern "C" {
 #define _fsae_AlarmSeverity_ARRAYSIZE ((fsae_AlarmSeverity)(fsae_AlarmSeverity_ALARM_SEVERITY_FATAL+1))
 
 #define _fsae_DrivingMode_MIN fsae_DrivingMode_DRIVING_MODE_UNSPECIFIED
-#define _fsae_DrivingMode_MAX fsae_DrivingMode_DRIVING_MODE_FAULT
-#define _fsae_DrivingMode_ARRAYSIZE ((fsae_DrivingMode)(fsae_DrivingMode_DRIVING_MODE_FAULT+1))
-
-#define _fsae_ImdState_MIN fsae_ImdState_IMD_STATE_UNSPECIFIED
-#define _fsae_ImdState_MAX fsae_ImdState_IMD_STATE_FAULT
-#define _fsae_ImdState_ARRAYSIZE ((fsae_ImdState)(fsae_ImdState_IMD_STATE_FAULT+1))
-
-#define _fsae_WorkState_MIN fsae_WorkState_WORK_STATE_UNSPECIFIED
-#define _fsae_WorkState_MAX fsae_WorkState_WORK_STATE_FAULT
-#define _fsae_WorkState_ARRAYSIZE ((fsae_WorkState)(fsae_WorkState_WORK_STATE_FAULT+1))
+#define _fsae_DrivingMode_MAX fsae_DrivingMode_DRIVING_MODE_ENDURANCE
+#define _fsae_DrivingMode_ARRAYSIZE ((fsae_DrivingMode)(fsae_DrivingMode_DRIVING_MODE_ENDURANCE+1))
 
 #define _fsae_VcuStatus_MIN fsae_VcuStatus_VCU_STATUS_UNSPECIFIED
 #define _fsae_VcuStatus_MAX fsae_VcuStatus_VCU_STATUS_FAULT
@@ -197,8 +253,6 @@ extern "C" {
 
 #define fsae_FastTelemetry_driving_mode_ENUMTYPE fsae_DrivingMode
 
-#define fsae_BmsSummary_imd_state_ENUMTYPE fsae_ImdState
-#define fsae_BmsSummary_work_state_ENUMTYPE fsae_WorkState
 
 
 
@@ -214,31 +268,34 @@ extern "C" {
 
 
 
+
 /* Initializer values for message structs */
 #define fsae_PacketHeader_init_default           {0, 0, 0}
 #define fsae_Alarm_init_default                  {0, _fsae_AlarmSeverity_MIN, ""}
 #define fsae_FastTelemetry_init_default          {0, 0, 0, _fsae_DrivingMode_MIN, 0}
-#define fsae_BmsSummary_init_default             {0, 0, 0, 0, 0, 0, 0, _fsae_ImdState_MIN, _fsae_WorkState_MIN}
-#define fsae_BatteryModule_init_default          {0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {0, 0, 0, 0, 0, 0, 0, 0}}
-#define fsae_BmsDetail_init_default              {0, {fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default}}
+#define fsae_IvtTelemetry_init_default           {0, 0, 0, 0, 0, 0, 0}
+#define fsae_EnergyMeterTelemetry_init_default   {0, 0, 0, 0, 0, 0, 0}
+#define fsae_MotionTelemetry_init_default        {0, 0, 0, 0, 0, 0}
 #define fsae_ThermalRawChunk_init_default        {_fsae_MotorPosition_MIN, 0, 0, 0, 0}
 #define fsae_ThermalSensorSummary_init_default   {_fsae_MotorPosition_MIN, 0, 0, 0, 0, {fsae_ThermalRawChunk_init_default, fsae_ThermalRawChunk_init_default, fsae_ThermalRawChunk_init_default, fsae_ThermalRawChunk_init_default}}
 #define fsae_ThermalSummary_init_default         {0, {fsae_ThermalSensorSummary_init_default, fsae_ThermalSensorSummary_init_default, fsae_ThermalSensorSummary_init_default, fsae_ThermalSensorSummary_init_default}}
-#define fsae_MotorState_init_default             {_fsae_MotorPosition_MIN, 0, 0, 0, 0, 0, 0}
-#define fsae_VehicleState_init_default           {0, _fsae_DrivingMode_MIN, 0, 0, 0, _fsae_VcuStatus_MIN, 0, {fsae_MotorState_init_default, fsae_MotorState_init_default, fsae_MotorState_init_default, fsae_MotorState_init_default}}
-#define fsae_TelemetryFrame_init_default         {false, fsae_PacketHeader_init_default, false, fsae_FastTelemetry_init_default, false, fsae_VehicleState_init_default, false, fsae_BmsSummary_init_default, false, fsae_BmsDetail_init_default, false, fsae_ThermalSummary_init_default, {{NULL}, NULL}}
+#define fsae_MotorState_init_default             {_fsae_MotorPosition_MIN, 0, 0, 0, 0, 0, 0, 0, 0, false, 0}
+#define fsae_VehicleState_init_default           {0, _fsae_DrivingMode_MIN, 0, 0, _fsae_VcuStatus_MIN, 0, {fsae_MotorState_init_default, fsae_MotorState_init_default, fsae_MotorState_init_default, fsae_MotorState_init_default}}
+#define fsae_BatteryModule_init_default          {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+#define fsae_TelemetryFrame_init_default         {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, fsae_PacketHeader_init_default, false, fsae_FastTelemetry_init_default, false, fsae_VehicleState_init_default, false, fsae_ThermalSummary_init_default, 0, {fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default}, false, fsae_IvtTelemetry_init_default, false, fsae_EnergyMeterTelemetry_init_default, false, fsae_MotionTelemetry_init_default}
 #define fsae_PacketHeader_init_zero              {0, 0, 0}
 #define fsae_Alarm_init_zero                     {0, _fsae_AlarmSeverity_MIN, ""}
 #define fsae_FastTelemetry_init_zero             {0, 0, 0, _fsae_DrivingMode_MIN, 0}
-#define fsae_BmsSummary_init_zero                {0, 0, 0, 0, 0, 0, 0, _fsae_ImdState_MIN, _fsae_WorkState_MIN}
-#define fsae_BatteryModule_init_zero             {0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {0, 0, 0, 0, 0, 0, 0, 0}}
-#define fsae_BmsDetail_init_zero                 {0, {fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero}}
+#define fsae_IvtTelemetry_init_zero              {0, 0, 0, 0, 0, 0, 0}
+#define fsae_EnergyMeterTelemetry_init_zero      {0, 0, 0, 0, 0, 0, 0}
+#define fsae_MotionTelemetry_init_zero           {0, 0, 0, 0, 0, 0}
 #define fsae_ThermalRawChunk_init_zero           {_fsae_MotorPosition_MIN, 0, 0, 0, 0}
 #define fsae_ThermalSensorSummary_init_zero      {_fsae_MotorPosition_MIN, 0, 0, 0, 0, {fsae_ThermalRawChunk_init_zero, fsae_ThermalRawChunk_init_zero, fsae_ThermalRawChunk_init_zero, fsae_ThermalRawChunk_init_zero}}
 #define fsae_ThermalSummary_init_zero            {0, {fsae_ThermalSensorSummary_init_zero, fsae_ThermalSensorSummary_init_zero, fsae_ThermalSensorSummary_init_zero, fsae_ThermalSensorSummary_init_zero}}
-#define fsae_MotorState_init_zero                {_fsae_MotorPosition_MIN, 0, 0, 0, 0, 0, 0}
-#define fsae_VehicleState_init_zero              {0, _fsae_DrivingMode_MIN, 0, 0, 0, _fsae_VcuStatus_MIN, 0, {fsae_MotorState_init_zero, fsae_MotorState_init_zero, fsae_MotorState_init_zero, fsae_MotorState_init_zero}}
-#define fsae_TelemetryFrame_init_zero            {false, fsae_PacketHeader_init_zero, false, fsae_FastTelemetry_init_zero, false, fsae_VehicleState_init_zero, false, fsae_BmsSummary_init_zero, false, fsae_BmsDetail_init_zero, false, fsae_ThermalSummary_init_zero, {{NULL}, NULL}}
+#define fsae_MotorState_init_zero                {_fsae_MotorPosition_MIN, 0, 0, 0, 0, 0, 0, 0, 0, false, 0}
+#define fsae_VehicleState_init_zero              {0, _fsae_DrivingMode_MIN, 0, 0, _fsae_VcuStatus_MIN, 0, {fsae_MotorState_init_zero, fsae_MotorState_init_zero, fsae_MotorState_init_zero, fsae_MotorState_init_zero}}
+#define fsae_BatteryModule_init_zero             {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+#define fsae_TelemetryFrame_init_zero            {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, fsae_PacketHeader_init_zero, false, fsae_FastTelemetry_init_zero, false, fsae_VehicleState_init_zero, false, fsae_ThermalSummary_init_zero, 0, {fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero}, false, fsae_IvtTelemetry_init_zero, false, fsae_EnergyMeterTelemetry_init_zero, false, fsae_MotionTelemetry_init_zero}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define fsae_PacketHeader_timestamp_ms_tag       1
@@ -249,31 +306,38 @@ extern "C" {
 #define fsae_Alarm_message_tag                   3
 #define fsae_FastTelemetry_hv_voltage_dv_tag     1
 #define fsae_FastTelemetry_hv_current_ma_tag     2
-#define fsae_FastTelemetry_battery_temp_max_c_tag 3
+#define fsae_FastTelemetry_battery_temp_max_dc_tag 3
 #define fsae_FastTelemetry_driving_mode_tag      4
 #define fsae_FastTelemetry_speed_kmh_tag         5
-#define fsae_BmsSummary_total_voltage_tag        1
-#define fsae_BmsSummary_total_current_tag        2
-#define fsae_BmsSummary_soc_pct_tag              3
-#define fsae_BmsSummary_max_temp_c_tag           4
-#define fsae_BmsSummary_min_temp_c_tag           5
-#define fsae_BmsSummary_max_cell_mv_tag          6
-#define fsae_BmsSummary_min_cell_mv_tag          7
-#define fsae_BmsSummary_imd_state_tag            8
-#define fsae_BmsSummary_work_state_tag           9
-#define fsae_BatteryModule_module_id_tag         1
-#define fsae_BatteryModule_cell_mv_tag           2
-#define fsae_BatteryModule_temp_dc_tag           3
-#define fsae_BmsDetail_modules_tag               1
+#define fsae_IvtTelemetry_current_ma_tag         1
+#define fsae_IvtTelemetry_voltage_u1_mv_tag      2
+#define fsae_IvtTelemetry_energy_wh_tag          3
+#define fsae_IvtTelemetry_current_state_tag      4
+#define fsae_IvtTelemetry_voltage_u1_state_tag   5
+#define fsae_IvtTelemetry_energy_state_tag       6
+#define fsae_IvtTelemetry_power_w_tag            7
+#define fsae_EnergyMeterTelemetry_source_tag     1
+#define fsae_EnergyMeterTelemetry_current_ma_tag 2
+#define fsae_EnergyMeterTelemetry_voltage_mv_tag 3
+#define fsae_EnergyMeterTelemetry_energy_wh_tag  4
+#define fsae_EnergyMeterTelemetry_power_w_tag    5
+#define fsae_EnergyMeterTelemetry_status_tag     6
+#define fsae_EnergyMeterTelemetry_msg_counter_tag 7
+#define fsae_MotionTelemetry_gps_speed_kmh_tag   1
+#define fsae_MotionTelemetry_accel_x_g_tag       2
+#define fsae_MotionTelemetry_accel_y_g_tag       3
+#define fsae_MotionTelemetry_accel_z_g_tag       4
+#define fsae_MotionTelemetry_yaw_rate_dps_tag    5
+#define fsae_MotionTelemetry_yaw_deg_tag         6
 #define fsae_ThermalRawChunk_position_tag        1
 #define fsae_ThermalRawChunk_frame_id_tag        2
 #define fsae_ThermalRawChunk_chunk_index_tag     3
 #define fsae_ThermalRawChunk_chunk_count_tag     4
-#define fsae_ThermalRawChunk_pixel_temp_dc_tag   5
+#define fsae_ThermalRawChunk_pixel_temp_centi_c_tag 5
 #define fsae_ThermalSensorSummary_position_tag   1
-#define fsae_ThermalSensorSummary_min_temp_dc_tag 2
-#define fsae_ThermalSensorSummary_max_temp_dc_tag 3
-#define fsae_ThermalSensorSummary_avg_temp_dc_tag 4
+#define fsae_ThermalSensorSummary_min_temp_centi_c_tag 2
+#define fsae_ThermalSensorSummary_max_temp_centi_c_tag 3
+#define fsae_ThermalSensorSummary_avg_temp_centi_c_tag 4
 #define fsae_ThermalSensorSummary_chunks_tag     5
 #define fsae_ThermalSummary_sensors_tag          1
 #define fsae_MotorState_position_tag             1
@@ -283,20 +347,80 @@ extern "C" {
 #define fsae_MotorState_motor_temp_dc_tag        5
 #define fsae_MotorState_inverter_temp_dc_tag     6
 #define fsae_MotorState_motor_error_tag          7
+#define fsae_MotorState_igbt_temp_dc_tag         9
+#define fsae_MotorState_diagnostic_number_tag    10
+#define fsae_MotorState_logic_state_tag          11
 #define fsae_VehicleState_speed_kmh_tag          1
 #define fsae_VehicleState_driving_mode_tag       2
 #define fsae_VehicleState_throttle_position_tag  3
 #define fsae_VehicleState_brake_position_tag     4
-#define fsae_VehicleState_ready_to_drive_tag     5
 #define fsae_VehicleState_vcu_status_tag         6
 #define fsae_VehicleState_motors_tag             7
-#define fsae_TelemetryFrame_packet_header_tag    1
-#define fsae_TelemetryFrame_fast_telemetry_tag   2
-#define fsae_TelemetryFrame_vehicle_state_tag    3
-#define fsae_TelemetryFrame_bms_summary_tag      4
-#define fsae_TelemetryFrame_bms_detail_tag       5
-#define fsae_TelemetryFrame_thermal_summary_tag  6
-#define fsae_TelemetryFrame_alarm_tag            7
+#define fsae_BatteryModule_module_id_tag         1
+#define fsae_BatteryModule_v01_tag               2
+#define fsae_BatteryModule_v02_tag               3
+#define fsae_BatteryModule_v03_tag               4
+#define fsae_BatteryModule_v04_tag               5
+#define fsae_BatteryModule_v05_tag               6
+#define fsae_BatteryModule_v06_tag               7
+#define fsae_BatteryModule_v07_tag               8
+#define fsae_BatteryModule_v08_tag               9
+#define fsae_BatteryModule_v09_tag               10
+#define fsae_BatteryModule_v10_tag               11
+#define fsae_BatteryModule_v11_tag               12
+#define fsae_BatteryModule_v12_tag               13
+#define fsae_BatteryModule_v13_tag               14
+#define fsae_BatteryModule_v14_tag               15
+#define fsae_BatteryModule_v15_tag               16
+#define fsae_BatteryModule_v16_tag               17
+#define fsae_BatteryModule_v17_tag               18
+#define fsae_BatteryModule_v18_tag               19
+#define fsae_BatteryModule_v19_tag               20
+#define fsae_BatteryModule_v20_tag               21
+#define fsae_BatteryModule_v21_tag               22
+#define fsae_BatteryModule_v22_tag               23
+#define fsae_BatteryModule_v23_tag               24
+#define fsae_BatteryModule_t1_tag                30
+#define fsae_BatteryModule_t2_tag                31
+#define fsae_BatteryModule_t3_tag                32
+#define fsae_BatteryModule_t4_tag                33
+#define fsae_BatteryModule_t5_tag                34
+#define fsae_BatteryModule_t6_tag                35
+#define fsae_BatteryModule_t7_tag                36
+#define fsae_BatteryModule_t8_tag                37
+#define fsae_TelemetryFrame_timestamp_ms_tag     1
+#define fsae_TelemetryFrame_frame_id_tag         2
+#define fsae_TelemetryFrame_apps_position_tag    3
+#define fsae_TelemetryFrame_brake_pressure_tag   4
+#define fsae_TelemetryFrame_steering_angle_tag   5
+#define fsae_TelemetryFrame_hv_voltage_tag       6
+#define fsae_TelemetryFrame_hv_current_tag       7
+#define fsae_TelemetryFrame_battery_temp_max_tag 8
+#define fsae_TelemetryFrame_fault_code_tag       9
+#define fsae_TelemetryFrame_motor_rpm_tag        10
+#define fsae_TelemetryFrame_motor_temp_tag       11
+#define fsae_TelemetryFrame_inverter_temp_tag    12
+#define fsae_TelemetryFrame_ready_to_drive_tag   13
+#define fsae_TelemetryFrame_vcu_status_tag       14
+#define fsae_TelemetryFrame_modules_tag          15
+#define fsae_TelemetryFrame_battery_soc_tag      16
+#define fsae_TelemetryFrame_max_cell_voltage_tag 17
+#define fsae_TelemetryFrame_min_cell_voltage_tag 18
+#define fsae_TelemetryFrame_max_cell_voltage_no_tag 19
+#define fsae_TelemetryFrame_min_cell_voltage_no_tag 20
+#define fsae_TelemetryFrame_max_temp_tag         21
+#define fsae_TelemetryFrame_min_temp_tag         22
+#define fsae_TelemetryFrame_max_temp_no_tag      23
+#define fsae_TelemetryFrame_min_temp_no_tag      24
+#define fsae_TelemetryFrame_battery_fault_code_tag 25
+#define fsae_TelemetryFrame_header_tag           26
+#define fsae_TelemetryFrame_fast_telemetry_tag   27
+#define fsae_TelemetryFrame_vehicle_state_tag    28
+#define fsae_TelemetryFrame_thermal_summary_tag  29
+#define fsae_TelemetryFrame_alarms_tag           30
+#define fsae_TelemetryFrame_ivt_telemetry_tag    31
+#define fsae_TelemetryFrame_energy_meter_tag     32
+#define fsae_TelemetryFrame_motion_tag           33
 
 /* Struct field encoding specification for nanopb */
 #define fsae_PacketHeader_FIELDLIST(X, a) \
@@ -316,52 +440,58 @@ X(a, STATIC,   SINGULAR, STRING,   message,           3)
 #define fsae_FastTelemetry_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, SINT32,   hv_voltage_dv,     1) \
 X(a, STATIC,   SINGULAR, SINT32,   hv_current_ma,     2) \
-X(a, STATIC,   SINGULAR, SINT32,   battery_temp_max_c,   3) \
+X(a, STATIC,   SINGULAR, SINT32,   battery_temp_max_dc,   3) \
 X(a, STATIC,   SINGULAR, UENUM,    driving_mode,      4) \
 X(a, STATIC,   SINGULAR, UINT32,   speed_kmh,         5)
 #define fsae_FastTelemetry_CALLBACK NULL
 #define fsae_FastTelemetry_DEFAULT NULL
 
-#define fsae_BmsSummary_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, UINT32,   total_voltage,     1) \
-X(a, STATIC,   SINGULAR, SINT32,   total_current,     2) \
-X(a, STATIC,   SINGULAR, UINT32,   soc_pct,           3) \
-X(a, STATIC,   SINGULAR, SINT32,   max_temp_c,        4) \
-X(a, STATIC,   SINGULAR, SINT32,   min_temp_c,        5) \
-X(a, STATIC,   SINGULAR, UINT32,   max_cell_mv,       6) \
-X(a, STATIC,   SINGULAR, UINT32,   min_cell_mv,       7) \
-X(a, STATIC,   SINGULAR, UENUM,    imd_state,         8) \
-X(a, STATIC,   SINGULAR, UENUM,    work_state,        9)
-#define fsae_BmsSummary_CALLBACK NULL
-#define fsae_BmsSummary_DEFAULT NULL
+#define fsae_IvtTelemetry_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, SINT32,   current_ma,        1) \
+X(a, STATIC,   SINGULAR, SINT32,   voltage_u1_mv,     2) \
+X(a, STATIC,   SINGULAR, SINT32,   energy_wh,         3) \
+X(a, STATIC,   SINGULAR, UINT32,   current_state,     4) \
+X(a, STATIC,   SINGULAR, UINT32,   voltage_u1_state,   5) \
+X(a, STATIC,   SINGULAR, UINT32,   energy_state,      6) \
+X(a, STATIC,   SINGULAR, SINT32,   power_w,           7)
+#define fsae_IvtTelemetry_CALLBACK NULL
+#define fsae_IvtTelemetry_DEFAULT NULL
 
-#define fsae_BatteryModule_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, UINT32,   module_id,         1) \
-X(a, STATIC,   REPEATED, UINT32,   cell_mv,           2) \
-X(a, STATIC,   REPEATED, SINT32,   temp_dc,           3)
-#define fsae_BatteryModule_CALLBACK NULL
-#define fsae_BatteryModule_DEFAULT NULL
+#define fsae_EnergyMeterTelemetry_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, UINT32,   source,            1) \
+X(a, STATIC,   SINGULAR, SINT32,   current_ma,        2) \
+X(a, STATIC,   SINGULAR, SINT32,   voltage_mv,        3) \
+X(a, STATIC,   SINGULAR, SINT32,   energy_wh,         4) \
+X(a, STATIC,   SINGULAR, SINT32,   power_w,           5) \
+X(a, STATIC,   SINGULAR, UINT32,   status,            6) \
+X(a, STATIC,   SINGULAR, UINT32,   msg_counter,       7)
+#define fsae_EnergyMeterTelemetry_CALLBACK NULL
+#define fsae_EnergyMeterTelemetry_DEFAULT NULL
 
-#define fsae_BmsDetail_FIELDLIST(X, a) \
-X(a, STATIC,   REPEATED, MESSAGE,  modules,           1)
-#define fsae_BmsDetail_CALLBACK NULL
-#define fsae_BmsDetail_DEFAULT NULL
-#define fsae_BmsDetail_modules_MSGTYPE fsae_BatteryModule
+#define fsae_MotionTelemetry_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, UINT32,   gps_speed_kmh,     1) \
+X(a, STATIC,   SINGULAR, FLOAT,    accel_x_g,         2) \
+X(a, STATIC,   SINGULAR, FLOAT,    accel_y_g,         3) \
+X(a, STATIC,   SINGULAR, FLOAT,    accel_z_g,         4) \
+X(a, STATIC,   SINGULAR, FLOAT,    yaw_rate_dps,      5) \
+X(a, STATIC,   SINGULAR, FLOAT,    yaw_deg,           6)
+#define fsae_MotionTelemetry_CALLBACK NULL
+#define fsae_MotionTelemetry_DEFAULT NULL
 
 #define fsae_ThermalRawChunk_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UENUM,    position,          1) \
 X(a, STATIC,   SINGULAR, UINT32,   frame_id,          2) \
 X(a, STATIC,   SINGULAR, UINT32,   chunk_index,       3) \
 X(a, STATIC,   SINGULAR, UINT32,   chunk_count,       4) \
-X(a, STATIC,   SINGULAR, SINT32,   pixel_temp_dc,     5)
+X(a, STATIC,   SINGULAR, SINT32,   pixel_temp_centi_c,   5)
 #define fsae_ThermalRawChunk_CALLBACK NULL
 #define fsae_ThermalRawChunk_DEFAULT NULL
 
 #define fsae_ThermalSensorSummary_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UENUM,    position,          1) \
-X(a, STATIC,   SINGULAR, SINT32,   min_temp_dc,       2) \
-X(a, STATIC,   SINGULAR, SINT32,   max_temp_dc,       3) \
-X(a, STATIC,   SINGULAR, SINT32,   avg_temp_dc,       4) \
+X(a, STATIC,   SINGULAR, SINT32,   min_temp_centi_c,   2) \
+X(a, STATIC,   SINGULAR, SINT32,   max_temp_centi_c,   3) \
+X(a, STATIC,   SINGULAR, SINT32,   avg_temp_centi_c,   4) \
 X(a, STATIC,   REPEATED, MESSAGE,  chunks,            5)
 #define fsae_ThermalSensorSummary_CALLBACK NULL
 #define fsae_ThermalSensorSummary_DEFAULT NULL
@@ -380,7 +510,10 @@ X(a, STATIC,   SINGULAR, SINT32,   torque_nm,         3) \
 X(a, STATIC,   SINGULAR, SINT32,   power_w,           4) \
 X(a, STATIC,   SINGULAR, SINT32,   motor_temp_dc,     5) \
 X(a, STATIC,   SINGULAR, SINT32,   inverter_temp_dc,   6) \
-X(a, STATIC,   SINGULAR, SINT32,   motor_error,       7)
+X(a, STATIC,   SINGULAR, SINT32,   motor_error,       7) \
+X(a, STATIC,   SINGULAR, SINT32,   igbt_temp_dc,      9) \
+X(a, STATIC,   SINGULAR, UINT32,   diagnostic_number,  10) \
+X(a, STATIC,   OPTIONAL, UINT32,   logic_state,      11)
 #define fsae_MotorState_CALLBACK NULL
 #define fsae_MotorState_DEFAULT NULL
 
@@ -389,72 +522,138 @@ X(a, STATIC,   SINGULAR, UINT32,   speed_kmh,         1) \
 X(a, STATIC,   SINGULAR, UENUM,    driving_mode,      2) \
 X(a, STATIC,   SINGULAR, UINT32,   throttle_position,   3) \
 X(a, STATIC,   SINGULAR, UINT32,   brake_position,    4) \
-X(a, STATIC,   SINGULAR, BOOL,     ready_to_drive,    5) \
 X(a, STATIC,   SINGULAR, UENUM,    vcu_status,        6) \
 X(a, STATIC,   REPEATED, MESSAGE,  motors,            7)
 #define fsae_VehicleState_CALLBACK NULL
 #define fsae_VehicleState_DEFAULT NULL
 #define fsae_VehicleState_motors_MSGTYPE fsae_MotorState
 
+#define fsae_BatteryModule_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, UINT32,   module_id,         1) \
+X(a, STATIC,   SINGULAR, UINT32,   v01,               2) \
+X(a, STATIC,   SINGULAR, UINT32,   v02,               3) \
+X(a, STATIC,   SINGULAR, UINT32,   v03,               4) \
+X(a, STATIC,   SINGULAR, UINT32,   v04,               5) \
+X(a, STATIC,   SINGULAR, UINT32,   v05,               6) \
+X(a, STATIC,   SINGULAR, UINT32,   v06,               7) \
+X(a, STATIC,   SINGULAR, UINT32,   v07,               8) \
+X(a, STATIC,   SINGULAR, UINT32,   v08,               9) \
+X(a, STATIC,   SINGULAR, UINT32,   v09,              10) \
+X(a, STATIC,   SINGULAR, UINT32,   v10,              11) \
+X(a, STATIC,   SINGULAR, UINT32,   v11,              12) \
+X(a, STATIC,   SINGULAR, UINT32,   v12,              13) \
+X(a, STATIC,   SINGULAR, UINT32,   v13,              14) \
+X(a, STATIC,   SINGULAR, UINT32,   v14,              15) \
+X(a, STATIC,   SINGULAR, UINT32,   v15,              16) \
+X(a, STATIC,   SINGULAR, UINT32,   v16,              17) \
+X(a, STATIC,   SINGULAR, UINT32,   v17,              18) \
+X(a, STATIC,   SINGULAR, UINT32,   v18,              19) \
+X(a, STATIC,   SINGULAR, UINT32,   v19,              20) \
+X(a, STATIC,   SINGULAR, UINT32,   v20,              21) \
+X(a, STATIC,   SINGULAR, UINT32,   v21,              22) \
+X(a, STATIC,   SINGULAR, UINT32,   v22,              23) \
+X(a, STATIC,   SINGULAR, UINT32,   v23,              24) \
+X(a, STATIC,   SINGULAR, SINT32,   t1,               30) \
+X(a, STATIC,   SINGULAR, SINT32,   t2,               31) \
+X(a, STATIC,   SINGULAR, SINT32,   t3,               32) \
+X(a, STATIC,   SINGULAR, SINT32,   t4,               33) \
+X(a, STATIC,   SINGULAR, SINT32,   t5,               34) \
+X(a, STATIC,   SINGULAR, SINT32,   t6,               35) \
+X(a, STATIC,   SINGULAR, SINT32,   t7,               36) \
+X(a, STATIC,   SINGULAR, SINT32,   t8,               37)
+#define fsae_BatteryModule_CALLBACK NULL
+#define fsae_BatteryModule_DEFAULT NULL
+
 #define fsae_TelemetryFrame_FIELDLIST(X, a) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  packet_header,     1) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  fast_telemetry,    2) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  vehicle_state,     3) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  bms_summary,       4) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  bms_detail,        5) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  thermal_summary,   6) \
-X(a, CALLBACK, REPEATED, MESSAGE,  alarm,             7)
-#define fsae_TelemetryFrame_CALLBACK pb_default_field_callback
+X(a, STATIC,   SINGULAR, UINT32,   timestamp_ms,      1) \
+X(a, STATIC,   SINGULAR, UINT32,   frame_id,          2) \
+X(a, STATIC,   SINGULAR, FLOAT,    apps_position,     3) \
+X(a, STATIC,   SINGULAR, FLOAT,    brake_pressure,    4) \
+X(a, STATIC,   SINGULAR, FLOAT,    steering_angle,    5) \
+X(a, STATIC,   SINGULAR, FLOAT,    hv_voltage,        6) \
+X(a, STATIC,   SINGULAR, FLOAT,    hv_current,        7) \
+X(a, STATIC,   SINGULAR, FLOAT,    battery_temp_max,   8) \
+X(a, STATIC,   SINGULAR, UINT32,   fault_code,        9) \
+X(a, STATIC,   SINGULAR, INT32,    motor_rpm,        10) \
+X(a, STATIC,   SINGULAR, FLOAT,    motor_temp,       11) \
+X(a, STATIC,   SINGULAR, FLOAT,    inverter_temp,    12) \
+X(a, STATIC,   SINGULAR, UINT32,   ready_to_drive,   13) \
+X(a, STATIC,   SINGULAR, UINT32,   vcu_status,       14) \
+X(a, STATIC,   REPEATED, MESSAGE,  modules,          15) \
+X(a, STATIC,   SINGULAR, UINT32,   battery_soc,      16) \
+X(a, STATIC,   SINGULAR, UINT32,   max_cell_voltage,  17) \
+X(a, STATIC,   SINGULAR, UINT32,   min_cell_voltage,  18) \
+X(a, STATIC,   SINGULAR, UINT32,   max_cell_voltage_no,  19) \
+X(a, STATIC,   SINGULAR, UINT32,   min_cell_voltage_no,  20) \
+X(a, STATIC,   SINGULAR, SINT32,   max_temp,         21) \
+X(a, STATIC,   SINGULAR, SINT32,   min_temp,         22) \
+X(a, STATIC,   SINGULAR, UINT32,   max_temp_no,      23) \
+X(a, STATIC,   SINGULAR, UINT32,   min_temp_no,      24) \
+X(a, STATIC,   SINGULAR, UINT32,   battery_fault_code,  25) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  header,           26) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  fast_telemetry,   27) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  vehicle_state,    28) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  thermal_summary,  29) \
+X(a, STATIC,   REPEATED, MESSAGE,  alarms,           30) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  ivt_telemetry,    31) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  energy_meter,     32) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  motion,           33)
+#define fsae_TelemetryFrame_CALLBACK NULL
 #define fsae_TelemetryFrame_DEFAULT NULL
-#define fsae_TelemetryFrame_packet_header_MSGTYPE fsae_PacketHeader
+#define fsae_TelemetryFrame_modules_MSGTYPE fsae_BatteryModule
+#define fsae_TelemetryFrame_header_MSGTYPE fsae_PacketHeader
 #define fsae_TelemetryFrame_fast_telemetry_MSGTYPE fsae_FastTelemetry
 #define fsae_TelemetryFrame_vehicle_state_MSGTYPE fsae_VehicleState
-#define fsae_TelemetryFrame_bms_summary_MSGTYPE fsae_BmsSummary
-#define fsae_TelemetryFrame_bms_detail_MSGTYPE fsae_BmsDetail
 #define fsae_TelemetryFrame_thermal_summary_MSGTYPE fsae_ThermalSummary
-#define fsae_TelemetryFrame_alarm_MSGTYPE fsae_Alarm
+#define fsae_TelemetryFrame_alarms_MSGTYPE fsae_Alarm
+#define fsae_TelemetryFrame_ivt_telemetry_MSGTYPE fsae_IvtTelemetry
+#define fsae_TelemetryFrame_energy_meter_MSGTYPE fsae_EnergyMeterTelemetry
+#define fsae_TelemetryFrame_motion_MSGTYPE fsae_MotionTelemetry
 
 extern const pb_msgdesc_t fsae_PacketHeader_msg;
 extern const pb_msgdesc_t fsae_Alarm_msg;
 extern const pb_msgdesc_t fsae_FastTelemetry_msg;
-extern const pb_msgdesc_t fsae_BmsSummary_msg;
-extern const pb_msgdesc_t fsae_BatteryModule_msg;
-extern const pb_msgdesc_t fsae_BmsDetail_msg;
+extern const pb_msgdesc_t fsae_IvtTelemetry_msg;
+extern const pb_msgdesc_t fsae_EnergyMeterTelemetry_msg;
+extern const pb_msgdesc_t fsae_MotionTelemetry_msg;
 extern const pb_msgdesc_t fsae_ThermalRawChunk_msg;
 extern const pb_msgdesc_t fsae_ThermalSensorSummary_msg;
 extern const pb_msgdesc_t fsae_ThermalSummary_msg;
 extern const pb_msgdesc_t fsae_MotorState_msg;
 extern const pb_msgdesc_t fsae_VehicleState_msg;
+extern const pb_msgdesc_t fsae_BatteryModule_msg;
 extern const pb_msgdesc_t fsae_TelemetryFrame_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
 #define fsae_PacketHeader_fields &fsae_PacketHeader_msg
 #define fsae_Alarm_fields &fsae_Alarm_msg
 #define fsae_FastTelemetry_fields &fsae_FastTelemetry_msg
-#define fsae_BmsSummary_fields &fsae_BmsSummary_msg
-#define fsae_BatteryModule_fields &fsae_BatteryModule_msg
-#define fsae_BmsDetail_fields &fsae_BmsDetail_msg
+#define fsae_IvtTelemetry_fields &fsae_IvtTelemetry_msg
+#define fsae_EnergyMeterTelemetry_fields &fsae_EnergyMeterTelemetry_msg
+#define fsae_MotionTelemetry_fields &fsae_MotionTelemetry_msg
 #define fsae_ThermalRawChunk_fields &fsae_ThermalRawChunk_msg
 #define fsae_ThermalSensorSummary_fields &fsae_ThermalSensorSummary_msg
 #define fsae_ThermalSummary_fields &fsae_ThermalSummary_msg
 #define fsae_MotorState_fields &fsae_MotorState_msg
 #define fsae_VehicleState_fields &fsae_VehicleState_msg
+#define fsae_BatteryModule_fields &fsae_BatteryModule_msg
 #define fsae_TelemetryFrame_fields &fsae_TelemetryFrame_msg
 
 /* Maximum encoded size of messages (where known) */
-/* fsae_TelemetryFrame_size depends on runtime parameters */
-#define FSAE_FSAE_TELEMETRY_PB_H_MAX_SIZE        fsae_BmsDetail_size
+#define FSAE_FSAE_TELEMETRY_PB_H_MAX_SIZE        fsae_TelemetryFrame_size
 #define fsae_Alarm_size                          73
-#define fsae_BatteryModule_size                  192
-#define fsae_BmsDetail_size                      1170
-#define fsae_BmsSummary_size                     46
+#define fsae_BatteryModule_size                  209
+#define fsae_EnergyMeterTelemetry_size           42
 #define fsae_FastTelemetry_size                  26
-#define fsae_MotorState_size                     38
+#define fsae_IvtTelemetry_size                   42
+#define fsae_MotionTelemetry_size                31
+#define fsae_MotorState_size                     56
 #define fsae_PacketHeader_size                   18
+#define fsae_TelemetryFrame_size                 3007
 #define fsae_ThermalRawChunk_size                26
 #define fsae_ThermalSensorSummary_size           132
 #define fsae_ThermalSummary_size                 540
-#define fsae_VehicleState_size                   184
+#define fsae_VehicleState_size                   254
 
 #ifdef __cplusplus
 } /* extern "C" */
