@@ -1,8 +1,5 @@
-/*
- * mcp2518fd.c
- *
- *  Created on: Jul 6, 2026
- *      Author: ArianaJia
+/* MCP2518FD support code wraps register access, reset, DMA transfers and
+ * receive/transmit helpers so the higher layers only see a ready-to-use bus.
  */
 
 #include "mcp2518fd.h"
@@ -45,6 +42,7 @@ static MCP2518FD_SpiDmaState_t g_mcp2518fdSpiDmaStates[2];
 
 HAL_StatusTypeDef MCP2518FD_Init(MCP2518FD_Handle_t *handle, SPI_HandleTypeDef *hspi, GPIO_TypeDef *cs_port, uint16_t cs_pin)
 {
+  /* Bring the external CAN controller into configuration mode and prepare RAM. */
   uint32_t value;
 
   if ((handle == NULL) || (hspi == NULL) || (cs_port == NULL))
@@ -138,6 +136,7 @@ HAL_StatusTypeDef MCP2518FD_Init(MCP2518FD_Handle_t *handle, SPI_HandleTypeDef *
 
 uint8_t MCP2518FD_IsReady(const MCP2518FD_Handle_t *handle)
 {
+  /* Expose a simple readiness check for the polling tasks. */
   if (handle == NULL)
   {
     return 0U;
@@ -148,6 +147,7 @@ uint8_t MCP2518FD_IsReady(const MCP2518FD_Handle_t *handle)
 
 HAL_StatusTypeDef MCP2518FD_PollReceive(MCP2518FD_Handle_t *handle, MCP2518FD_StdFrame_t *frame, uint8_t *received)
 {
+  /* Read one RX object from the FIFO and convert it into a compact frame. */
   uint32_t status;
   uint32_t user_address;
   uint32_t id_word;
@@ -223,6 +223,7 @@ HAL_StatusTypeDef MCP2518FD_PollReceive(MCP2518FD_Handle_t *handle, MCP2518FD_St
 
 HAL_StatusTypeDef MCP2518FD_TransmitStd(MCP2518FD_Handle_t *handle, const MCP2518FD_StdFrame_t *frame)
 {
+  /* Serialize a standard CAN frame into the TX FIFO object format. */
   uint32_t status;
   uint32_t user_address;
   uint8_t object[MCP2518FD_OBJECT_SIZE];
@@ -273,6 +274,7 @@ HAL_StatusTypeDef MCP2518FD_TransmitStd(MCP2518FD_Handle_t *handle, const MCP251
 
 static HAL_StatusTypeDef MCP2518FD_Reset(MCP2518FD_Handle_t *handle)
 {
+  /* Issue the chip reset SPI command and wait for the transfer to finish. */
   uint16_t header = MCP2518FD_CommandHeader(MCP2518FD_CMD_RESET, 0x000U);
   uint8_t tx[2];
   uint8_t rx[2] = {0};
@@ -290,6 +292,7 @@ static HAL_StatusTypeDef MCP2518FD_Reset(MCP2518FD_Handle_t *handle)
 
 static HAL_StatusTypeDef MCP2518FD_Read(MCP2518FD_Handle_t *handle, uint16_t address, uint8_t *data, uint16_t length)
 {
+  /* Read a register block using the SPI command header plus DMA transfer. */
   uint16_t header = MCP2518FD_CommandHeader(MCP2518FD_CMD_READ, address);
   uint8_t tx_buffer[MCP2518FD_SPI_TRANSFER_BUFFER_SIZE] = {0};
   uint8_t rx_buffer[MCP2518FD_SPI_TRANSFER_BUFFER_SIZE] = {0};
@@ -318,6 +321,7 @@ static HAL_StatusTypeDef MCP2518FD_Read(MCP2518FD_Handle_t *handle, uint16_t add
 
 static HAL_StatusTypeDef MCP2518FD_Write(MCP2518FD_Handle_t *handle, uint16_t address, const uint8_t *data, uint16_t length)
 {
+  /* Write a register block using the SPI command header plus DMA transfer. */
   uint16_t header = MCP2518FD_CommandHeader(MCP2518FD_CMD_WRITE, address);
   uint8_t tx_buffer[MCP2518FD_SPI_TRANSFER_BUFFER_SIZE] = {0};
   uint8_t rx_buffer[MCP2518FD_SPI_TRANSFER_BUFFER_SIZE] = {0};
@@ -342,6 +346,7 @@ static HAL_StatusTypeDef MCP2518FD_Write(MCP2518FD_Handle_t *handle, uint16_t ad
 
 static HAL_StatusTypeDef MCP2518FD_ReadRegister(MCP2518FD_Handle_t *handle, uint16_t address, uint32_t *value)
 {
+  /* Register helpers keep the caller insulated from raw byte order handling. */
   uint8_t data[4];
 
   if (value == NULL)
@@ -360,6 +365,7 @@ static HAL_StatusTypeDef MCP2518FD_ReadRegister(MCP2518FD_Handle_t *handle, uint
 
 static HAL_StatusTypeDef MCP2518FD_WriteRegister(MCP2518FD_Handle_t *handle, uint16_t address, uint32_t value)
 {
+  /* Convert a 32-bit register value into the controller's wire format. */
   uint8_t data[4];
 
   MCP2518FD_StoreLe32(data, value);
@@ -368,6 +374,7 @@ static HAL_StatusTypeDef MCP2518FD_WriteRegister(MCP2518FD_Handle_t *handle, uin
 
 static HAL_StatusTypeDef MCP2518FD_ModifyRegister(MCP2518FD_Handle_t *handle, uint16_t address, uint32_t clear_mask, uint32_t set_mask)
 {
+  /* Read-modify-write keeps bitfield updates localized and deterministic. */
   uint32_t value;
 
   if (MCP2518FD_ReadRegister(handle, address, &value) != HAL_OK)
@@ -383,6 +390,7 @@ static HAL_StatusTypeDef MCP2518FD_ModifyRegister(MCP2518FD_Handle_t *handle, ui
 
 static HAL_StatusTypeDef MCP2518FD_SetMode(MCP2518FD_Handle_t *handle, uint32_t mode)
 {
+  /* Wait until the controller reports the requested operating mode. */
   uint32_t value;
   uint32_t start = HAL_GetTick();
 
@@ -411,6 +419,7 @@ static HAL_StatusTypeDef MCP2518FD_SetMode(MCP2518FD_Handle_t *handle, uint32_t 
 
 static HAL_StatusTypeDef MCP2518FD_WaitOscillatorReady(MCP2518FD_Handle_t *handle)
 {
+  /* Wait for the oscillator-ready bit before touching the rest of the chip. */
   uint32_t value;
   uint32_t start = HAL_GetTick();
 
@@ -431,6 +440,7 @@ static HAL_StatusTypeDef MCP2518FD_WaitOscillatorReady(MCP2518FD_Handle_t *handl
 
 static HAL_StatusTypeDef MCP2518FD_InitRam(MCP2518FD_Handle_t *handle, uint8_t fill_value)
 {
+  /* Pre-fill the internal RAM so stale objects cannot leak into the first frames. */
   uint16_t address;
   uint8_t fill_buffer[MCP2518FD_RAM_FILL_CHUNK_SIZE];
 
@@ -451,6 +461,7 @@ static HAL_StatusTypeDef MCP2518FD_InitRam(MCP2518FD_Handle_t *handle, uint8_t f
 
 static HAL_StatusTypeDef MCP2518FD_ConfigRamAndFilters(MCP2518FD_Handle_t *handle)
 {
+  /* Set FIFO/filter defaults used by the application-level CAN routing. */
   if (MCP2518FD_WriteRegister(handle, MCP2518FD_FIFO_CON(MCP2518FD_RX_FIFO), MCP2518FD_RX_FIFO_CONFIG) != HAL_OK)
   {
     return HAL_ERROR;
@@ -478,21 +489,25 @@ static HAL_StatusTypeDef MCP2518FD_ConfigRamAndFilters(MCP2518FD_Handle_t *handl
 
 static void MCP2518FD_Select(MCP2518FD_Handle_t *handle)
 {
+  /* Assert chip select before starting an SPI transaction. */
   HAL_GPIO_WritePin(handle->cs_port, handle->cs_pin, GPIO_PIN_RESET);
 }
 
 static void MCP2518FD_Deselect(MCP2518FD_Handle_t *handle)
 {
+  /* Release chip select after the SPI transaction has completed. */
   HAL_GPIO_WritePin(handle->cs_port, handle->cs_pin, GPIO_PIN_SET);
 }
 
 static uint16_t MCP2518FD_CommandHeader(uint8_t command, uint16_t address)
 {
+  /* Build the 16-bit SPI command header expected by the controller. */
   return (uint16_t)((((uint16_t)command) << 12) | (address & 0x0FFFU));
 }
 
 static void MCP2518FD_StoreLe32(uint8_t *data, uint32_t value)
 {
+  /* Store a 32-bit value in the controller's little-endian byte order. */
   data[0] = (uint8_t)(value & 0xFFU);
   data[1] = (uint8_t)((value >> 8) & 0xFFU);
   data[2] = (uint8_t)((value >> 16) & 0xFFU);
@@ -501,6 +516,7 @@ static void MCP2518FD_StoreLe32(uint8_t *data, uint32_t value)
 
 static uint32_t MCP2518FD_LoadLe32(const uint8_t *data)
 {
+  /* Load a 32-bit value from the controller's little-endian byte order. */
   return ((uint32_t)data[3] << 24) |
          ((uint32_t)data[2] << 16) |
          ((uint32_t)data[1] << 8) |
@@ -509,6 +525,7 @@ static uint32_t MCP2518FD_LoadLe32(const uint8_t *data)
 
 static uint8_t MCP2518FD_DlcToBytes(uint8_t dlc)
 {
+  /* Convert DLC to payload length using the CAN-FD lookup table. */
   static const uint8_t dlc_to_bytes[] = {
       0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U,
       8U, 12U, 16U, 20U, 24U, 32U, 48U, 64U
@@ -524,6 +541,7 @@ static uint8_t MCP2518FD_DlcToBytes(uint8_t dlc)
 
 static uint8_t MCP2518FD_LengthToDlc(uint8_t length)
 {
+  /* Clamp the application payload length to a standard CAN DLC. */
   if (length >= 8U)
   {
     return 8U;
@@ -534,6 +552,7 @@ static uint8_t MCP2518FD_LengthToDlc(uint8_t length)
 
 static void MCP2518FD_DelayMs(uint32_t delay_ms)
 {
+  /* Use RTOS delay when available, otherwise fall back to HAL delay. */
   if (osKernelGetState() == osKernelRunning)
   {
     osDelay(delay_ms);
@@ -546,6 +565,7 @@ static void MCP2518FD_DelayMs(uint32_t delay_ms)
 
 static MCP2518FD_SpiDmaState_t *MCP2518FD_GetSpiDmaState(SPI_HandleTypeDef *hspi)
 {
+  /* Track per-SPI DMA completion flags so multiple controllers can coexist. */
   size_t i;
 
   if (hspi == NULL)
@@ -567,6 +587,7 @@ static MCP2518FD_SpiDmaState_t *MCP2518FD_GetSpiDmaState(SPI_HandleTypeDef *hspi
 
 static HAL_StatusTypeDef MCP2518FD_WaitForSpiReady(SPI_HandleTypeDef *hspi, uint32_t timeout_ms)
 {
+  /* Wait until the HAL SPI layer is ready for another DMA transfer. */
   uint32_t start = HAL_GetTick();
 
   while (HAL_SPI_GetState(hspi) != HAL_SPI_STATE_READY)
@@ -586,6 +607,7 @@ static HAL_StatusTypeDef MCP2518FD_TransferDmaBlocking(MCP2518FD_Handle_t *handl
                                                        uint8_t *rx_data,
                                                        uint16_t length)
 {
+  /* Launch a full-duplex DMA transfer and block until the callback fires. */
   MCP2518FD_SpiDmaState_t *dma_state;
   HAL_StatusTypeDef status;
   uint32_t start = HAL_GetTick();
@@ -637,6 +659,7 @@ static HAL_StatusTypeDef MCP2518FD_TransferDmaBlocking(MCP2518FD_Handle_t *handl
 
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 {
+  /* Mark the matching SPI DMA transfer as finished. */
   MCP2518FD_SpiDmaState_t *dma_state = MCP2518FD_GetSpiDmaState(hspi);
 
   if (dma_state != NULL)
@@ -648,6 +671,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
 {
+  /* Mark the matching SPI DMA transfer as failed. */
   MCP2518FD_SpiDmaState_t *dma_state = MCP2518FD_GetSpiDmaState(hspi);
 
   if (dma_state != NULL)

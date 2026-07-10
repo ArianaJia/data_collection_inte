@@ -21,6 +21,74 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
+#include <stdio.h>
+#include <string.h>
+
+/* The 4G DTU only needs a bounded AT bootstrap during power-up.
+ * After that, USART1 returns to raw TCP payload transport and task08 keeps
+ * owning the business publish path exactly as before.
+ *
+ * Current publish plain-text topics are still defined in publish.c:
+ *   fast_telemetry / bms_summary / vehicle_state / bms_detail / thermal_summary
+ * The bootstrap below does not rewrite payload encoding or inspect topics.
+ */
+#define Y100M_AT_REPLY_BUFFER_SIZE        256U
+#define Y100M_AT_LOG_BUFFER_SIZE          192U
+#define Y100M_AT_GUARD_TIME_MS           1000U
+#define Y100M_AT_CMD_TIMEOUT_MS          2000U
+#define Y100M_AT_RX_POLL_SLICE_MS          20U
+#define Y100M_AT_RESET_PULSE_MS          1000U
+#define Y100M_AT_BOOT_WAIT_MS            5000U
+#define Y100M_AT_MAX_HANDSHAKE_ATTEMPTS     2U
+#define Y100M_AT_EXIT_CMD               "AT+ENTM"
+#define Y100M_UART3_LOG_TIMEOUT_MS      1000U
+
+typedef struct
+{
+  const char *name;
+  const char *command;
+  const char *expected;
+  uint32_t timeout_ms;
+} Y100M_AtStep_t;
+
+static uint8_t g_y100mBootstrapDone = 0U;
+static uint8_t g_y100mBootstrapOk = 0U;
+static char g_y100mAtReplyBuffer[Y100M_AT_REPLY_BUFFER_SIZE];
+static char g_y100mLogBuffer[Y100M_AT_LOG_BUFFER_SIZE];
+
+/* Keep all DTU power-up AT steps local to usart.c so later command tweaks stay
+ * isolated from FreeRTOS tasks and publish/protobuf logic.
+ *
+ * Replace the TCP-specific placeholders below with the exact sequence from:
+ *   https://yinerda.yuque.com/yt1fh6/4gdtu/rq1k2ege1avsqga8
+ *
+ * The currently enabled steps are intentionally conservative: they only verify
+ * that the module can talk, that the SIM is ready, and that the network state
+ * is queryable. Unsupported commands should not be guessed here.
+ */
+static const Y100M_AtStep_t g_y100mBootstrapSteps[] =
+{
+  { "Disable echo",          "ATE0",      "OK",      1000U },
+  { "Check SIM ready",       "AT+CPIN?",  "READY",   2000U },
+  { "Check signal quality",  "AT+CSQ",    "+CSQ:",   2000U },
+  { "Check network status",  "AT+CREG?",  "+CREG:",  3000U },
+  /* Example placeholders for the final TCP client configuration:
+   * { "Set work mode",      "AT+XXXX",   "OK",      2000U },
+   * { "Set remote server",  "AT+XXXX",   "OK",      2000U },
+   * { "Save parameters",    "AT+XXXX",   "OK",      2000U },
+   */
+};
+
+static HAL_StatusTypeDef Y100M_DebugUart3DmaBlocking(const uint8_t *data, uint16_t length);
+static void Y100M_DebugLog(const char *text);
+static void Y100M_Uart1DrainRx(void);
+static HAL_StatusTypeDef Y100M_WaitReply(const char *expected, uint32_t timeout_ms, char *reply_buffer, uint16_t reply_capacity);
+static HAL_StatusTypeDef Y100M_SendAtExpect(const char *command, const char *expected, uint32_t timeout_ms);
+static void Y100M_EnterAtMode(void);
+static HAL_StatusTypeDef Y100M_ExitAtMode(void);
+static void Y100M_ResetPulse(void);
+static HAL_StatusTypeDef Y100M_RunBootstrapSteps(void);
+static void Y100M_BootstrapOnce(void);
 
 /* USER CODE END 0 */
 
@@ -114,6 +182,11 @@ void MX_USART3_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART3_Init 2 */
+  /* Run the one-shot 4G bootstrap here because both USART1 and USART3 are
+   * initialized at this point: USART1 is ready for AT commands and USART3 is
+   * ready to carry DMA-backed debug logs.
+   */
+  Y100M_BootstrapOnce();
 
   /* USER CODE END USART3_Init 2 */
 
@@ -204,7 +277,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_usart2_rx.Init.MemInc = DMA_MINC_ENABLE;
     hdma_usart2_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
     hdma_usart2_rx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
-    hdma_usart2_rx.Init.Mode = DMA_CIRCULAR;
+    hdma_usart2_rx.Init.Mode = DMA_NORMAL;
     hdma_usart2_rx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_usart2_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
     if (HAL_DMA_Init(&hdma_usart2_rx) != HAL_OK)
@@ -334,5 +407,286 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
 }
 
 /* USER CODE BEGIN 1 */
+/* Send a debug line through USART3 using DMA and wait until the transfer finishes. */
+static HAL_StatusTypeDef Y100M_DebugUart3DmaBlocking(const uint8_t *data, uint16_t length)
+{
+  HAL_StatusTypeDef status;
+  uint32_t start_tick;
+
+  if ((data == NULL) || (length == 0U) || (huart3.Instance == NULL))
+  {
+    return HAL_ERROR;
+  }
+
+  start_tick = HAL_GetTick();
+  while ((HAL_UART_GetState(&huart3) == HAL_UART_STATE_BUSY_TX) ||
+         (HAL_UART_GetState(&huart3) == HAL_UART_STATE_BUSY_TX_RX))
+  {
+    if ((HAL_GetTick() - start_tick) >= Y100M_UART3_LOG_TIMEOUT_MS)
+    {
+      return HAL_TIMEOUT;
+    }
+  }
+
+  status = HAL_UART_Transmit_DMA(&huart3, (uint8_t *)data, length);
+  if (status != HAL_OK)
+  {
+    return status;
+  }
+
+  start_tick = HAL_GetTick();
+  while ((HAL_UART_GetState(&huart3) == HAL_UART_STATE_BUSY_TX) ||
+         (HAL_UART_GetState(&huart3) == HAL_UART_STATE_BUSY_TX_RX))
+  {
+    if ((HAL_GetTick() - start_tick) >= Y100M_UART3_LOG_TIMEOUT_MS)
+    {
+      return HAL_TIMEOUT;
+    }
+  }
+
+  return HAL_OK;
+}
+
+/* Forward a text log to the USART3 debug output path. */
+static void Y100M_DebugLog(const char *text)
+{
+  if (text == NULL)
+  {
+    return;
+  }
+
+  (void)Y100M_DebugUart3DmaBlocking((const uint8_t *)text, (uint16_t)strlen(text));
+}
+
+/* Remove any stale bytes from USART1 before the next AT command is sent. */
+static void Y100M_Uart1DrainRx(void)
+{
+  uint8_t byte = 0U;
+
+  while (HAL_UART_Receive(&huart1, &byte, 1U, 2U) == HAL_OK)
+  {
+    /* Drain every pending byte before issuing the next AT command so stale
+     * replies never leak into the next command/response match.
+     */
+  }
+}
+
+/* Wait for a reply that contains the expected text, or fail on timeout/error. */
+static HAL_StatusTypeDef Y100M_WaitReply(const char *expected, uint32_t timeout_ms, char *reply_buffer, uint16_t reply_capacity)
+{
+  uint8_t byte = 0U;
+  uint16_t offset = 0U;
+  uint32_t start_tick = HAL_GetTick();
+
+  if ((reply_buffer == NULL) || (reply_capacity == 0U))
+  {
+    return HAL_ERROR;
+  }
+
+  reply_buffer[0] = '\0';
+
+  while ((HAL_GetTick() - start_tick) < timeout_ms)
+  {
+    if (HAL_UART_Receive(&huart1, &byte, 1U, Y100M_AT_RX_POLL_SLICE_MS) == HAL_OK)
+    {
+      if (offset < (uint16_t)(reply_capacity - 1U))
+      {
+        reply_buffer[offset++] = (char)byte;
+        reply_buffer[offset] = '\0';
+      }
+
+      if ((expected != NULL) && (expected[0] != '\0') && (strstr(reply_buffer, expected) != NULL))
+      {
+        return HAL_OK;
+      }
+
+      if ((strstr(reply_buffer, "ERROR") != NULL) &&
+          ((expected == NULL) || (strstr(expected, "ERROR") == NULL)))
+      {
+        return HAL_ERROR;
+      }
+    }
+  }
+
+  return HAL_TIMEOUT;
+}
+
+/* Send one AT command and confirm that the expected response arrives. */
+static HAL_StatusTypeDef Y100M_SendAtExpect(const char *command, const char *expected, uint32_t timeout_ms)
+{
+  HAL_StatusTypeDef tx_status;
+  HAL_StatusTypeDef rx_status;
+  uint16_t log_length;
+
+  if ((command == NULL) || (command[0] == '\0'))
+  {
+    return HAL_OK;
+  }
+
+  Y100M_Uart1DrainRx();
+
+  log_length = (uint16_t)snprintf(g_y100mLogBuffer,
+                                  sizeof(g_y100mLogBuffer),
+                                  "[4G][TX] %s\r\n",
+                                  command);
+  if ((log_length > 0U) && (log_length < sizeof(g_y100mLogBuffer)))
+  {
+    Y100M_DebugLog(g_y100mLogBuffer);
+  }
+
+  tx_status = HAL_UART_Transmit(&huart1, (uint8_t *)command, (uint16_t)strlen(command), timeout_ms);
+  if (tx_status != HAL_OK)
+  {
+    return tx_status;
+  }
+
+  tx_status = HAL_UART_Transmit(&huart1, (uint8_t *)"\r\n", 2U, timeout_ms);
+  if (tx_status != HAL_OK)
+  {
+    return tx_status;
+  }
+
+  rx_status = Y100M_WaitReply(expected,
+                              timeout_ms,
+                              g_y100mAtReplyBuffer,
+                              (uint16_t)sizeof(g_y100mAtReplyBuffer));
+
+  log_length = (uint16_t)snprintf(g_y100mLogBuffer,
+                                  sizeof(g_y100mLogBuffer),
+                                  "[4G][RX][%s] %s\r\n",
+                                  (rx_status == HAL_OK) ? "OK" :
+                                  ((rx_status == HAL_TIMEOUT) ? "TIMEOUT" : "FAIL"),
+                                  g_y100mAtReplyBuffer);
+  if ((log_length > 0U) && (log_length < sizeof(g_y100mLogBuffer)))
+  {
+    Y100M_DebugLog(g_y100mLogBuffer);
+  }
+
+  return rx_status;
+}
+
+/* Enter AT command mode after the required guard time. */
+static void Y100M_EnterAtMode(void)
+{
+  /* "+++" is treated as the lightest escape from transparent transfer back to
+   * AT mode. If the module is already in AT mode, this sequence is harmless.
+   */
+  (void)HAL_UART_Transmit(&huart1, (uint8_t *)"+++", 3U, Y100M_AT_CMD_TIMEOUT_MS);
+  HAL_Delay(Y100M_AT_GUARD_TIME_MS);
+  Y100M_Uart1DrainRx();
+}
+
+/* Leave AT command mode and return the module to data mode. */
+static HAL_StatusTypeDef Y100M_ExitAtMode(void)
+{
+  if (Y100M_AT_EXIT_CMD[0] == '\0')
+  {
+    return HAL_OK;
+  }
+
+  return Y100M_SendAtExpect(Y100M_AT_EXIT_CMD, "OK", Y100M_AT_CMD_TIMEOUT_MS);
+}
+
+/* Pulse the external reset pin to force the 4G module to reboot. */
+static void Y100M_ResetPulse(void)
+{
+  Y100M_DebugLog("[4G] AT bootstrap failed, pulse RST_4G high for 1s\r\n");
+  HAL_GPIO_WritePin(RST_4G_GPIO_Port, RST_4G_Pin, GPIO_PIN_SET);
+  HAL_Delay(Y100M_AT_RESET_PULSE_MS);
+  HAL_GPIO_WritePin(RST_4G_GPIO_Port, RST_4G_Pin, GPIO_PIN_RESET);
+  HAL_Delay(Y100M_AT_BOOT_WAIT_MS);
+  Y100M_Uart1DrainRx();
+}
+
+/* Run the bounded one-shot AT bootstrap sequence for the 4G module. */
+static HAL_StatusTypeDef Y100M_RunBootstrapSteps(void)
+{
+  HAL_StatusTypeDef status = HAL_ERROR;
+  uint32_t index = 0U;
+  uint8_t attempt = 0U;
+
+  Y100M_EnterAtMode();
+
+  for (attempt = 0U; attempt < Y100M_AT_MAX_HANDSHAKE_ATTEMPTS; attempt++)
+  {
+    status = Y100M_SendAtExpect("AT", "OK", Y100M_AT_CMD_TIMEOUT_MS);
+    if (status == HAL_OK)
+    {
+      break;
+    }
+
+    /* If the AT probe fails, leave the module in business mode first, then
+     * try to re-enter AT mode once more before escalating to hardware reset.
+     */
+    (void)Y100M_ExitAtMode();
+    Y100M_EnterAtMode();
+  }
+
+  if (status != HAL_OK)
+  {
+    Y100M_ResetPulse();
+    Y100M_EnterAtMode();
+    status = Y100M_SendAtExpect("AT", "OK", Y100M_AT_CMD_TIMEOUT_MS);
+    if (status != HAL_OK)
+    {
+      (void)Y100M_ExitAtMode();
+      return status;
+    }
+  }
+
+  for (index = 0U; index < (sizeof(g_y100mBootstrapSteps) / sizeof(g_y100mBootstrapSteps[0])); index++)
+  {
+    const Y100M_AtStep_t *step = &g_y100mBootstrapSteps[index];
+
+    if ((step->command == NULL) || (step->command[0] == '\0'))
+    {
+      continue;
+    }
+
+    status = Y100M_SendAtExpect(step->command, step->expected, step->timeout_ms);
+    if (status != HAL_OK)
+    {
+      (void)snprintf(g_y100mLogBuffer,
+                     sizeof(g_y100mLogBuffer),
+                     "[4G] bootstrap step failed: %s\r\n",
+                     step->name);
+      Y100M_DebugLog(g_y100mLogBuffer);
+      (void)Y100M_ExitAtMode();
+      return status;
+    }
+  }
+
+  return Y100M_ExitAtMode();
+}
+
+/* Execute the one-shot bootstrap only once during startup. */
+static void Y100M_BootstrapOnce(void)
+{
+  HAL_StatusTypeDef status;
+
+  if (g_y100mBootstrapDone != 0U)
+  {
+    return;
+  }
+
+  g_y100mBootstrapDone = 1U;
+  Y100M_DebugLog("[4G] start one-shot AT bootstrap\r\n");
+
+  status = Y100M_RunBootstrapSteps();
+  if (status == HAL_OK)
+  {
+    g_y100mBootstrapOk = 1U;
+    Y100M_DebugLog("[4G] bootstrap complete, return USART1 to raw TCP payload mode\r\n");
+  }
+  else
+  {
+    g_y100mBootstrapOk = 0U;
+    (void)snprintf(g_y100mLogBuffer,
+                   sizeof(g_y100mLogBuffer),
+                   "[4G] bootstrap incomplete, status=%d\r\n",
+                   (int)status);
+    Y100M_DebugLog(g_y100mLogBuffer);
+  }
+}
 
 /* USER CODE END 1 */

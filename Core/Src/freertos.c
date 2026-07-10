@@ -135,6 +135,11 @@ const osThreadAttr_t myTask09_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityRealtime,
 };
+/* Definitions for myQueue01 */
+osMessageQueueId_t myQueue01Handle;
+const osMessageQueueAttr_t myQueue01_attributes = {
+  .name = "myQueue01"
+};
 /* Definitions for myQueue02 */
 osMessageQueueId_t myQueue02Handle;
 const osMessageQueueAttr_t myQueue02_attributes = {
@@ -228,6 +233,9 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_TIMERS */
 
   /* Create the queue(s) */
+  /* creation of myQueue01 */
+  myQueue01Handle = osMessageQueueNew (2, sizeof(App_Uart_Tx_Item_t), &myQueue01_attributes);
+
   /* creation of myQueue02 */
   myQueue02Handle = osMessageQueueNew (16, sizeof(CAN_Msg_Queue_t), &myQueue02_attributes);
 
@@ -241,7 +249,7 @@ void MX_FREERTOS_Init(void) {
   myQueue05Handle = osMessageQueueNew (8, sizeof(CAN_Tx_Queue_t), &myQueue05_attributes);
 
   /* creation of task01DebugQueue */
-  task01DebugQueueHandle = osMessageQueueNew (TASK01_DEBUG_QUEUE_DEPTH, sizeof(App_Uart_Tx_Item_t), &task01DebugQueue_attributes);
+  task01DebugQueueHandle = osMessageQueueNew (2, sizeof(App_Uart_Tx_Item_t), &task01DebugQueue_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -274,6 +282,7 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of myTask09 */
   myTask09Handle = osThreadNew(StartTask09, NULL, &myTask09_attributes);
+
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -294,6 +303,7 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+  /* Default task acts as the low-frequency service loop and health poller. */
   uint32_t mlx_health_tick_ms = HAL_GetTick();
 
   MLX90640_App_SetLogCallback(App_DebugLogString);
@@ -326,6 +336,7 @@ void StartDefaultTask(void *argument)
 void StartTask02(void *argument)
 {
   /* USER CODE BEGIN StartTask02 */
+  /* Task02 consumes CAN1 frames and turns them into shared telemetry updates. */
   CAN_Msg_Queue_t recv_data;
 
   for(;;)
@@ -348,6 +359,7 @@ void StartTask02(void *argument)
 void StartTask03(void *argument)
 {
   /* USER CODE BEGIN StartTask03 */
+  /* Task03 consumes CAN2 frames and updates the battery-box telemetry cache. */
   CAN_Msg_Queue_t recv_data;
 
   for(;;)
@@ -370,6 +382,7 @@ void StartTask03(void *argument)
 void StartTask04(void *argument)
 {
   /* USER CODE BEGIN StartTask04 */
+  /* Task04 owns the MLX90640 sampling loop and thermal publish requests. */
   for(;;)
   {
     uint8_t thermal_summary_updated = 0U;
@@ -419,6 +432,7 @@ void StartTask04(void *argument)
 void StartTask05(void *argument)
 {
   /* USER CODE BEGIN StartTask05 */
+  /* Task05 keeps USART2 DMA running and dispatches RS485 spans to the parser. */
   uint32_t flags = 0U;
   uint8_t dma_running = 0U;
 
@@ -470,6 +484,7 @@ void StartTask05(void *argument)
 void StartTask06(void *argument)
 {
   /* USER CODE BEGIN StartTask06 */
+  /* Task06 initializes the controller-side MCP2518FD on SPI1 and polls it. */
   uint8_t fdcan_initialized = 0U;
   uint8_t fdcan_init_error_logged = 0U;
   Peripheral_Rx_Frame_t recv_data = {0};
@@ -512,6 +527,7 @@ void StartTask06(void *argument)
 void StartTask07(void *argument)
 {
   /* USER CODE BEGIN StartTask07 */
+  /* Task07 mirrors Task06 for the second MCP2518FD instance on SPI3. */
   uint8_t fdcan_initialized = 0U;
   uint8_t fdcan_init_error_logged = 0U;
   Peripheral_Rx_Frame_t recv_data = {0};
@@ -554,6 +570,7 @@ void StartTask07(void *argument)
 void StartTask08(void *argument)
 {
   /* USER CODE BEGIN StartTask08 */
+  /* Task08 is the only publish sender: build protobuf and send over USART1. */
   PublishQueueItem_t item;
   uint16_t frame_length = 0U;
   HAL_StatusTypeDef tx_status = HAL_OK;
@@ -598,6 +615,7 @@ void StartTask08(void *argument)
 void StartTask09(void *argument)
 {
   /* USER CODE BEGIN StartTask09 */
+  /* Task09 is the dedicated CAN1 transmit worker and nothing else. */
   CAN_Tx_Queue_t tx_data;
 
   for(;;)
@@ -609,10 +627,12 @@ void StartTask09(void *argument)
   }
   /* USER CODE END StartTask09 */
 }
+
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
 static osStatus_t App_QueueBytes(osMessageQueueId_t queue_handle, const uint8_t *data, uint16_t length, uint32_t timeout_ms)
 {
+  /* Copy bytes into the shared UART queue item before posting to a mailbox. */
   App_Uart_Tx_Item_t *item = &g_uartQueueWorkItem;
 
   if ((queue_handle == NULL) || (data == NULL) || (length == 0U))
@@ -633,6 +653,7 @@ static osStatus_t App_QueueBytes(osMessageQueueId_t queue_handle, const uint8_t 
 
 static osStatus_t App_QueueText(osMessageQueueId_t queue_handle, const char *text, uint32_t timeout_ms)
 {
+  /* Text is just a byte buffer with a known length. */
   if (text == NULL)
   {
     return osErrorParameter;
@@ -643,11 +664,13 @@ static osStatus_t App_QueueText(osMessageQueueId_t queue_handle, const char *tex
 
 static void App_DebugLogString(const char *text)
 {
+  /* All debug strings are funneled through the USART3 debug queue. */
   (void)App_QueueText(task01DebugQueueHandle, text, 250U);
 }
 
 static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart, uint8_t *data, uint16_t length)
 {
+  /* Block until the DMA transmitter is idle, then wait again for completion. */
   if ((huart == NULL) || (data == NULL) || (length == 0U))
   {
     return HAL_ERROR;
@@ -676,6 +699,7 @@ static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart,
 
 static HAL_StatusTypeDef App_Task05_StartRs485Dma(void)
 {
+  /* Restart ReceiveToIdle DMA and reset all ring-buffer tracking state. */
   (void)HAL_UART_DMAStop(&huart2);
   __HAL_UART_CLEAR_OREFLAG(&huart2);
 
@@ -691,6 +715,7 @@ static HAL_StatusTypeDef App_Task05_StartRs485Dma(void)
 
 static void App_Task05_ProcessRs485DmaBuffer(void)
 {
+  /* Drain the circular buffer in order and hand byte spans to the parser. */
   for (;;)
   {
     uint16_t pending_bytes = 0U;
@@ -736,6 +761,7 @@ static void App_Task05_ProcessRs485DmaBuffer(void)
 
 static void App_Task05_ProcessRs485Span(uint16_t start, uint16_t end)
 {
+  /* Split wrapped spans so the parser always sees a linear byte slice. */
   if (start == end)
   {
     return;
@@ -757,6 +783,7 @@ static void App_Task05_ProcessRs485Span(uint16_t start, uint16_t end)
 
 static void App_Task05_DispatchRs485Bytes(const uint8_t *data, uint16_t length)
 {
+  /* Repackage arbitrary RS485 bytes into the generic receive-frame wrapper. */
   Peripheral_Rx_Frame_t recv_data = {0};
 
   if ((data == NULL) || (length == 0U))
@@ -1218,7 +1245,4 @@ static void Task09_SendCan1Message(const CAN_Tx_Queue_t *tx_data)
   CAN_Send_Msg(&hcan1, tx_data->std_id, (uint8_t *)tx_data->data);
 }
 /* USER CODE END Application */
-
-
-
 

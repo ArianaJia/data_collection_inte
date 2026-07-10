@@ -26,16 +26,19 @@ static MLX90640_AppLogFn g_logCallback = NULL;
 static volatile uint8_t g_mlx90640Busy = 0U;
 static uint8_t g_mlx90640RuntimePrepared = 0U;
 
+/* Check whether the FreeRTOS scheduler is already running. */
 static uint8_t MLX90640_App_IsSchedulerRunning(void)
 {
   return (osKernelGetState() == osKernelRunning) ? 1U : 0U;
 }
 
+/* Read the current millisecond tick used for timeout handling. */
 static uint32_t MLX90640_App_GetTimeMs(void)
 {
   return HAL_GetTick();
 }
 
+/* Sleep with the RTOS delay API when possible, otherwise fall back to HAL. */
 static void MLX90640_App_SleepMs(uint32_t delay_ms)
 {
   if (delay_ms == 0U)
@@ -52,6 +55,7 @@ static void MLX90640_App_SleepMs(uint32_t delay_ms)
   HAL_Delay(delay_ms);
 }
 
+/* Try to acquire the shared MLX90640 lock without blocking the system forever. */
 static uint8_t MLX90640_App_TryLock(uint32_t timeout_ms)
 {
   uint32_t start_ms = MLX90640_App_GetTimeMs();
@@ -82,6 +86,7 @@ static uint8_t MLX90640_App_TryLock(uint32_t timeout_ms)
   }
 }
 
+/* Release the shared MLX90640 lock. */
 static void MLX90640_App_Unlock(void)
 {
   taskENTER_CRITICAL();
@@ -89,6 +94,7 @@ static void MLX90640_App_Unlock(void)
   taskEXIT_CRITICAL();
 }
 
+/* Mark one sensor as offline and keep its last failure code for recovery. */
 static void MLX90640_App_SetSensorOffline(uint8_t sensor_id, int32_t error)
 {
   if (sensor_id >= MLX90640_SENSOR_COUNT)
@@ -101,6 +107,7 @@ static void MLX90640_App_SetSensorOffline(uint8_t sensor_id, int32_t error)
   g_MLX90640_Frame.ValidMask &= (uint8_t)(~(1U << sensor_id));
 }
 
+/* Initialize the shared runtime buffers and I2C helpers once. */
 static void MLX90640_App_PrepareRuntime(void)
 {
   if (g_mlx90640RuntimePrepared != 0U)
@@ -113,6 +120,7 @@ static void MLX90640_App_PrepareRuntime(void)
   g_mlx90640RuntimePrepared = 1U;
 }
 
+/* Emit a recovery log line for a sensor that failed to come back online. */
 static void MLX90640_App_LogRecoverStatus(uint8_t sensor_id, int status)
 {
   (void)snprintf(g_logLine, sizeof(g_logLine),
@@ -125,6 +133,7 @@ static void MLX90640_App_LogRecoverStatus(uint8_t sensor_id, int status)
   MLX90640_App_Log(g_logLine);
 }
 
+/* Convert Celsius to centi-Celsius for compact integer telemetry storage. */
 static int32_t MLX90640_App_TempToCentiC(float temp_c)
 {
   float scaled_temp = temp_c * (float)MLX90640_TEMP_SCALE;
@@ -137,7 +146,8 @@ static int32_t MLX90640_App_TempToCentiC(float temp_c)
   return (int32_t)(scaled_temp - 0.5f);
 }
 
- void MLX90640_App_Log(const char *text)
+/* Forward a log line to the caller-provided callback when logging is enabled. */
+void MLX90640_App_Log(const char *text)
 {
   if ((g_logCallback != NULL) && (text != NULL))
   {
@@ -145,6 +155,7 @@ static int32_t MLX90640_App_TempToCentiC(float temp_c)
   }
 }
 
+/* Build a detailed log line for one failed MLX90640 initialization step. */
 static void MLX90640_App_LogInitError(uint8_t sensor_id, const char *step, int error)
 {
   (void)snprintf(g_logLine, sizeof(g_logLine),
@@ -158,6 +169,7 @@ static void MLX90640_App_LogInitError(uint8_t sensor_id, const char *step, int e
   MLX90640_App_Log(g_logLine);
 }
 
+/* Select one sensor channel, probe the device, and load its EEPROM parameters. */
 static int MLX90640_App_LoadParametersOnChannel(uint8_t sensor_id)
 {
   int status = MLX90640_SelectSensor(sensor_id);
@@ -198,6 +210,7 @@ static int MLX90640_App_LoadParametersOnChannel(uint8_t sensor_id)
   return status;
 }
 
+/* Finish the per-sensor hardware setup after parameters have been loaded. */
 static int MLX90640_App_InitSensorOnChannel(uint8_t sensor_id)
 {
   int status = MLX90640_App_LoadParametersOnChannel(sensor_id);
@@ -223,6 +236,7 @@ static int MLX90640_App_InitSensorOnChannel(uint8_t sensor_id)
   return MLX90640_NO_ERROR;
 }
 
+/* Reduce the 32x24 pixel map into region-level temperatures for telemetry. */
 static void MLX90640_App_UpdateRegionTemp(uint8_t sensor_id, const float *pixel_temp)
 {
   float region_sum[MLX90640_REGION_COUNT] = {0.0f};
@@ -260,11 +274,13 @@ static void MLX90640_App_UpdateRegionTemp(uint8_t sensor_id, const float *pixel_
   }
 }
 
+/* Register the external log sink used by this MLX90640 application layer. */
 void MLX90640_App_SetLogCallback(MLX90640_AppLogFn callback)
 {
   g_logCallback = callback;
 }
 
+/* Initialize every configured MLX90640 sensor and record which ones are alive. */
 int MLX90640_App_Init(void)
 {
   uint8_t initialized_count = 0U;
@@ -308,6 +324,7 @@ int MLX90640_App_Init(void)
   return MLX90640_NO_ERROR;
 }
 
+/* Capture one full frame from the selected sensor and update shared telemetry. */
 int MLX90640_App_CaptureOnce(uint8_t sensor_id)
 {
   if (sensor_id >= MLX90640_SENSOR_COUNT)
@@ -384,6 +401,7 @@ int MLX90640_App_CaptureOnce(uint8_t sensor_id)
   return MLX90640_NO_ERROR;
 }
 
+/* Retry initialization for sensors that were previously marked offline. */
 int MLX90640_App_ServiceHealth(void)
 {
   if (MLX90640_App_TryLock(0U) == 0U)
@@ -427,6 +445,7 @@ int MLX90640_App_ServiceHealth(void)
   return MLX90640_NO_ERROR;
 }
 
+/* Report whether the selected sensor is currently considered ready. */
 uint8_t MLX90640_App_IsSensorReady(uint8_t sensor_id)
 {
   if (sensor_id >= MLX90640_SENSOR_COUNT)
@@ -437,6 +456,7 @@ uint8_t MLX90640_App_IsSensorReady(uint8_t sensor_id)
   return g_sensorReady[sensor_id];
 }
 
+/* Expose the latest floating-point temperature map buffer. */
 const float *MLX90640_App_GetTempMap(void)
 {
   return g_runtime.tempMap;

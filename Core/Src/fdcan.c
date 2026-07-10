@@ -16,8 +16,10 @@
 static MCP2518FD_Handle_t g_fdcan_bus_a;
 static MCP2518FD_Handle_t g_fdcan_bus_b;
 
+/* Map the logical bus selector to its backing MCP2518FD handle. */
 static MCP2518FD_Handle_t *FDCAN_GetHandle(FDCAN_Bus_t bus);
 
+/* Initialize one CAN bus controller and bind it to the correct SPI chip select. */
 HAL_StatusTypeDef FDCAN_Init(FDCAN_Bus_t bus)
 {
   MCP2518FD_Handle_t *handle = FDCAN_GetHandle(bus);
@@ -35,11 +37,13 @@ HAL_StatusTypeDef FDCAN_Init(FDCAN_Bus_t bus)
   return MCP2518FD_Init(handle, &hspi3, MCP2518_CS_B_GPIO_Port, MCP2518_CS_B_Pin);
 }
 
+/* Check whether the selected CAN bus controller has already been initialized. */
 uint8_t FDCAN_IsReady(FDCAN_Bus_t bus)
 {
   return MCP2518FD_IsReady(FDCAN_GetHandle(bus));
 }
 
+/* Poll one received frame from the selected CAN bus and convert it to the local frame format. */
 HAL_StatusTypeDef FDCAN_Poll(FDCAN_Bus_t bus, FDCAN_StdFrame_t *frame, uint8_t *received)
 {
   MCP2518FD_Handle_t *handle = FDCAN_GetHandle(bus);
@@ -69,6 +73,7 @@ HAL_StatusTypeDef FDCAN_Poll(FDCAN_Bus_t bus, FDCAN_StdFrame_t *frame, uint8_t *
   return HAL_OK;
 }
 
+/* Transmit one standard CAN frame through the selected bus controller. */
 HAL_StatusTypeDef FDCAN_TransmitStd(FDCAN_Bus_t bus, const FDCAN_StdFrame_t *frame)
 {
   MCP2518FD_Handle_t *handle = FDCAN_GetHandle(bus);
@@ -91,6 +96,7 @@ HAL_StatusTypeDef FDCAN_TransmitStd(FDCAN_Bus_t bus, const FDCAN_StdFrame_t *fra
   return MCP2518FD_TransmitStd(handle, &raw_frame);
 }
 
+/* Return the backing handle for bus A or bus B, or NULL for invalid input. */
 static MCP2518FD_Handle_t *FDCAN_GetHandle(FDCAN_Bus_t bus)
 {
   switch (bus)

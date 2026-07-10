@@ -21,6 +21,7 @@
 /* USER CODE BEGIN 0 */
 
 // 定义结构体实例并初始化（保留原变量初始化值）
+/* Shared CAN message scratchpad used by both transmit and receive paths. */
 can_msg g_can_msg = {
   .g_CANTxData = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77},
   .g_CANRxData = {0},
@@ -240,6 +241,7 @@ void HAL_CAN_MspDeInit(CAN_HandleTypeDef* canHandle)
   */
 void CAN_Filter_Config(CAN_HandleTypeDef *canHandle)
 {
+  /* Configure the shared filter banks before either controller starts. */
   CAN_FilterTypeDef CAN_FilterInitStructure = {0};
 
   if(canHandle->Instance == CAN1)  // CAN1滤波配置：16位ID列表模式
@@ -284,6 +286,7 @@ void CAN_Filter_Config(CAN_HandleTypeDef *canHandle)
   */
 void CAN_Send_Msg(CAN_HandleTypeDef *canHandle, uint32_t SendStdId, uint8_t *pTxData)
 {
+  /* Send one standard 8-byte CAN frame through the selected controller. */
   // 配置CAN发送帧头（固定参数，无需修改）
   g_can_msg.g_CANTxHeader.RTR = CAN_RTR_DATA;
   g_can_msg.g_CANTxHeader.IDE = CAN_ID_STD;
@@ -307,6 +310,7 @@ void CAN_Start(void)
 {
 //  MX_CAN1_Init();
 //  MX_CAN2_Init();
+  /* Start both controllers only after filters have been installed. */
   CAN_Filter_Config(&hcan1);
   CAN_Filter_Config(&hcan2);
   HAL_CAN_Start(&hcan1);
@@ -321,6 +325,7 @@ void CAN_Start(void)
   * @param hcan CAN句柄指针（仅处理hcan1实例）
   * @note 保留原有业务逻辑入口，接收后可根据ID做对应处理，不影响电池数据
   */
+/* CAN1 FIFO0 callback: decode the received frame in the RTOS-friendly path. */
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
   if(hcan->Instance != CAN1) return; // 仅处理CAN1中断，防止跨实例误触发
@@ -362,6 +367,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
   *       2. 数据已按telemetry_data.h中的宏完成校准，上层可直接使用，无需再处理
   *       3. 保留原有解析逻辑，仅修改变量为结构体成员，无功能变化
   */
+/* CAN2 FIFO0 callback: decode the received frame in the RTOS-friendly path. */
 void HAL_CAN2_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
   if(hcan->Instance != CAN2) return; // 仅处理CAN2中断，防止跨实例误触发

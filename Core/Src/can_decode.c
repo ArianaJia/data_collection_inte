@@ -1,3 +1,7 @@
+/* CAN decoding converts raw bus payloads into the shared telemetry caches.
+ * The decoder keeps source arbitration and byte-order handling here so the
+ * rest of the application can work with normalized values.
+ */
 #include "can_decode.h"
 
 #include "telemetry_data.h"
@@ -447,6 +451,7 @@ static uint8_t CAN_DecodeControllerMotorIndex(uint32_t msg_id, uint8_t *motor_in
 
 void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
 {
+  /* Parse vehicle-side CANB frames and update the shared vehicle telemetry. */
   if (recv_data == NULL || recv_data->can_channel != CAN_CHANNEL_VEHICLE_CANB || recv_data->is_ext_id != 0U)
   {
     return;
@@ -636,6 +641,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
 
 void CAN_DecodeBatteryBoxMessage(const CAN_Msg_Queue_t *recv_data)
 {
+  /* Decode battery-box frames in the format selected by the bus owner. */
   if (recv_data == NULL || recv_data->can_channel != CAN_CHANNEL_BATTERY_BOX)
   {
     return;
@@ -653,6 +659,7 @@ void CAN_DecodeBatteryBoxMessage(const CAN_Msg_Queue_t *recv_data)
 
 void CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *recv_data)
 {
+  /* Decode the controller CANA stream into motor-specific telemetry slots. */
   uint8_t motor_index;
 
   if ((recv_data == NULL) ||
@@ -717,6 +724,7 @@ void CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *recv_data)
 
 void CAN_DecodeCdcMonitorMessage(const CAN_Msg_Queue_t *recv_data)
 {
+  /* Keep CDC monitoring read-only so future mailbox semantics stay isolated. */
   if ((recv_data == NULL) ||
       (recv_data->can_channel != CAN_CHANNEL_CDC_MONITOR) ||
       (recv_data->is_ext_id != 0U))
@@ -747,6 +755,7 @@ void CAN_DecodeCdcMonitorMessage(const CAN_Msg_Queue_t *recv_data)
 
 static void CAN_DecodeBatteryBoxStdMessage(const CAN_Msg_Queue_t *recv_data)
 {
+  /* Standard battery-box frames carry hall current and a compact status byte. */
   if (recv_data == NULL || recv_data->is_ext_id != 0U)
   {
     return;
@@ -763,6 +772,7 @@ static void CAN_DecodeBatteryBoxStdMessage(const CAN_Msg_Queue_t *recv_data)
 
 static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
 {
+  /* Extended battery-box frames carry the richer pack-level telemetry set. */
   if (recv_data == NULL || recv_data->is_ext_id == 0U)
   {
     return;

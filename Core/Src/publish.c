@@ -1,3 +1,6 @@
+/* Publish converts the shared telemetry caches into protobuf payloads and
+ * hands topic requests to task08 through myQueue04.
+ */
 #include "publish.h"
 
 #include "FreeRTOS.h"
@@ -48,6 +51,7 @@ static bool Publish_IsTopicValid(PublishTopic_t topic);
 
 void Publish_Init(void)
 {
+    /* Publish keeps no private runtime state at startup. */
 }
 
 void Publish_Process(void)
@@ -59,6 +63,7 @@ void Publish_Process(void)
 
 osStatus_t Publish_QueueTopic(PublishTopic_t topic)
 {
+    /* Coalesce duplicate requests so one topic is queued at most once. */
     PublishQueueItem_t item;
     uint32_t topic_mask;
     osStatus_t status;
@@ -93,6 +98,7 @@ osStatus_t Publish_QueueTopic(PublishTopic_t topic)
 
 void Publish_OnTopicDequeued(PublishTopic_t topic)
 {
+    /* Release the deduplication bit once task08 has consumed the request. */
     if (!Publish_IsTopicValid(topic))
     {
         return;
@@ -105,6 +111,7 @@ void Publish_OnTopicDequeued(PublishTopic_t topic)
 
 bool Publish_BuildFrame(PublishTopic_t topic, uint8_t *frame_buffer, uint16_t frame_capacity, uint16_t *frame_size)
 {
+    /* Build the on-wire frame: magic, topic text, then protobuf payload. */
     const char *topic_name = Publish_GetTopicName(topic);
     size_t topic_len;
     size_t header_offset = PUBLISH_FRAME_HEADER_SIZE;
@@ -172,6 +179,7 @@ void Publish_MapCanbVehicleState(fsae_VehicleState *vehicle_state)
 
 static uint32_t Publish_GetVehicleSpeedKmh(void)
 {
+    /* Prefer GPS speed when it is valid; otherwise fall back to CANB speed. */
     /* GPS speed is preferred when available because it is less ambiguous than
      * the legacy vehicle-speed byte carried by older CANB packets.
      */
@@ -185,6 +193,7 @@ static uint32_t Publish_GetVehicleSpeedKmh(void)
 
 static fsae_DrivingMode Publish_MapDrivingMode(uint8_t raw_mode)
 {
+    /* Normalize the project-specific driving mode byte into protobuf enums. */
     switch (raw_mode)
     {
         case 1U:
@@ -204,6 +213,7 @@ static fsae_DrivingMode Publish_MapDrivingMode(uint8_t raw_mode)
 
 static fsae_MotorPosition Publish_MapCanbMotorPosition(uint8_t motor_index)
 {
+    /* Keep the CANB motor order stable when mapping to protobuf positions. */
     switch (motor_index)
     {
         case 0U:
@@ -221,6 +231,7 @@ static fsae_MotorPosition Publish_MapCanbMotorPosition(uint8_t motor_index)
 
 static uint8_t Publish_MapMotorOrderToThermalSensorIndex(uint8_t motor_index)
 {
+    /* Thermal sensors are exposed in a different order than the motor array. */
     switch (motor_index)
     {
         case 0U:
@@ -238,6 +249,7 @@ static uint8_t Publish_MapMotorOrderToThermalSensorIndex(uint8_t motor_index)
 
 static void Publish_MapCanbMotorState(fsae_MotorState *motor_state, uint8_t motor_index)
 {
+    /* Fill one motor entry directly from the CANB cache slot. */
     if (motor_state == NULL || motor_index >= 4U)
     {
         return;
@@ -260,6 +272,7 @@ static void Publish_MapCanbMotorState(fsae_MotorState *motor_state, uint8_t moto
 
 static void Publish_MapFastTelemetry(fsae_FastTelemetry *fast_telemetry)
 {
+    /* Fast telemetry carries the compact vehicle summary used most often. */
     if (fast_telemetry == NULL)
     {
         return;
@@ -275,6 +288,7 @@ static void Publish_MapFastTelemetry(fsae_FastTelemetry *fast_telemetry)
 
 static bool Publish_MapIvtTelemetry(fsae_IvtTelemetry *ivt_telemetry)
 {
+    /* Export the legacy IVT cache into its protobuf representation. */
     uint8_t valid_flags = g_CANB_LoopData.IVT.ValidFlags;
 
     if ((ivt_telemetry == NULL) || (valid_flags == 0U))
@@ -318,6 +332,7 @@ static bool Publish_MapIvtTelemetry(fsae_IvtTelemetry *ivt_telemetry)
 
 static bool Publish_MapEnergyMeterTelemetry(fsae_EnergyMeterTelemetry *energy_meter)
 {
+    /* Present one stable energy-meter protobuf regardless of physical source. */
     uint8_t valid_flags;
     uint8_t source;
 
@@ -422,6 +437,7 @@ static bool Publish_MapEnergyMeterTelemetry(fsae_EnergyMeterTelemetry *energy_me
 
 static bool Publish_MapMotionTelemetry(fsae_MotionTelemetry *motion)
 {
+    /* Emit the motion subset used by telemetry consumers and dashboards. */
     uint8_t valid_flags = g_CANB_LoopData.IMU.ValidFlags;
 
     if ((motion == NULL) || (valid_flags == 0U))
@@ -458,6 +474,7 @@ static bool Publish_MapMotionTelemetry(fsae_MotionTelemetry *motion)
 
 static void Publish_MapCommonTelemetryFrame(fsae_TelemetryFrame *frame)
 {
+    /* Shared BMS fields are filled once and reused by summary and detail. */
     uint32_t now;
 
     if (frame == NULL)
@@ -529,6 +546,7 @@ static void Publish_MapBmsSummaryFrame(fsae_TelemetryFrame *frame)
 
 static void Publish_MapBmsDetailFrame(fsae_TelemetryFrame *frame)
 {
+    /* Detail mode extends the common frame with cell-level and module data. */
     if (frame == NULL)
     {
         return;
@@ -545,6 +563,7 @@ static void Publish_MapBmsDetailFrame(fsae_TelemetryFrame *frame)
 
 static void Publish_MapBatteryModule(fsae_BatteryModule *module, uint8_t module_index)
 {
+    /* Copy one battery module from the shared cache into protobuf fields. */
     uint32_t *cell_fields[PUBLISH_BMS_DETAIL_CELL_COUNT];
     int32_t *temp_fields[8U];
 
@@ -602,6 +621,7 @@ static void Publish_MapBatteryModule(fsae_BatteryModule *module, uint8_t module_
 
 static void Publish_MapThermalSummary(fsae_ThermalSummary *thermal_summary)
 {
+    /* Thermal summary exposes the MLX90640 regions in a compact protobuf form. */
     if (thermal_summary == NULL)
     {
         return;
@@ -664,6 +684,7 @@ static void Publish_MapThermalSummary(fsae_ThermalSummary *thermal_summary)
 
 static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_buffer, size_t payload_capacity, size_t *payload_size)
 {
+    /* Encode only the selected topic payload; the frame header is added later. */
     pb_ostream_t stream;
     bool encode_status = false;
 
@@ -731,6 +752,7 @@ static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_bu
 }
 static const char *Publish_GetTopicName(PublishTopic_t topic)
 {
+    /* Keep the topic names as plain text for the downstream TCP side. */
     switch (topic)
     {
         case PUBLISH_TOPIC_FAST_TELEMETRY:
@@ -750,5 +772,6 @@ static const char *Publish_GetTopicName(PublishTopic_t topic)
 
 static bool Publish_IsTopicValid(PublishTopic_t topic)
 {
+    /* Reject unsupported topic IDs before they hit the queue. */
     return ((uint32_t)topic < (uint32_t)PUBLISH_TOPIC_COUNT);
 }

@@ -57,6 +57,8 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define RST_4G_Pin GPIO_PIN_7
+#define RST_4G_GPIO_Port GPIOF
 #define MCP2518_CS_A_Pin GPIO_PIN_4
 #define MCP2518_CS_A_GPIO_Port GPIOA
 #define EN__Pin GPIO_PIN_0
