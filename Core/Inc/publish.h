@@ -5,6 +5,44 @@
 extern "C" {
 #endif
 
+/*
+ * CANB loop -> fsae_VehicleState mapping
+ *
+ * vehicle_state.speed_kmh
+ *   <- g_CANB_LoopData.ECU.Vehicle_Speed
+ *
+ * vehicle_state.driving_mode
+ *   <- g_CANB_LoopData.ECU.driving_mode
+ *
+ * vehicle_state.motors_count
+ *   <- fixed 4
+ *
+ * vehicle_state.motors[i].position
+ *   <- CANB motor array order:
+ *      i=0 -> REAR_LEFT
+ *      i=1 -> REAR_RIGHT
+ *      i=2 -> FRONT_LEFT
+ *      i=3 -> FRONT_RIGHT
+ *
+ * vehicle_state.motors[i].rpm
+ *   <- g_CANB_LoopData.ECU.Motor_RPM[i]
+ *
+ * vehicle_state.motors[i].torque_nm
+ *   <- g_CANB_LoopData.ECU.Motor_Torque[i]
+ *
+ * vehicle_state.motors[i].power_w
+ *   <- g_CANB_LoopData.ECU.Motor_Power[i] * 1000
+ *      (CANB stores kW, protobuf expects W)
+ *
+ * vehicle_state.motors[i].motor_error
+ *   <- g_CANB_LoopData.ECU.ERRO[i]
+ *
+ * Fields that currently have no direct CANB source are initialized to zero or
+ * UNSPECIFIED:
+ *   brake_position
+ *   vcu_status
+ */
+
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -45,43 +83,6 @@ osStatus_t Publish_QueueTopic(PublishTopic_t topic);
 void Publish_OnTopicDequeued(PublishTopic_t topic);
 bool Publish_BuildFrame(PublishTopic_t topic, uint8_t *frame_buffer, uint16_t frame_capacity, uint16_t *frame_size);
 
-/*
- * CANB loop -> fsae_VehicleState mapping
- *
- * vehicle_state.speed_kmh
- *   <- g_CANB_LoopData.ECU.Vehicle_Speed
- *
- * vehicle_state.driving_mode
- *   <- g_CANB_LoopData.ECU.driving_mode
- *
- * vehicle_state.motors_count
- *   <- fixed 4
- *
- * vehicle_state.motors[i].position
- *   <- CANB motor array order:
- *      i=0 -> REAR_LEFT
- *      i=1 -> REAR_RIGHT
- *      i=2 -> FRONT_LEFT
- *      i=3 -> FRONT_RIGHT
- *
- * vehicle_state.motors[i].rpm
- *   <- g_CANB_LoopData.ECU.Motor_RPM[i]
- *
- * vehicle_state.motors[i].torque_nm
- *   <- g_CANB_LoopData.ECU.Motor_Torque[i]
- *
- * vehicle_state.motors[i].power_w
- *   <- g_CANB_LoopData.ECU.Motor_Power[i] * 1000
- *      (CANB stores kW, protobuf expects W)
- *
- * vehicle_state.motors[i].motor_error
- *   <- g_CANB_LoopData.ECU.ERRO[i]
- *
- * Fields that currently have no direct CANB source are initialized to zero or
- * UNSPECIFIED:
- *   brake_position
- *   vcu_status
- */
 void Publish_MapCanbVehicleState(fsae_VehicleState *vehicle_state);
 
 #ifdef __cplusplus
