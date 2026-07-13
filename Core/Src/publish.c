@@ -15,7 +15,7 @@
 #include "freertos_app.h"
 #include "usart.h"
 
-extern osMessageQueueId_t myQueue04Handle;
+extern osMessageQueueId_t PublishQueueItemHandle;
 
 static fsae_FastTelemetry g_publishFastTelemetry;
 static fsae_TelemetryFrame g_publishTelemetryFrame;
@@ -68,7 +68,7 @@ osStatus_t Publish_QueueTopic(PublishTopic_t topic)
     uint32_t topic_mask;
     osStatus_t status;
 
-    if ((myQueue04Handle == NULL) || !Publish_IsTopicValid(topic))
+    if ((PublishQueueItemHandle == NULL) || !Publish_IsTopicValid(topic))
     {
         return osErrorResource;
     }
@@ -85,7 +85,7 @@ osStatus_t Publish_QueueTopic(PublishTopic_t topic)
     taskEXIT_CRITICAL();
 
     item.topic = topic;
-    status = osMessageQueuePut(myQueue04Handle, &item, 0U, 0U);
+    status = osMessageQueuePut(PublishQueueItemHandle, &item, 0U, 0U);
     if (status != osOK)
     {
         taskENTER_CRITICAL();

@@ -21,8 +21,10 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
+#include "cmsis_os2.h"
 #include <stdio.h>
 #include <string.h>
+#include "FreeRTOS.h"
 
 /* The 4G DTU only needs a bounded AT bootstrap during power-up.
  * After that, USART1 returns to raw TCP payload transport and task08 keeps
@@ -36,7 +38,6 @@
 #define Y100M_AT_LOG_BUFFER_SIZE          192U
 #define Y100M_AT_GUARD_TIME_MS           1000U
 #define Y100M_AT_CMD_TIMEOUT_MS          2000U
-#define Y100M_AT_RX_POLL_SLICE_MS          20U
 #define Y100M_AT_RESET_PULSE_MS          1000U
 #define Y100M_AT_BOOT_WAIT_MS            5000U
 #define Y100M_AT_MAX_HANDSHAKE_ATTEMPTS     2U
@@ -55,6 +56,19 @@ static uint8_t g_y100mBootstrapDone = 0U;
 static uint8_t g_y100mBootstrapOk = 0U;
 static char g_y100mAtReplyBuffer[Y100M_AT_REPLY_BUFFER_SIZE];
 static char g_y100mLogBuffer[Y100M_AT_LOG_BUFFER_SIZE];
+
+/* ── USART1 RX DMA for AT response reception ── */
+#define Y100M_AT_RX_DMA_BUFFER_SIZE       256U
+static uint8_t  g_y100mUsart1RxDmaBuffer[Y100M_AT_RX_DMA_BUFFER_SIZE];
+static volatile uint8_t  g_y100mUsart1RxDmaDone;
+static volatile uint16_t g_y100mUsart1RxDmaSize;
+
+/* Called from HAL_UARTEx_RxEventCallback when USART1 idle is detected. */
+void Y100M_OnUsart1RxIdle(uint16_t size)
+{
+    g_y100mUsart1RxDmaSize = size;
+    g_y100mUsart1RxDmaDone = 1U;
+}
 
 /* Keep all DTU power-up AT steps local to usart.c so later command tweaks stay
  * isolated from FreeRTOS tasks and publish/protobuf logic.
@@ -88,7 +102,7 @@ static void Y100M_EnterAtMode(void);
 static HAL_StatusTypeDef Y100M_ExitAtMode(void);
 static void Y100M_ResetPulse(void);
 static HAL_StatusTypeDef Y100M_RunBootstrapSteps(void);
-static void Y100M_BootstrapOnce(void);
+void Y100M_BootstrapOnce(void);
 
 /* USER CODE END 0 */
 
@@ -118,7 +132,7 @@ void MX_USART1_UART_Init(void)
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
   huart1.Init.Mode = UART_MODE_TX_RX;
-  huart1.Init.HwFlowCtl = UART_HWCONTROL_RTS_CTS;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
   if (HAL_UART_Init(&huart1) != HAL_OK)
   {
@@ -183,11 +197,6 @@ void MX_USART3_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART3_Init 2 */
-  /* Run the one-shot 4G bootstrap here because both USART1 and USART3 are
-   * initialized at this point: USART1 is ready for AT commands and USART3 is
-   * ready to carry DMA-backed debug logs.
-   */
-  Y100M_BootstrapOnce();
 
   /* USER CODE END USART3_Init 2 */
 
@@ -209,10 +218,8 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     /**USART1 GPIO Configuration
     PA9     ------> USART1_TX
     PA10     ------> USART1_RX
-    PA11     ------> USART1_CTS
-    PA12     ------> USART1_RTS
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_9|GPIO_PIN_11|GPIO_PIN_12;
+    GPIO_InitStruct.Pin = GPIO_PIN_9;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
@@ -371,10 +378,8 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
     /**USART1 GPIO Configuration
     PA9     ------> USART1_TX
     PA10     ------> USART1_RX
-    PA11     ------> USART1_CTS
-    PA12     ------> USART1_RTS
     */
-    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_9|GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12);
+    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_9|GPIO_PIN_10);
 
     /* USART1 DMA DeInit */
     HAL_DMA_DeInit(uartHandle->hdmatx);
@@ -427,6 +432,62 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
 }
 
 /* USER CODE BEGIN 1 */
+/* ── DMA-based USART1 send for AT command sequences ── */
+static HAL_StatusTypeDef Y100M_Uart1DmaSend(const uint8_t *data, uint16_t length, uint32_t timeout_ms)
+{
+  uint32_t start_tick;
+  HAL_StatusTypeDef status;
+
+  if ((data == NULL) || (length == 0U) || (huart1.Instance == NULL))
+  {
+    return HAL_ERROR;
+  }
+
+  start_tick = HAL_GetTick();
+  while ((HAL_UART_GetState(&huart1) == HAL_UART_STATE_BUSY_TX) ||
+         (HAL_UART_GetState(&huart1) == HAL_UART_STATE_BUSY_TX_RX))
+  {
+    if ((HAL_GetTick() - start_tick) >= timeout_ms)
+    {
+      return HAL_TIMEOUT;
+    }
+    osDelay(1);
+  }
+
+  status = HAL_UART_Transmit_DMA(&huart1, (uint8_t *)data, length);
+  if (status != HAL_OK)
+  {
+    return status;
+  }
+
+  start_tick = HAL_GetTick();
+  while ((HAL_UART_GetState(&huart1) == HAL_UART_STATE_BUSY_TX) ||
+         (HAL_UART_GetState(&huart1) == HAL_UART_STATE_BUSY_TX_RX))
+  {
+    if ((HAL_GetTick() - start_tick) >= timeout_ms)
+    {
+      (void)HAL_UART_Abort(&huart1);
+      return HAL_TIMEOUT;
+    }
+    osDelay(1);
+  }
+
+  return HAL_OK;
+}
+
+/* ── RTOS-aware millisecond delay ── */
+static void Y100M_DelayMs(uint32_t delay_ms)
+{
+  if (osKernelGetState() == osKernelRunning)
+  {
+    osDelay(delay_ms);
+  }
+  else
+  {
+    HAL_Delay(delay_ms);
+  }
+}
+
 /* Send a debug line through USART3 using DMA and wait until the transfer finishes. */
 static HAL_StatusTypeDef Y100M_DebugUart3DmaBlocking(const uint8_t *data, uint16_t length)
 {
@@ -481,22 +542,30 @@ static void Y100M_DebugLog(const char *text)
 /* Remove any stale bytes from USART1 before the next AT command is sent. */
 static void Y100M_Uart1DrainRx(void)
 {
-  uint8_t byte = 0U;
+  uint32_t start_tick = HAL_GetTick();
+  uint8_t byte;
 
-  while (HAL_UART_Receive(&huart1, &byte, 1U, 2U) == HAL_OK)
+  while ((HAL_GetTick() - start_tick) < 50U)
   {
-    /* Drain every pending byte before issuing the next AT command so stale
-     * replies never leak into the next command/response match.
-     */
+    if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE) != RESET)
+    {
+      byte = (uint8_t)(huart1.Instance->DR & 0xFFU);
+      (void)byte;
+      start_tick = HAL_GetTick();
+    }
+    else
+    {
+      osDelay(1);
+    }
   }
 }
 
-/* Wait for a reply that contains the expected text, or fail on timeout/error. */
+/* Wait for a reply that contains the expected text, or fail on timeout.
+ * Uses USART1 RX DMA with idle detection instead of byte-by-byte polling. */
 static HAL_StatusTypeDef Y100M_WaitReply(const char *expected, uint32_t timeout_ms, char *reply_buffer, uint16_t reply_capacity)
 {
-  uint8_t byte = 0U;
-  uint16_t offset = 0U;
   uint32_t start_tick = HAL_GetTick();
+  HAL_StatusTypeDef status;
 
   if ((reply_buffer == NULL) || (reply_capacity == 0U))
   {
@@ -505,26 +574,60 @@ static HAL_StatusTypeDef Y100M_WaitReply(const char *expected, uint32_t timeout_
 
   reply_buffer[0] = '\0';
 
+  g_y100mUsart1RxDmaDone = 0U;
+  g_y100mUsart1RxDmaSize = 0U;
+  (void)HAL_UART_DMAStop(&huart1);
+  __HAL_UART_CLEAR_OREFLAG(&huart1);
+
+  status = HAL_UARTEx_ReceiveToIdle_DMA(&huart1,
+                                         g_y100mUsart1RxDmaBuffer,
+                                         Y100M_AT_RX_DMA_BUFFER_SIZE);
+  if (status != HAL_OK)
+  {
+    return status;
+  }
+
   while ((HAL_GetTick() - start_tick) < timeout_ms)
   {
-    if (HAL_UART_Receive(&huart1, &byte, 1U, Y100M_AT_RX_POLL_SLICE_MS) == HAL_OK)
+    if (g_y100mUsart1RxDmaDone != 0U)
     {
-      if (offset < (uint16_t)(reply_capacity - 1U))
+      uint16_t received = g_y100mUsart1RxDmaSize;
+      if (received > 0U && received <= Y100M_AT_RX_DMA_BUFFER_SIZE)
       {
-        reply_buffer[offset++] = (char)byte;
-        reply_buffer[offset] = '\0';
+        uint16_t copy_len = received;
+        if (copy_len > (uint16_t)(reply_capacity - 1U))
+        {
+          copy_len = (uint16_t)(reply_capacity - 1U);
+        }
+        (void)memcpy(reply_buffer, g_y100mUsart1RxDmaBuffer, copy_len);
+        reply_buffer[copy_len] = '\0';
+
+        if ((expected != NULL) && (expected[0] != '\0') &&
+            (strstr(reply_buffer, expected) != NULL))
+        {
+          return HAL_OK;
+        }
+
+        if ((strstr(reply_buffer, "ERROR") != NULL) &&
+            ((expected == NULL) || (strstr(expected, "ERROR") == NULL)))
+        {
+          return HAL_ERROR;
+        }
       }
 
-      if ((expected != NULL) && (expected[0] != '\0') && (strstr(reply_buffer, expected) != NULL))
+      g_y100mUsart1RxDmaDone = 0U;
+      g_y100mUsart1RxDmaSize = 0U;
+      status = HAL_UARTEx_ReceiveToIdle_DMA(&huart1,
+                                             g_y100mUsart1RxDmaBuffer,
+                                             Y100M_AT_RX_DMA_BUFFER_SIZE);
+      if (status != HAL_OK)
       {
-        return HAL_OK;
+        return status;
       }
-
-      if ((strstr(reply_buffer, "ERROR") != NULL) &&
-          ((expected == NULL) || (strstr(expected, "ERROR") == NULL)))
-      {
-        return HAL_ERROR;
-      }
+    }
+    else
+    {
+      osDelay(1);
     }
   }
 
@@ -554,13 +657,13 @@ static HAL_StatusTypeDef Y100M_SendAtExpect(const char *command, const char *exp
     Y100M_DebugLog(g_y100mLogBuffer);
   }
 
-  tx_status = HAL_UART_Transmit(&huart1, (uint8_t *)command, (uint16_t)strlen(command), timeout_ms);
+  tx_status = Y100M_Uart1DmaSend((const uint8_t *)command, (uint16_t)strlen(command), timeout_ms);
   if (tx_status != HAL_OK)
   {
     return tx_status;
   }
 
-  tx_status = HAL_UART_Transmit(&huart1, (uint8_t *)"\r\n", 2U, timeout_ms);
+  tx_status = Y100M_Uart1DmaSend((const uint8_t *)"\r\n", 2U, timeout_ms);
   if (tx_status != HAL_OK)
   {
     return tx_status;
@@ -591,8 +694,8 @@ static void Y100M_EnterAtMode(void)
   /* "+++" is treated as the lightest escape from transparent transfer back to
    * AT mode. If the module is already in AT mode, this sequence is harmless.
    */
-  (void)HAL_UART_Transmit(&huart1, (uint8_t *)"+++", 3U, Y100M_AT_CMD_TIMEOUT_MS);
-  HAL_Delay(Y100M_AT_GUARD_TIME_MS);
+  (void)Y100M_Uart1DmaSend((const uint8_t *)"+++", 3U, Y100M_AT_CMD_TIMEOUT_MS);
+  Y100M_DelayMs(Y100M_AT_GUARD_TIME_MS);
   Y100M_Uart1DrainRx();
 }
 
@@ -612,9 +715,9 @@ static void Y100M_ResetPulse(void)
 {
   Y100M_DebugLog("[4G] AT bootstrap failed, pulse RST_4G high for 1s\r\n");
   HAL_GPIO_WritePin(RST_4G_GPIO_Port, RST_4G_Pin, GPIO_PIN_SET);
-  HAL_Delay(Y100M_AT_RESET_PULSE_MS);
+  Y100M_DelayMs(Y100M_AT_RESET_PULSE_MS);
   HAL_GPIO_WritePin(RST_4G_GPIO_Port, RST_4G_Pin, GPIO_PIN_RESET);
-  HAL_Delay(Y100M_AT_BOOT_WAIT_MS);
+  Y100M_DelayMs(Y100M_AT_BOOT_WAIT_MS);
   Y100M_Uart1DrainRx();
 }
 
@@ -680,7 +783,7 @@ static HAL_StatusTypeDef Y100M_RunBootstrapSteps(void)
 }
 
 /* Execute the one-shot bootstrap only once during startup. */
-static void Y100M_BootstrapOnce(void)
+void Y100M_BootstrapOnce(void)
 {
   HAL_StatusTypeDef status;
 

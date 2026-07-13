@@ -11,6 +11,10 @@ extern "C" {
 #define APP_UART_TX_MAX_PAYLOAD        288U
 #define TASK01_DEBUG_QUEUE_DEPTH       2U
 #define TASK04_MLX_LINE_BUFFER_SIZE    APP_UART_TX_MAX_PAYLOAD
+#define TASK05_RS485_DMA_BUFFER_SIZE    256U
+#define TASK05_FLAG_RS485_RX_READY      (1UL << 0)
+#define TASK05_FLAG_RS485_RX_RESTART    (1UL << 1)
+#define TASK08_PUBLISH_COOLDOWN_MS      10U
 
 typedef struct
 {
@@ -25,31 +29,33 @@ typedef struct
 } App_Uart_Tx_Item_t;
 
 extern osThreadId_t defaultTaskHandle;
-extern osThreadId_t myTask02Handle;
-extern osThreadId_t myTask03Handle;
-extern osThreadId_t myTask04Handle;
-extern osThreadId_t myTask05Handle;
-extern osThreadId_t myTask06Handle;
-extern osThreadId_t myTask07Handle;
-extern osThreadId_t myTask08Handle;
-extern osThreadId_t myTask09Handle;
+extern osThreadId_t CanForViehcleHandle;
+extern osThreadId_t CanForBMSHandle;
+extern osThreadId_t MLX90640Handle;
+extern osThreadId_t TensionSensorHandle;
+extern osThreadId_t SPICanControlHandle;
+extern osThreadId_t SPICanCDCHandle;
+extern osThreadId_t Publish4GHandle;
+extern osThreadId_t CanBTextHandle;
+extern osThreadId_t initTaskBootHandle;
 
-extern osMessageQueueId_t myQueue02Handle;
-extern osMessageQueueId_t myQueue03Handle;
-extern osMessageQueueId_t myQueue04Handle;
-extern osMessageQueueId_t myQueue05Handle;
+extern osMessageQueueId_t CAN_Msg_QueueHandle;
+extern osMessageQueueId_t CAN_Msg_Queue_2Handle;
+extern osMessageQueueId_t PublishQueueItemHandle;
+extern osMessageQueueId_t CAN_Tx_QueueHandle;
 extern osMessageQueueId_t task01DebugQueueHandle;
 
 void MX_FREERTOS_Init(void);
 void StartDefaultTask(void *argument);
-void StartTask02(void *argument);
-void StartTask03(void *argument);
-void StartTask04(void *argument);
-void StartTask05(void *argument);
-void StartTask06(void *argument);
-void StartTask07(void *argument);
-void StartTask08(void *argument);
-void StartTask09(void *argument);
+void CanForViehcleTask(void *argument);
+void CanForBMSTask(void *argument);
+void MLX90640Task(void *argument);
+void TensionSensorTask(void *argument);
+void SPICanControlTask(void *argument);
+void SPICanCDCTask(void *argument);
+void Publish4GTask(void *argument);
+void CanBTextTask(void *argument);
+void InitTask_Boot(void *argument);
 
 #ifdef __cplusplus
 }

@@ -75,26 +75,16 @@ endif
 ######################################
 # C sources
 C_SOURCES =  \
-Core/Src/adc.c \
-Core/Src/telemetry_data.c \
-Core/Src/can_decode.c \
+Core/Src/MLX90640_API.c \
+Core/Src/MLX90640_I2C_Driver.c \
 Core/Src/can.c \
+Core/Src/can_decode.c \
 Core/Src/dma.c \
-Core/Src/fdcan.c \
 Core/Src/freertos.c \
-Core/Src/fsae_telemetry.pb.c \
 Core/Src/gpio.c \
 Core/Src/i2c.c \
 Core/Src/main.c \
-Core/Src/MLX90640_API.c \
-Core/Src/mcp2518fd.c \
 Core/Src/mlx90640_app.c \
-Core/Src/MLX90640_I2C_Driver.c \
-Core/Src/pb_common.c \
-Core/Src/pb_decode.c \
-Core/Src/pb_encode.c \
-Core/Src/publish.c \
-Core/Src/rtc.c \
 Core/Src/spi.c \
 Core/Src/stm32f4xx_hal_msp.c \
 Core/Src/stm32f4xx_hal_timebase_tim.c \
@@ -102,10 +92,9 @@ Core/Src/stm32f4xx_it.c \
 Core/Src/syscalls.c \
 Core/Src/sysmem.c \
 Core/Src/system_stm32f4xx.c \
+Core/Src/telemetry_data.c \
 Core/Src/usart.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c \
-Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_adc.c \
-Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_adc_ex.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_can.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_cortex.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma.c \
@@ -121,28 +110,21 @@ Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr_ex.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc_ex.c \
-Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc.c \
-Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc_ex.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_spi.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim_ex.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c \
-Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_adc.c \
-FATFS/App/fatfs.c \
-FATFS/Target/user_diskio.c \
-Middlewares/Third_Party/FatFs/src/diskio.c \
-Middlewares/Third_Party/FatFs/src/ff.c \
-Middlewares/Third_Party/FatFs/src/ff_gen_drv.c \
+Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c \
 Middlewares/Third_Party/FreeRTOS/Source/croutine.c \
 Middlewares/Third_Party/FreeRTOS/Source/event_groups.c \
 Middlewares/Third_Party/FreeRTOS/Source/list.c \
+Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c \
+Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c \
 Middlewares/Third_Party/FreeRTOS/Source/queue.c \
 Middlewares/Third_Party/FreeRTOS/Source/stream_buffer.c \
 Middlewares/Third_Party/FreeRTOS/Source/tasks.c \
-Middlewares/Third_Party/FreeRTOS/Source/timers.c \
-Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c \
-Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c \
-Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c
+Middlewares/Third_Party/FreeRTOS/Source/timers.c
+
 
 CXX_SOURCES = \
 
@@ -150,6 +132,7 @@ CXX_SOURCES = \
 # ASM sources
 ASM_SOURCES =  \
 Core/Startup/startup_stm32f407zetx.s
+
 
 #######################################
 # Tools
@@ -218,9 +201,7 @@ AS_DEFS =
 
 # C defines
 C_DEFS =  \
--DDEBUG \
--DUSE_HAL_DRIVER \
--DSTM32F407xx
+
 
 # CXX defines
 CXX_DEFS =  \
@@ -232,16 +213,17 @@ AS_INCLUDES = \
 # C includes
 C_INCLUDES =  \
 -ICore/Inc \
--IDrivers/STM32F4xx_HAL_Driver/Inc \
--IDrivers/STM32F4xx_HAL_Driver/Inc/Legacy \
 -IDrivers/CMSIS/Device/ST/STM32F4xx/Include \
 -IDrivers/CMSIS/Include \
--IFATFS/Target \
+-IDrivers/STM32F4xx_HAL_Driver/Inc \
+-IDrivers/STM32F4xx_HAL_Driver/Inc/Legacy \
 -IFATFS/App \
--IMiddlewares/Third_Party/FreeRTOS/Source/include \
--IMiddlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F \
+-IFATFS/Target \
 -IMiddlewares/Third_Party/FatFs/src \
--IMiddlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2
+-IMiddlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 \
+-IMiddlewares/Third_Party/FreeRTOS/Source/include \
+-IMiddlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F
+
 
 
 # compile gcc flags
@@ -397,4 +379,3 @@ clean:
 -include $(wildcard $(RELEASE_DIRECTORY)/*.d)
 
 # *** EOF ***
-

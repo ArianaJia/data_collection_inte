@@ -47,7 +47,8 @@ void MX_USART2_UART_Init(void);
 void MX_USART3_UART_Init(void);
 
 /* USER CODE BEGIN Prototypes */
-
+void Y100M_BootstrapOnce(void);
+void Y100M_OnUsart1RxIdle(uint16_t size);
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus
