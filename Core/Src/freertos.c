@@ -512,7 +512,7 @@ void StartTask06(void *argument)
     }
 
     Task06_ParseSpi1Message(&recv_data);
-    osDelay(1);
+    osDelay(10);
   }
   /* USER CODE END StartTask06 */
 }
@@ -555,7 +555,7 @@ void StartTask07(void *argument)
     }
 
     Task07_ParseSpi3Message(&recv_data);
-    osDelay(1);
+    osDelay(10);
   }
   /* USER CODE END StartTask07 */
 }
@@ -602,6 +602,9 @@ void StartTask08(void *argument)
       }
     }
   }
+
+  osDelay(10);
+
   /* USER CODE END StartTask08 */
 }
 
@@ -625,6 +628,9 @@ void StartTask09(void *argument)
       Task09_SendCan1Message(&tx_data);
     }
   }
+
+  osDelay(10);
+
   /* USER CODE END StartTask09 */
 }
 
