@@ -43,16 +43,15 @@
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
+typedef StaticTask_t osStaticThreadDef_t;
+typedef StaticQueue_t osStaticMessageQDef_t;
 /* USER CODE BEGIN PTD */
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TASK05_RS485_DMA_BUFFER_SIZE    256U
-#define TASK05_FLAG_RS485_RX_READY      (1UL << 0)
-#define TASK05_FLAG_RS485_RX_RESTART    (1UL << 1)
-#define TASK08_PUBLISH_COOLDOWN_MS      10U
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -62,148 +61,242 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-static App_Uart_Tx_Item_t g_task01DebugTxItem;
+static App_Uart_Tx_Item_t g_debugTxItem;
 static App_Uart_Tx_Item_t g_uartQueueWorkItem;
-static char g_task04MlxLineBuffer[APP_UART_TX_MAX_PAYLOAD];
-static uint8_t g_task05Rs485DmaBuffer[TASK05_RS485_DMA_BUFFER_SIZE];
-static volatile uint16_t g_task05Rs485DmaLastEventPos = 0U;
-static volatile uint16_t g_task05Rs485DmaPendingBytes = 0U;
-static volatile uint8_t g_task05Rs485DmaOverflow = 0U;
-static uint16_t g_task05Rs485DmaReadPos = 0U;
-static uint8_t g_task08PublishFrameBuffer[PUBLISH_MAX_FRAME_SIZE];
+static char g_mlxLineBuffer[APP_UART_TX_MAX_PAYLOAD];
+static uint8_t g_rs485DmaBuffer[RS485_DMA_BUFFER_SIZE];
+static volatile uint16_t g_rs485DmaLastEventPos = 0U;
+static volatile uint16_t g_rs485DmaPendingBytes = 0U;
+static volatile uint8_t g_rs485DmaOverflow = 0U;
+static uint16_t g_rs485DmaReadPos = 0U;
+static uint8_t g_publishFrameBuffer[PUBLISH_MAX_FRAME_SIZE];
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
+uint32_t defaultTaskBuffer[ 192 ];
+osStaticThreadDef_t defaultTaskControlBlock;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 192 * 4,
+  .cb_mem = &defaultTaskControlBlock,
+  .cb_size = sizeof(defaultTaskControlBlock),
+  .stack_mem = &defaultTaskBuffer[0],
+  .stack_size = sizeof(defaultTaskBuffer),
   .priority = (osPriority_t) osPriorityNormal,
 };
-/* Definitions for myTask02 */
-osThreadId_t myTask02Handle;
-const osThreadAttr_t myTask02_attributes = {
-  .name = "myTask02",
-  .stack_size = 128 * 4,
+/* Definitions for CanForViehcle */
+osThreadId_t CanForViehcleHandle;
+uint32_t CanForViehcleBuffer[ 128 ];
+osStaticThreadDef_t CanForViehcleControlBlock;
+const osThreadAttr_t CanForViehcle_attributes = {
+  .name = "CanForViehcle",
+  .cb_mem = &CanForViehcleControlBlock,
+  .cb_size = sizeof(CanForViehcleControlBlock),
+  .stack_mem = &CanForViehcleBuffer[0],
+  .stack_size = sizeof(CanForViehcleBuffer),
   .priority = (osPriority_t) osPriorityHigh,
 };
-/* Definitions for myTask03 */
-osThreadId_t myTask03Handle;
-const osThreadAttr_t myTask03_attributes = {
-  .name = "myTask03",
-  .stack_size = 128 * 4,
+/* Definitions for CanForBMS */
+osThreadId_t CanForBMSHandle;
+uint32_t CanForBMSTaskBuffer[ 128 ];
+osStaticThreadDef_t CanForBMSTaskControlBlock;
+const osThreadAttr_t CanForBMS_attributes = {
+  .name = "CanForBMS",
+  .cb_mem = &CanForBMSTaskControlBlock,
+  .cb_size = sizeof(CanForBMSTaskControlBlock),
+  .stack_mem = &CanForBMSTaskBuffer[0],
+  .stack_size = sizeof(CanForBMSTaskBuffer),
   .priority = (osPriority_t) osPriorityHigh,
 };
-/* Definitions for myTask04 */
-osThreadId_t myTask04Handle;
-const osThreadAttr_t myTask04_attributes = {
-  .name = "myTask04",
-  .stack_size = 384 * 4,
+/* Definitions for MLX90640 */
+osThreadId_t MLX90640Handle;
+uint32_t MLX90640Buffer[ 384 ];
+osStaticThreadDef_t MLX90640ControlBlock;
+const osThreadAttr_t MLX90640_attributes = {
+  .name = "MLX90640",
+  .cb_mem = &MLX90640ControlBlock,
+  .cb_size = sizeof(MLX90640ControlBlock),
+  .stack_mem = &MLX90640Buffer[0],
+  .stack_size = sizeof(MLX90640Buffer),
   .priority = (osPriority_t) osPriorityAboveNormal,
 };
-/* Definitions for myTask05 */
-osThreadId_t myTask05Handle;
-const osThreadAttr_t myTask05_attributes = {
-  .name = "myTask05",
-  .stack_size = 128 * 4,
+/* Definitions for TensionSensor */
+osThreadId_t TensionSensorHandle;
+uint32_t TensionSensorBuffer[ 128 ];
+osStaticThreadDef_t TensionSensorControlBlock;
+const osThreadAttr_t TensionSensor_attributes = {
+  .name = "TensionSensor",
+  .cb_mem = &TensionSensorControlBlock,
+  .cb_size = sizeof(TensionSensorControlBlock),
+  .stack_mem = &TensionSensorBuffer[0],
+  .stack_size = sizeof(TensionSensorBuffer),
   .priority = (osPriority_t) osPriorityLow,
 };
-/* Definitions for myTask06 */
-osThreadId_t myTask06Handle;
-const osThreadAttr_t myTask06_attributes = {
-  .name = "myTask06",
-  .stack_size = 128 * 4,
+/* Definitions for SPICanControl */
+osThreadId_t SPICanControlHandle;
+uint32_t SPICanControlBuffer[ 128 ];
+osStaticThreadDef_t SPICanControlControlBlock;
+const osThreadAttr_t SPICanControl_attributes = {
+  .name = "SPICanControl",
+  .cb_mem = &SPICanControlControlBlock,
+  .cb_size = sizeof(SPICanControlControlBlock),
+  .stack_mem = &SPICanControlBuffer[0],
+  .stack_size = sizeof(SPICanControlBuffer),
   .priority = (osPriority_t) osPriorityAboveNormal,
 };
-/* Definitions for myTask07 */
-osThreadId_t myTask07Handle;
-const osThreadAttr_t myTask07_attributes = {
-  .name = "myTask07",
-  .stack_size = 128 * 4,
+/* Definitions for SPICanCDC */
+osThreadId_t SPICanCDCHandle;
+uint32_t SPICanCDCBuffer[ 128 ];
+osStaticThreadDef_t SPICanCDCControlBlock;
+const osThreadAttr_t SPICanCDC_attributes = {
+  .name = "SPICanCDC",
+  .cb_mem = &SPICanCDCControlBlock,
+  .cb_size = sizeof(SPICanCDCControlBlock),
+  .stack_mem = &SPICanCDCBuffer[0],
+  .stack_size = sizeof(SPICanCDCBuffer),
   .priority = (osPriority_t) osPriorityLow,
 };
-/* Definitions for myTask08 */
-osThreadId_t myTask08Handle;
-const osThreadAttr_t myTask08_attributes = {
-  .name = "myTask08",
-  .stack_size = 192 * 4,
+/* Definitions for Publish4G */
+osThreadId_t Publish4GHandle;
+uint32_t Publish4GBuffer[ 192 ];
+osStaticThreadDef_t Publish4GControlBlock;
+const osThreadAttr_t Publish4G_attributes = {
+  .name = "Publish4G",
+  .cb_mem = &Publish4GControlBlock,
+  .cb_size = sizeof(Publish4GControlBlock),
+  .stack_mem = &Publish4GBuffer[0],
+  .stack_size = sizeof(Publish4GBuffer),
   .priority = (osPriority_t) osPriorityRealtime,
 };
-/* Definitions for myTask09 */
-osThreadId_t myTask09Handle;
-const osThreadAttr_t myTask09_attributes = {
-  .name = "myTask09",
-  .stack_size = 128 * 4,
+/* Definitions for CanBText */
+osThreadId_t CanBTextHandle;
+uint32_t CanBTextBuffer[ 128 ];
+osStaticThreadDef_t CanBTextControlBlock;
+const osThreadAttr_t CanBText_attributes = {
+  .name = "CanBText",
+  .cb_mem = &CanBTextControlBlock,
+  .cb_size = sizeof(CanBTextControlBlock),
+  .stack_mem = &CanBTextBuffer[0],
+  .stack_size = sizeof(CanBTextBuffer),
   .priority = (osPriority_t) osPriorityRealtime,
 };
-/* Definitions for myQueue01 */
-osMessageQueueId_t myQueue01Handle;
-const osMessageQueueAttr_t myQueue01_attributes = {
-  .name = "myQueue01"
+/* Definitions for initTaskBoot */
+osThreadId_t initTaskBootHandle;
+uint32_t initTaskBootBuffer[ 384 ];
+osStaticThreadDef_t initTaskBootControlBlock;
+const osThreadAttr_t initTaskBoot_attributes = {
+  .name = "initTaskBoot",
+  .cb_mem = &initTaskBootControlBlock,
+  .cb_size = sizeof(initTaskBootControlBlock),
+  .stack_mem = &initTaskBootBuffer[0],
+  .stack_size = sizeof(initTaskBootBuffer),
+  .priority = (osPriority_t) osPriorityLow1,
 };
-/* Definitions for myQueue02 */
-osMessageQueueId_t myQueue02Handle;
-const osMessageQueueAttr_t myQueue02_attributes = {
-  .name = "myQueue02"
+/* Definitions for App_Uart_Tx */
+osMessageQueueId_t App_Uart_TxHandle;
+uint8_t App_Uart_TxBuffer[ 2 * sizeof( App_Uart_Tx_Item_t ) ];
+osStaticMessageQDef_t App_Uart_TxControlBlock;
+const osMessageQueueAttr_t App_Uart_Tx_attributes = {
+  .name = "App_Uart_Tx",
+  .cb_mem = &App_Uart_TxControlBlock,
+  .cb_size = sizeof(App_Uart_TxControlBlock),
+  .mq_mem = &App_Uart_TxBuffer,
+  .mq_size = sizeof(App_Uart_TxBuffer)
 };
-/* Definitions for myQueue03 */
-osMessageQueueId_t myQueue03Handle;
-const osMessageQueueAttr_t myQueue03_attributes = {
-  .name = "myQueue03"
+/* Definitions for CAN_Msg_Queue */
+osMessageQueueId_t CAN_Msg_QueueHandle;
+uint8_t CAN_Msg_QueueBuffer[ 16 * sizeof( CAN_Msg_Queue_t ) ];
+osStaticMessageQDef_t CAN_Msg_QueueControlBlock;
+const osMessageQueueAttr_t CAN_Msg_Queue_attributes = {
+  .name = "CAN_Msg_Queue",
+  .cb_mem = &CAN_Msg_QueueControlBlock,
+  .cb_size = sizeof(CAN_Msg_QueueControlBlock),
+  .mq_mem = &CAN_Msg_QueueBuffer,
+  .mq_size = sizeof(CAN_Msg_QueueBuffer)
 };
-/* Definitions for myQueue04 */
-osMessageQueueId_t myQueue04Handle;
-const osMessageQueueAttr_t myQueue04_attributes = {
-  .name = "myQueue04"
+/* Definitions for CAN_Msg_Queue_2 */
+osMessageQueueId_t CAN_Msg_Queue_2Handle;
+uint8_t CAN_Msg_Queue_2Buffer[ 16 * sizeof( CAN_Msg_Queue_t ) ];
+osStaticMessageQDef_t CAN_Msg_Queue_2ControlBlock;
+const osMessageQueueAttr_t CAN_Msg_Queue_2_attributes = {
+  .name = "CAN_Msg_Queue_2",
+  .cb_mem = &CAN_Msg_Queue_2ControlBlock,
+  .cb_size = sizeof(CAN_Msg_Queue_2ControlBlock),
+  .mq_mem = &CAN_Msg_Queue_2Buffer,
+  .mq_size = sizeof(CAN_Msg_Queue_2Buffer)
 };
-/* Definitions for myQueue05 */
-osMessageQueueId_t myQueue05Handle;
-const osMessageQueueAttr_t myQueue05_attributes = {
-  .name = "myQueue05"
+/* Definitions for PublishQueueItem */
+osMessageQueueId_t PublishQueueItemHandle;
+uint8_t PublishQueueItemBuffer[ 16 * sizeof( PublishQueueItem_t ) ];
+osStaticMessageQDef_t PublishQueueItemControlBlock;
+const osMessageQueueAttr_t PublishQueueItem_attributes = {
+  .name = "PublishQueueItem",
+  .cb_mem = &PublishQueueItemControlBlock,
+  .cb_size = sizeof(PublishQueueItemControlBlock),
+  .mq_mem = &PublishQueueItemBuffer,
+  .mq_size = sizeof(PublishQueueItemBuffer)
+};
+/* Definitions for CAN_Tx_Queue */
+osMessageQueueId_t CAN_Tx_QueueHandle;
+uint8_t CAN_Tx_QueueBuffer[ 8 * sizeof( CAN_Tx_Queue_t ) ];
+osStaticMessageQDef_t CAN_Tx_QueueControlBlock;
+const osMessageQueueAttr_t CAN_Tx_Queue_attributes = {
+  .name = "CAN_Tx_Queue",
+  .cb_mem = &CAN_Tx_QueueControlBlock,
+  .cb_size = sizeof(CAN_Tx_QueueControlBlock),
+  .mq_mem = &CAN_Tx_QueueBuffer,
+  .mq_size = sizeof(CAN_Tx_QueueBuffer)
 };
 /* Definitions for task01DebugQueue */
 osMessageQueueId_t task01DebugQueueHandle;
+uint8_t task01DebugQueueBuffer[ 2 * sizeof( App_Uart_Tx_Item_t ) ];
+osStaticMessageQDef_t task01DebugQueueControlBlock;
 const osMessageQueueAttr_t task01DebugQueue_attributes = {
-  .name = "task01DebugQueue"
+  .name = "task01DebugQueue",
+  .cb_mem = &task01DebugQueueControlBlock,
+  .cb_size = sizeof(task01DebugQueueControlBlock),
+  .mq_mem = &task01DebugQueueBuffer,
+  .mq_size = sizeof(task01DebugQueueBuffer)
 };
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-static void TaskDefault_ParseUsart3Message(void);
-static void Task01_SendUsart3DebugMessage(void);
-static void Task02_ParseCan1Message(const CAN_Msg_Queue_t *recv_data);
-static void Task03_ParseCan2Message(const CAN_Msg_Queue_t *recv_data);
-static void Task05_ParseRs485Message(const Peripheral_Rx_Frame_t *recv_data);
-static void Task06_ParseSpi1Message(const Peripheral_Rx_Frame_t *recv_data);
-static void Task07_ParseSpi3Message(const Peripheral_Rx_Frame_t *recv_data);
-static void Task09_SendCan1Message(const CAN_Tx_Queue_t *tx_data);
+static void Usart3_ParseInput(void);
+static void Usart3_SendDebug(void);
+static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data);
+static void CanBattery_Dispatch(const CAN_Msg_Queue_t *recv_data);
+static void Rs485_Dispatch(const Peripheral_Rx_Frame_t *recv_data);
+static void SpiCana_Dispatch(const Peripheral_Rx_Frame_t *recv_data);
+static void SpiCdc_Dispatch(const Peripheral_Rx_Frame_t *recv_data);
+static void Can1_Send(const CAN_Tx_Queue_t *tx_data);
 static osStatus_t App_QueueBytes(osMessageQueueId_t queue_handle, const uint8_t *data, uint16_t length, uint32_t timeout_ms);
 static osStatus_t App_QueueText(osMessageQueueId_t queue_handle, const char *text, uint32_t timeout_ms);
 static void App_DebugLogString(const char *text);
 static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart, uint8_t *data, uint16_t length);
 static uint16_t App_AppendTemperature(char *buffer, uint16_t offset, uint16_t size, float temperature);
-static void Task04_SendMlxDebugMatrix(uint8_t sensor_id, const float *temp_map);
-static void Task04_SendMlxSummary(uint8_t sensor_id);
-static void Task04_SendMlxCanSummary(uint8_t sensor_id);
-static uint32_t Task04_GetMlxCanSummaryId(uint8_t sensor_id);
-static void Task04_EncodeCanSummaryPair(int32_t centi_c, uint8_t *integer_part, uint8_t *fraction_part);
-static void TaskSpiPollCan(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus, osMessageQueueId_t queue_handle, uint8_t can_channel);
-static bool TaskSpiPollControllerCana(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus);
-static void TaskSpiPollCdcMonitor(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus);
-static HAL_StatusTypeDef App_Task05_StartRs485Dma(void);
-static void App_Task05_ProcessRs485DmaBuffer(void);
-static void App_Task05_ProcessRs485Span(uint16_t start, uint16_t end);
-static void App_Task05_DispatchRs485Bytes(const uint8_t *data, uint16_t length);
+static void Mlx_SendDebugMatrix(uint8_t sensor_id, const float *temp_map);
+static void Mlx_SendSummary(uint8_t sensor_id);
+static void Mlx_SendCanSummary(uint8_t sensor_id);
+static uint32_t Mlx_GetCanSummaryId(uint8_t sensor_id);
+static void Mlx_EncodeCanSummaryPair(int32_t centi_c, uint8_t *integer_part, uint8_t *fraction_part);
+static void SpiCan_PollToQueue(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus, osMessageQueueId_t queue_handle, uint8_t can_channel);
+static bool SpiCana_Poll(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus);
+static void SpiCdc_Poll(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus);
+static HAL_StatusTypeDef Rs485_StartDma(void);
+static void Rs485_DrainDmaBuffer(void);
+static void Rs485_ProcessSpan(uint16_t start, uint16_t end);
+static void Rs485_DispatchBytes(const uint8_t *data, uint16_t length);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
-void StartTask02(void *argument);
-void StartTask03(void *argument);
-void StartTask04(void *argument);
-void StartTask05(void *argument);
-void StartTask06(void *argument);
-void StartTask07(void *argument);
-void StartTask08(void *argument);
-void StartTask09(void *argument);
+void CanForViehcleTask(void *argument);
+void CanForBMSTask(void *argument);
+void MLX90640Task(void *argument);
+void TensionSensorTask(void *argument);
+void SPICanControlTask(void *argument);
+void SPICanCDCTask(void *argument);
+void Publish4GTask(void *argument);
+void CanBTextTask(void *argument);
+void InitTask_Boot(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -233,20 +326,20 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_TIMERS */
 
   /* Create the queue(s) */
-  /* creation of myQueue01 */
-  myQueue01Handle = osMessageQueueNew (2, sizeof(App_Uart_Tx_Item_t), &myQueue01_attributes);
+  /* creation of App_Uart_Tx */
+  App_Uart_TxHandle = osMessageQueueNew (2, sizeof(App_Uart_Tx_Item_t), &App_Uart_Tx_attributes);
 
-  /* creation of myQueue02 */
-  myQueue02Handle = osMessageQueueNew (16, sizeof(CAN_Msg_Queue_t), &myQueue02_attributes);
+  /* creation of CAN_Msg_Queue */
+  CAN_Msg_QueueHandle = osMessageQueueNew (16, sizeof(CAN_Msg_Queue_t), &CAN_Msg_Queue_attributes);
 
-  /* creation of myQueue03 */
-  myQueue03Handle = osMessageQueueNew (16, sizeof(CAN_Msg_Queue_t), &myQueue03_attributes);
+  /* creation of CAN_Msg_Queue_2 */
+  CAN_Msg_Queue_2Handle = osMessageQueueNew (16, sizeof(CAN_Msg_Queue_t), &CAN_Msg_Queue_2_attributes);
 
-  /* creation of myQueue04 */
-  myQueue04Handle = osMessageQueueNew (16, sizeof(PublishQueueItem_t), &myQueue04_attributes);
+  /* creation of PublishQueueItem */
+  PublishQueueItemHandle = osMessageQueueNew (16, sizeof(PublishQueueItem_t), &PublishQueueItem_attributes);
 
-  /* creation of myQueue05 */
-  myQueue05Handle = osMessageQueueNew (8, sizeof(CAN_Tx_Queue_t), &myQueue05_attributes);
+  /* creation of CAN_Tx_Queue */
+  CAN_Tx_QueueHandle = osMessageQueueNew (8, sizeof(CAN_Tx_Queue_t), &CAN_Tx_Queue_attributes);
 
   /* creation of task01DebugQueue */
   task01DebugQueueHandle = osMessageQueueNew (2, sizeof(App_Uart_Tx_Item_t), &task01DebugQueue_attributes);
@@ -259,29 +352,32 @@ void MX_FREERTOS_Init(void) {
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
-  /* creation of myTask02 */
-  myTask02Handle = osThreadNew(StartTask02, NULL, &myTask02_attributes);
+  /* creation of CanForViehcle */
+  CanForViehcleHandle = osThreadNew(CanForViehcleTask, NULL, &CanForViehcle_attributes);
 
-  /* creation of myTask03 */
-  myTask03Handle = osThreadNew(StartTask03, NULL, &myTask03_attributes);
+  /* creation of CanForBMS */
+  CanForBMSHandle = osThreadNew(CanForBMSTask, NULL, &CanForBMS_attributes);
 
-  /* creation of myTask04 */
-  myTask04Handle = osThreadNew(StartTask04, NULL, &myTask04_attributes);
+  /* creation of MLX90640 */
+  MLX90640Handle = osThreadNew(MLX90640Task, NULL, &MLX90640_attributes);
 
-  /* creation of myTask05 */
-  myTask05Handle = osThreadNew(StartTask05, NULL, &myTask05_attributes);
+  /* creation of TensionSensor */
+  TensionSensorHandle = osThreadNew(TensionSensorTask, NULL, &TensionSensor_attributes);
 
-  /* creation of myTask06 */
-  myTask06Handle = osThreadNew(StartTask06, NULL, &myTask06_attributes);
+  /* creation of SPICanControl */
+  SPICanControlHandle = osThreadNew(SPICanControlTask, NULL, &SPICanControl_attributes);
 
-  /* creation of myTask07 */
-  myTask07Handle = osThreadNew(StartTask07, NULL, &myTask07_attributes);
+  /* creation of SPICanCDC */
+  SPICanCDCHandle = osThreadNew(SPICanCDCTask, NULL, &SPICanCDC_attributes);
 
-  /* creation of myTask08 */
-  myTask08Handle = osThreadNew(StartTask08, NULL, &myTask08_attributes);
+  /* creation of Publish4G */
+  Publish4GHandle = osThreadNew(Publish4GTask, NULL, &Publish4G_attributes);
 
-  /* creation of myTask09 */
-  myTask09Handle = osThreadNew(StartTask09, NULL, &myTask09_attributes);
+  /* creation of CanBText */
+  CanBTextHandle = osThreadNew(CanBTextTask, NULL, &CanBText_attributes);
+
+  /* creation of initTaskBoot */
+  initTaskBootHandle = osThreadNew(InitTask_Boot, NULL, &initTaskBoot_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -303,86 +399,74 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-  /* Default task acts as the low-frequency service loop and health poller. */
-  uint32_t mlx_health_tick_ms = HAL_GetTick();
-
   MLX90640_App_SetLogCallback(App_DebugLogString);
-  (void)MLX90640_App_ServiceHealth();
 
   for(;;)
   {
-    TaskDefault_ParseUsart3Message();
-    Task01_SendUsart3DebugMessage();
-
-    if ((HAL_GetTick() - mlx_health_tick_ms) >= 500U)
-    {
-      (void)MLX90640_App_ServiceHealth();
-      mlx_health_tick_ms = HAL_GetTick();
-    }
-
+    Usart3_ParseInput();
+    Usart3_SendDebug();
     HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
     osDelay(10);
   }
   /* USER CODE END StartDefaultTask */
 }
 
-/* USER CODE BEGIN Header_StartTask02 */
+/* USER CODE BEGIN Header_CanForViehcleTask */
 /**
-* @brief Function implementing the myTask02 thread.
+* @brief Function implementing the CanForViehcle thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_StartTask02 */
-void StartTask02(void *argument)
+/* USER CODE END Header_CanForViehcleTask */
+void CanForViehcleTask(void *argument)
 {
-  /* USER CODE BEGIN StartTask02 */
-  /* Task02 consumes CAN1 frames and turns them into shared telemetry updates. */
+  /* USER CODE BEGIN CanForViehcleTask */
   CAN_Msg_Queue_t recv_data;
 
   for(;;)
   {
-    if(osMessageQueueGet(myQueue02Handle, &recv_data, NULL, osWaitForever) == osOK)
+    if(osMessageQueueGet(CAN_Msg_QueueHandle, &recv_data, NULL, osWaitForever) == osOK)
     {
-      Task02_ParseCan1Message(&recv_data);
+      CanVehicle_Dispatch(&recv_data);
     }
   }
-  /* USER CODE END StartTask02 */
+  /* USER CODE END CanForViehcleTask */
 }
 
-/* USER CODE BEGIN Header_StartTask03 */
+/* USER CODE BEGIN Header_CanForBMSTask */
 /**
-* @brief Function implementing the myTask03 thread.
+* @brief Function implementing the CanForBMS thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_StartTask03 */
-void StartTask03(void *argument)
+/* USER CODE END Header_CanForBMSTask */
+void CanForBMSTask(void *argument)
 {
-  /* USER CODE BEGIN StartTask03 */
-  /* Task03 consumes CAN2 frames and updates the battery-box telemetry cache. */
+  /* USER CODE BEGIN CanForBMSTask */
   CAN_Msg_Queue_t recv_data;
 
   for(;;)
   {
-    if(osMessageQueueGet(myQueue03Handle, &recv_data, NULL, osWaitForever) == osOK)
+    if(osMessageQueueGet(CAN_Msg_Queue_2Handle, &recv_data, NULL, osWaitForever) == osOK)
     {
-      Task03_ParseCan2Message(&recv_data);
+      CanBattery_Dispatch(&recv_data);
     }
   }
-  /* USER CODE END StartTask03 */
+  /* USER CODE END CanForBMSTask */
 }
 
-/* USER CODE BEGIN Header_StartTask04 */
+/* USER CODE BEGIN Header_MLX90640Task */
 /**
-* @brief Function implementing the myTask04 thread.
+* @brief Function implementing the MLX90640 thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_StartTask04 */
-void StartTask04(void *argument)
+/* USER CODE END Header_MLX90640Task */
+void MLX90640Task(void *argument)
 {
-  /* USER CODE BEGIN StartTask04 */
-  /* Task04 owns the MLX90640 sampling loop and thermal publish requests. */
+  /* USER CODE BEGIN MLX90640Task */
+  uint32_t health_tick = HAL_GetTick();
+
   for(;;)
   {
     uint8_t thermal_summary_updated = 0U;
@@ -397,18 +481,25 @@ void StartTask04(void *argument)
       int status = MLX90640_App_CaptureOnce(sensor_id);
       if (status == MLX90640_NO_ERROR)
       {
-        Task04_SendMlxSummary(sensor_id);
-        Task04_SendMlxCanSummary(sensor_id);
-        Task04_SendMlxDebugMatrix(sensor_id, MLX90640_App_GetTempMap());
+        Mlx_SendSummary(sensor_id);
+        Mlx_SendCanSummary(sensor_id);
+        Mlx_SendDebugMatrix(sensor_id, MLX90640_App_GetTempMap());
         thermal_summary_updated = 1U;
       }
       else
       {
-        (void)snprintf(g_task04MlxLineBuffer, sizeof(g_task04MlxLineBuffer), "MLX90640 capture error, sensor=%u, status=%d\r\n", (unsigned int)sensor_id, status);
-        App_DebugLogString(g_task04MlxLineBuffer);
+        (void)snprintf(g_mlxLineBuffer, sizeof(g_mlxLineBuffer),
+            "MLX90640 capture error, sensor=%u, status=%d\r\n",
+            (unsigned int)sensor_id, status);
+        App_DebugLogString(g_mlxLineBuffer);
       }
-
       osDelay(50);
+    }
+
+    if ((HAL_GetTick() - health_tick) >= 2000U)
+    {
+      (void)MLX90640_App_ServiceHealth();
+      health_tick = HAL_GetTick();
     }
 
     if (thermal_summary_updated != 0U)
@@ -419,219 +510,232 @@ void StartTask04(void *argument)
     HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
     osDelay(125);
   }
-  /* USER CODE END StartTask04 */
+  /* USER CODE END MLX90640Task */
 }
 
-/* USER CODE BEGIN Header_StartTask05 */
+/* USER CODE BEGIN Header_TensionSensorTask */
 /**
-* @brief Function implementing the myTask05 thread.
+* @brief Function implementing the TensionSensor thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_StartTask05 */
-void StartTask05(void *argument)
+/* USER CODE END Header_TensionSensorTask */
+void TensionSensorTask(void *argument)
 {
-  /* USER CODE BEGIN StartTask05 */
-  /* Task05 keeps USART2 DMA running and dispatches RS485 spans to the parser. */
+  /* USER CODE BEGIN TensionSensorTask */
   uint32_t flags = 0U;
   uint8_t dma_running = 0U;
 
   HAL_GPIO_WritePin(EN_GPIO_Port, EN_Pin, GPIO_PIN_RESET);
-  g_task05Rs485DmaLastEventPos = 0U;
-  g_task05Rs485DmaPendingBytes = 0U;
-  g_task05Rs485DmaOverflow = 0U;
-  g_task05Rs485DmaReadPos = 0U;
+  g_rs485DmaLastEventPos = 0U;
+  g_rs485DmaPendingBytes = 0U;
+  g_rs485DmaOverflow = 0U;
+  g_rs485DmaReadPos = 0U;
 
   for(;;)
   {
     if (dma_running == 0U)
     {
-      if (App_Task05_StartRs485Dma() != HAL_OK)
+      if (Rs485_StartDma() != HAL_OK)
       {
         App_DebugLogString("USART2 RX DMA start failed\r\n");
         osDelay(100);
         continue;
       }
-
       dma_running = 1U;
     }
 
-    flags = osThreadFlagsWait(TASK05_FLAG_RS485_RX_READY | TASK05_FLAG_RS485_RX_RESTART,
-                              osFlagsWaitAny,
-                              osWaitForever);
+    flags = osThreadFlagsWait(RS485_FLAG_RX_READY | RS485_FLAG_RX_RESTART,
+                              osFlagsWaitAny, osWaitForever);
 
-    if ((flags & TASK05_FLAG_RS485_RX_READY) != 0U)
+    if ((flags & RS485_FLAG_RX_READY) != 0U)
     {
-      App_Task05_ProcessRs485DmaBuffer();
+      Rs485_DrainDmaBuffer();
     }
-
-    if ((flags & TASK05_FLAG_RS485_RX_RESTART) != 0U)
+    if ((flags & RS485_FLAG_RX_RESTART) != 0U)
     {
       dma_running = 0U;
       App_DebugLogString("USART2 RX DMA restart\r\n");
     }
   }
-  /* USER CODE END StartTask05 */
+  /* USER CODE END TensionSensorTask */
 }
 
-/* USER CODE BEGIN Header_StartTask06 */
+/* USER CODE BEGIN Header_SPICanControlTask */
 /**
-* @brief Function implementing the myTask06 thread.
+* @brief Function implementing the SPICanControl thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_StartTask06 */
-void StartTask06(void *argument)
+/* USER CODE END Header_SPICanControlTask */
+void SPICanControlTask(void *argument)
 {
-  /* USER CODE BEGIN StartTask06 */
-  /* Task06 initializes the controller-side MCP2518FD on SPI1 and polls it. */
-  uint8_t fdcan_initialized = 0U;
-  uint8_t fdcan_init_error_logged = 0U;
+  /* USER CODE BEGIN SPICanControlTask */
   Peripheral_Rx_Frame_t recv_data = {0};
 
   for(;;)
   {
-    if (fdcan_initialized == 0U)
+    if (FDCAN_IsReady(FDCAN_BUS_A))
     {
-      if (FDCAN_Init(FDCAN_BUS_A) == HAL_OK)
-      {
-        fdcan_initialized = 1U;
-        fdcan_init_error_logged = 0U;
-        App_DebugLogString("MCP2518FD A init ok\r\n");
-      }
-      else
-      {
-        if (fdcan_init_error_logged == 0U)
-        {
-          App_DebugLogString("MCP2518FD A init failed\r\n");
-          fdcan_init_error_logged = 1U;
-        }
-        osDelay(250);
-        continue;
-      }
+      SpiCana_Dispatch(&recv_data);
     }
-
-    Task06_ParseSpi1Message(&recv_data);
-    osDelay(10);
+    osDelay(1);
   }
-  /* USER CODE END StartTask06 */
+  /* USER CODE END SPICanControlTask */
 }
 
-/* USER CODE BEGIN Header_StartTask07 */
+/* USER CODE BEGIN Header_SPICanCDCTask */
 /**
-* @brief Function implementing the myTask07 thread.
+* @brief Function implementing the SPICanCDC thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_StartTask07 */
-void StartTask07(void *argument)
+/* USER CODE END Header_SPICanCDCTask */
+void SPICanCDCTask(void *argument)
 {
-  /* USER CODE BEGIN StartTask07 */
-  /* Task07 mirrors Task06 for the second MCP2518FD instance on SPI3. */
-  uint8_t fdcan_initialized = 0U;
-  uint8_t fdcan_init_error_logged = 0U;
+  /* USER CODE BEGIN SPICanCDCTask */
   Peripheral_Rx_Frame_t recv_data = {0};
 
   for(;;)
   {
-    if (fdcan_initialized == 0U)
+    if (FDCAN_IsReady(FDCAN_BUS_B))
     {
-      if (FDCAN_Init(FDCAN_BUS_B) == HAL_OK)
-      {
-        fdcan_initialized = 1U;
-        fdcan_init_error_logged = 0U;
-        App_DebugLogString("MCP2518FD B init ok\r\n");
-      }
-      else
-      {
-        if (fdcan_init_error_logged == 0U)
-        {
-          App_DebugLogString("MCP2518FD B init failed\r\n");
-          fdcan_init_error_logged = 1U;
-        }
-        osDelay(250);
-        continue;
-      }
+      SpiCdc_Dispatch(&recv_data);
     }
-
-    Task07_ParseSpi3Message(&recv_data);
-    osDelay(10);
+    osDelay(1);
   }
-  /* USER CODE END StartTask07 */
+  /* USER CODE END SPICanCDCTask */
 }
 
-/* USER CODE BEGIN Header_StartTask08 */
+/* USER CODE BEGIN Header_Publish4GTask */
 /**
-* @brief Function implementing the myTask08 thread.
+* @brief Function implementing the Publish4G thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_StartTask08 */
-void StartTask08(void *argument)
+/* USER CODE END Header_Publish4GTask */
+void Publish4GTask(void *argument)
 {
-  /* USER CODE BEGIN StartTask08 */
-  /* Task08 is the only publish sender: build protobuf and send over USART1. */
+  /* USER CODE BEGIN Publish4GTask */
   PublishQueueItem_t item;
   uint16_t frame_length = 0U;
   HAL_StatusTypeDef tx_status = HAL_OK;
 
   for(;;)
   {
-    if (osMessageQueueGet(myQueue04Handle, &item, NULL, osWaitForever) == osOK)
+    if (osMessageQueueGet(PublishQueueItemHandle, &item, NULL, osWaitForever) == osOK)
     {
       Publish_OnTopicDequeued(item.topic);
 
-      if (Publish_BuildFrame(item.topic,
-                             g_task08PublishFrameBuffer,
-                             (uint16_t)sizeof(g_task08PublishFrameBuffer),
-                             &frame_length))
+      if (Publish_BuildFrame(item.topic, g_publishFrameBuffer,
+                             (uint16_t)sizeof(g_publishFrameBuffer), &frame_length))
       {
-        tx_status = App_UART_TransmitDmaBlocking(&huart1, g_task08PublishFrameBuffer, frame_length);
+        tx_status = App_UART_TransmitDmaBlocking(&huart1, g_publishFrameBuffer, frame_length);
         if (tx_status == HAL_OK)
         {
-          osDelay(TASK08_PUBLISH_COOLDOWN_MS);
+          osDelay(PUBLISH_COOLDOWN_MS);
         }
         else
         {
-          (void)Publish_QueueTopic(item.topic);
-        }
-      }
+        (void)Publish_QueueTopic(item.topic);
+    }
+  }
+  /* USER CODE END Publish4GTask */
+}
       else
       {
         (void)Publish_QueueTopic(item.topic);
-      }
     }
   }
-
-  osDelay(10);
-
-  /* USER CODE END StartTask08 */
+  /* USER CODE END Publish4GTask */
 }
 
-/* USER CODE BEGIN Header_StartTask09 */
+/* USER CODE BEGIN Header_CanBTextTask */
 /**
-* @brief Function implementing the myTask09 thread.
+* @brief Function implementing the CanBText thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_StartTask09 */
-void StartTask09(void *argument)
+/* USER CODE END Header_CanBTextTask */
+void CanBTextTask(void *argument)
 {
-  /* USER CODE BEGIN StartTask09 */
-  /* Task09 is the dedicated CAN1 transmit worker and nothing else. */
+  /* USER CODE BEGIN CanBTextTask */
   CAN_Tx_Queue_t tx_data;
 
   for(;;)
   {
-    if (osMessageQueueGet(myQueue05Handle, &tx_data, NULL, osWaitForever) == osOK)
+    if (osMessageQueueGet(CAN_Tx_QueueHandle, &tx_data, NULL, osWaitForever) == osOK)
     {
-      Task09_SendCan1Message(&tx_data);
+      Can1_Send(&tx_data);
     }
   }
+  /* USER CODE END CanBTextTask */
+}
 
-  osDelay(10);
+/* USER CODE BEGIN Header_InitTask_Boot */
+/**
+* @brief Function implementing the initTaskBoot thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_InitTask_Boot */
+void InitTask_Boot(void *argument)
+{
+  /* USER CODE BEGIN InitTask_Boot */
+  int status;
+  int retry;
 
-  /* USER CODE END StartTask09 */
+  App_DebugLogString("\r\n=== Boot Init Start ===\r\n");
+
+  App_DebugLogString("[BOOT] MLX90640 init...\r\n");
+  status = MLX90640_App_Init();
+  if (status == MLX90640_NO_ERROR)
+  {
+    App_DebugLogString("[BOOT] MLX90640 init ok\r\n");
+  }
+  else
+  {
+    App_DebugLogString("[BOOT] MLX90640 init pending, will retry via health check\r\n");
+  }
+
+  App_DebugLogString("[BOOT] MCP2518FD-A init...\r\n");
+  for (retry = 0; retry < 3; retry++)
+  {
+    if (FDCAN_Init(FDCAN_BUS_A) == HAL_OK)
+    {
+      App_DebugLogString("[BOOT] MCP2518FD-A init ok\r\n");
+      break;
+    }
+    App_DebugLogString("[BOOT] MCP2518FD-A retry...\r\n");
+    osDelay(500U);
+  }
+  if (retry >= 3)
+  {
+    App_DebugLogString("[BOOT] MCP2518FD-A init FAILED after 3 retries\r\n");
+  }
+
+  App_DebugLogString("[BOOT] MCP2518FD-B init...\r\n");
+  for (retry = 0; retry < 3; retry++)
+  {
+    if (FDCAN_Init(FDCAN_BUS_B) == HAL_OK)
+    {
+      App_DebugLogString("[BOOT] MCP2518FD-B init ok\r\n");
+      break;
+    }
+    App_DebugLogString("[BOOT] MCP2518FD-B retry...\r\n");
+    osDelay(500U);
+  }
+  if (retry >= 3)
+  {
+    App_DebugLogString("[BOOT] MCP2518FD-B init FAILED after 3 retries\r\n");
+  }
+
+  App_DebugLogString("[BOOT] 4G bootstrap...\r\n");
+  Y100M_BootstrapOnce();
+
+  App_DebugLogString("=== Boot Init Complete ===\r\n");
+  osThreadExit();
+  /* USER CODE END InitTask_Boot */
 }
 
 /* Private application code --------------------------------------------------*/
@@ -703,23 +807,23 @@ static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart,
   return HAL_OK;
 }
 
-static HAL_StatusTypeDef App_Task05_StartRs485Dma(void)
+static HAL_StatusTypeDef Rs485_StartDma(void)
 {
   /* Restart ReceiveToIdle DMA and reset all ring-buffer tracking state. */
   (void)HAL_UART_DMAStop(&huart2);
   __HAL_UART_CLEAR_OREFLAG(&huart2);
 
-  g_task05Rs485DmaLastEventPos = 0U;
-  g_task05Rs485DmaPendingBytes = 0U;
-  g_task05Rs485DmaOverflow = 0U;
-  g_task05Rs485DmaReadPos = 0U;
+  g_rs485DmaLastEventPos = 0U;
+  g_rs485DmaPendingBytes = 0U;
+  g_rs485DmaOverflow = 0U;
+  g_rs485DmaReadPos = 0U;
 
   return HAL_UARTEx_ReceiveToIdle_DMA(&huart2,
-                                      g_task05Rs485DmaBuffer,
-                                      (uint16_t)sizeof(g_task05Rs485DmaBuffer));
+                                      g_rs485DmaBuffer,
+                                      (uint16_t)sizeof(g_rs485DmaBuffer));
 }
 
-static void App_Task05_ProcessRs485DmaBuffer(void)
+static void Rs485_DrainDmaBuffer(void)
 {
   /* Drain the circular buffer in order and hand byte spans to the parser. */
   for (;;)
@@ -728,7 +832,7 @@ static void App_Task05_ProcessRs485DmaBuffer(void)
     uint16_t contiguous_bytes = 0U;
 
     taskENTER_CRITICAL();
-    pending_bytes = g_task05Rs485DmaPendingBytes;
+    pending_bytes = g_rs485DmaPendingBytes;
     taskEXIT_CRITICAL();
 
     if (pending_bytes == 0U)
@@ -737,35 +841,35 @@ static void App_Task05_ProcessRs485DmaBuffer(void)
     }
 
     contiguous_bytes = pending_bytes;
-    if ((uint16_t)(sizeof(g_task05Rs485DmaBuffer) - g_task05Rs485DmaReadPos) < contiguous_bytes)
+    if ((uint16_t)(sizeof(g_rs485DmaBuffer) - g_rs485DmaReadPos) < contiguous_bytes)
     {
-      contiguous_bytes = (uint16_t)(sizeof(g_task05Rs485DmaBuffer) - g_task05Rs485DmaReadPos);
+      contiguous_bytes = (uint16_t)(sizeof(g_rs485DmaBuffer) - g_rs485DmaReadPos);
     }
 
-    App_Task05_ProcessRs485Span(g_task05Rs485DmaReadPos,
-                                (uint16_t)(g_task05Rs485DmaReadPos + contiguous_bytes));
+    Rs485_ProcessSpan(g_rs485DmaReadPos,
+                                (uint16_t)(g_rs485DmaReadPos + contiguous_bytes));
 
     taskENTER_CRITICAL();
-    if (g_task05Rs485DmaPendingBytes >= contiguous_bytes)
+    if (g_rs485DmaPendingBytes >= contiguous_bytes)
     {
-      g_task05Rs485DmaPendingBytes = (uint16_t)(g_task05Rs485DmaPendingBytes - contiguous_bytes);
+      g_rs485DmaPendingBytes = (uint16_t)(g_rs485DmaPendingBytes - contiguous_bytes);
     }
     else
     {
-      g_task05Rs485DmaPendingBytes = 0U;
+      g_rs485DmaPendingBytes = 0U;
     }
-    g_task05Rs485DmaReadPos = (uint16_t)((g_task05Rs485DmaReadPos + contiguous_bytes) % sizeof(g_task05Rs485DmaBuffer));
+    g_rs485DmaReadPos = (uint16_t)((g_rs485DmaReadPos + contiguous_bytes) % sizeof(g_rs485DmaBuffer));
     taskEXIT_CRITICAL();
   }
 
-  if (g_task05Rs485DmaOverflow != 0U)
+  if (g_rs485DmaOverflow != 0U)
   {
-    g_task05Rs485DmaOverflow = 0U;
+    g_rs485DmaOverflow = 0U;
     App_DebugLogString("USART2 RX DMA overflow\r\n");
   }
 }
 
-static void App_Task05_ProcessRs485Span(uint16_t start, uint16_t end)
+static void Rs485_ProcessSpan(uint16_t start, uint16_t end)
 {
   /* Split wrapped spans so the parser always sees a linear byte slice. */
   if (start == end)
@@ -775,19 +879,19 @@ static void App_Task05_ProcessRs485Span(uint16_t start, uint16_t end)
 
   if (end > start)
   {
-    App_Task05_DispatchRs485Bytes(&g_task05Rs485DmaBuffer[start], (uint16_t)(end - start));
+    Rs485_DispatchBytes(&g_rs485DmaBuffer[start], (uint16_t)(end - start));
     return;
   }
 
-  App_Task05_DispatchRs485Bytes(&g_task05Rs485DmaBuffer[start],
-                                (uint16_t)(sizeof(g_task05Rs485DmaBuffer) - start));
+  Rs485_DispatchBytes(&g_rs485DmaBuffer[start],
+                                (uint16_t)(sizeof(g_rs485DmaBuffer) - start));
   if (end > 0U)
   {
-    App_Task05_DispatchRs485Bytes(&g_task05Rs485DmaBuffer[0], end);
+    Rs485_DispatchBytes(&g_rs485DmaBuffer[0], end);
   }
 }
 
-static void App_Task05_DispatchRs485Bytes(const uint8_t *data, uint16_t length)
+static void Rs485_DispatchBytes(const uint8_t *data, uint16_t length)
 {
   /* Repackage arbitrary RS485 bytes into the generic receive-frame wrapper. */
   Peripheral_Rx_Frame_t recv_data = {0};
@@ -807,7 +911,7 @@ static void App_Task05_DispatchRs485Bytes(const uint8_t *data, uint16_t length)
 
     recv_data.length = chunk;
     (void)memcpy(recv_data.data, data, chunk);
-    Task05_ParseRs485Message(&recv_data);
+    Rs485_Dispatch(&recv_data);
 
     data += chunk;
     length = (uint16_t)(length - chunk);
@@ -823,41 +927,46 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     uint16_t delta = 0U;
     uint16_t pending = 0U;
 
-    if (current_pos > (uint16_t)sizeof(g_task05Rs485DmaBuffer))
+    if (current_pos > (uint16_t)sizeof(g_rs485DmaBuffer))
     {
-      current_pos = (uint16_t)sizeof(g_task05Rs485DmaBuffer);
+      current_pos = (uint16_t)sizeof(g_rs485DmaBuffer);
     }
 
     if (event_type == HAL_UART_RXEVENT_TC)
     {
-      delta = (uint16_t)(sizeof(g_task05Rs485DmaBuffer) - g_task05Rs485DmaLastEventPos);
+      delta = (uint16_t)(sizeof(g_rs485DmaBuffer) - g_rs485DmaLastEventPos);
       current_pos = 0U;
     }
-    else if (current_pos >= g_task05Rs485DmaLastEventPos)
+    else if (current_pos >= g_rs485DmaLastEventPos)
     {
-      delta = (uint16_t)(current_pos - g_task05Rs485DmaLastEventPos);
+      delta = (uint16_t)(current_pos - g_rs485DmaLastEventPos);
     }
     else
     {
-      delta = (uint16_t)((sizeof(g_task05Rs485DmaBuffer) - g_task05Rs485DmaLastEventPos) + current_pos);
+      delta = (uint16_t)((sizeof(g_rs485DmaBuffer) - g_rs485DmaLastEventPos) + current_pos);
     }
 
-    g_task05Rs485DmaLastEventPos = current_pos;
-    pending = (uint16_t)(g_task05Rs485DmaPendingBytes + delta);
-    if (pending > (uint16_t)sizeof(g_task05Rs485DmaBuffer))
+    g_rs485DmaLastEventPos = current_pos;
+    pending = (uint16_t)(g_rs485DmaPendingBytes + delta);
+    if (pending > (uint16_t)sizeof(g_rs485DmaBuffer))
     {
-      g_task05Rs485DmaPendingBytes = (uint16_t)sizeof(g_task05Rs485DmaBuffer);
-      g_task05Rs485DmaOverflow = 1U;
+      g_rs485DmaPendingBytes = (uint16_t)sizeof(g_rs485DmaBuffer);
+      g_rs485DmaOverflow = 1U;
     }
     else
     {
-      g_task05Rs485DmaPendingBytes = pending;
+      g_rs485DmaPendingBytes = pending;
     }
 
-    if (myTask05Handle != NULL)
+    if (TensionSensorHandle != NULL)
     {
-      (void)osThreadFlagsSet(myTask05Handle, TASK05_FLAG_RS485_RX_READY);
+      (void)osThreadFlagsSet(TensionSensorHandle, RS485_FLAG_RX_READY);
     }
+  }
+
+  if ((huart != NULL) && (huart->Instance == USART1))
+  {
+    Y100M_OnUsart1RxIdle(Size);
   }
 }
 
@@ -865,18 +974,18 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   if ((huart != NULL) && (huart->Instance == USART2))
   {
-    if (myTask05Handle != NULL)
+    if (TensionSensorHandle != NULL)
     {
-      (void)osThreadFlagsSet(myTask05Handle, TASK05_FLAG_RS485_RX_RESTART);
+      (void)osThreadFlagsSet(TensionSensorHandle, RS485_FLAG_RX_RESTART);
     }
   }
 }
 
-static void Task01_SendUsart3DebugMessage(void)
+static void Usart3_SendDebug(void)
 {
-  if (osMessageQueueGet(task01DebugQueueHandle, &g_task01DebugTxItem, NULL, 0U) == osOK)
+  if (osMessageQueueGet(task01DebugQueueHandle, &g_debugTxItem, NULL, 0U) == osOK)
   {
-    (void)App_UART_TransmitDmaBlocking(&huart3, g_task01DebugTxItem.data, g_task01DebugTxItem.length);
+    (void)App_UART_TransmitDmaBlocking(&huart3, g_debugTxItem.data, g_debugTxItem.length);
   }
 }
 
@@ -935,16 +1044,16 @@ static uint16_t App_AppendTemperature(char *buffer, uint16_t offset, uint16_t si
   return offset;
 }
 
-static void Task04_SendMlxDebugMatrix(uint8_t sensor_id, const float *temp_map)
+static void Mlx_SendDebugMatrix(uint8_t sensor_id, const float *temp_map)
 {
-  char *line = g_task04MlxLineBuffer;
+  char *line = g_mlxLineBuffer;
 
   if (temp_map == NULL)
   {
     return;
   }
 
-  (void)snprintf(line, TASK04_MLX_LINE_BUFFER_SIZE, "----- Sensor %u Temperature Matrix -----\r\n", (unsigned int)sensor_id);
+  (void)snprintf(line, MLX_LINE_BUFFER_SIZE, "----- Sensor %u Temperature Matrix -----\r\n", (unsigned int)sensor_id);
   App_DebugLogString(line);
 
   for (uint16_t row = 0U; row < MLX90640_LINE_NUM; row++)
@@ -954,10 +1063,10 @@ static void Task04_SendMlxDebugMatrix(uint8_t sensor_id, const float *temp_map)
     for (uint16_t col = 0U; col < MLX90640_COLUMN_NUM; col++)
     {
       uint16_t pixelIndex = (uint16_t)(row * MLX90640_COLUMN_NUM + col);
-      lineOffset = App_AppendTemperature(line, lineOffset, TASK04_MLX_LINE_BUFFER_SIZE, temp_map[pixelIndex]);
+      lineOffset = App_AppendTemperature(line, lineOffset, MLX_LINE_BUFFER_SIZE, temp_map[pixelIndex]);
     }
 
-    if (lineOffset < (TASK04_MLX_LINE_BUFFER_SIZE - 2U))
+    if (lineOffset < (MLX_LINE_BUFFER_SIZE - 2U))
     {
       line[lineOffset++] = '\r';
       line[lineOffset++] = '\n';
@@ -966,13 +1075,13 @@ static void Task04_SendMlxDebugMatrix(uint8_t sensor_id, const float *temp_map)
     App_DebugLogString(line);
   }
 
-  (void)snprintf(line, TASK04_MLX_LINE_BUFFER_SIZE, "----- Sensor %u Temperature Matrix End -----\r\n", (unsigned int)sensor_id);
+  (void)snprintf(line, MLX_LINE_BUFFER_SIZE, "----- Sensor %u Temperature Matrix End -----\r\n", (unsigned int)sensor_id);
   App_DebugLogString(line);
 }
 
-static void Task04_SendMlxSummary(uint8_t sensor_id)
+static void Mlx_SendSummary(uint8_t sensor_id)
 {
-  char *line = g_task04MlxLineBuffer;
+  char *line = g_mlxLineBuffer;
 
   (void)snprintf(line, APP_UART_TX_MAX_PAYLOAD,
       "MLX90640,S=%u,Ta=%ld,Tr=%ld,R0=%ld,R1=%ld,R2=%ld,R3=%ld,C=%lu\r\n",
@@ -988,11 +1097,11 @@ static void Task04_SendMlxSummary(uint8_t sensor_id)
   App_DebugLogString(line);
 }
 
-static void Task04_SendMlxCanSummary(uint8_t sensor_id)
+static void Mlx_SendCanSummary(uint8_t sensor_id)
 {
   CAN_Tx_Queue_t tx_data = {0};
 
-  tx_data.std_id = Task04_GetMlxCanSummaryId(sensor_id);
+  tx_data.std_id = Mlx_GetCanSummaryId(sensor_id);
   if (tx_data.std_id == 0U)
   {
     return;
@@ -1000,7 +1109,7 @@ static void Task04_SendMlxCanSummary(uint8_t sensor_id)
 
   for (uint8_t region_index = 0U; region_index < MLX90640_REGION_COUNT; region_index++)
   {
-    Task04_EncodeCanSummaryPair(
+    Mlx_EncodeCanSummaryPair(
         g_MLX90640_Frame.RegionTemp[sensor_id][region_index],
         &tx_data.data[region_index * 2U],
         &tx_data.data[(region_index * 2U) + 1U]);
@@ -1009,7 +1118,7 @@ static void Task04_SendMlxCanSummary(uint8_t sensor_id)
   (void)freertos_can1_tx_queue_put(&tx_data, 0U);
 }
 
-static uint32_t Task04_GetMlxCanSummaryId(uint8_t sensor_id)
+static uint32_t Mlx_GetCanSummaryId(uint8_t sensor_id)
 {
   switch (sensor_id)
   {
@@ -1026,7 +1135,7 @@ static uint32_t Task04_GetMlxCanSummaryId(uint8_t sensor_id)
   }
 }
 
-static void Task04_EncodeCanSummaryPair(int32_t centi_c, uint8_t *integer_part, uint8_t *fraction_part)
+static void Mlx_EncodeCanSummaryPair(int32_t centi_c, uint8_t *integer_part, uint8_t *fraction_part)
 {
   uint32_t value;
 
@@ -1058,11 +1167,11 @@ osStatus_t freertos_can_queue_send_from_isr(const CAN_Msg_Queue_t *pData)
 
   if(pData->can_channel == CAN_CHANNEL_VEHICLE_CANB)
   {
-    queue_handle = myQueue02Handle;
+    queue_handle = CAN_Msg_QueueHandle;
   }
   else if(pData->can_channel == CAN_CHANNEL_BATTERY_BOX)
   {
-    queue_handle = myQueue03Handle;
+    queue_handle = CAN_Msg_Queue_2Handle;
   }
 
   if(queue_handle == NULL)
@@ -1081,15 +1190,15 @@ osStatus_t freertos_can_queue_send_from_isr(const CAN_Msg_Queue_t *pData)
 
 osStatus_t freertos_can1_tx_queue_put(const CAN_Tx_Queue_t *pData, uint32_t timeout_ms)
 {
-  if(myQueue05Handle == NULL || pData == NULL)
+  if(CAN_Tx_QueueHandle == NULL || pData == NULL)
   {
     return osErrorParameter;
   }
 
-  return osMessageQueuePut(myQueue05Handle, pData, 0U, timeout_ms);
+  return osMessageQueuePut(CAN_Tx_QueueHandle, pData, 0U, timeout_ms);
 }
 
-static void TaskSpiPollCan(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus, osMessageQueueId_t queue_handle, uint8_t can_channel)
+static void SpiCan_PollToQueue(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus, osMessageQueueId_t queue_handle, uint8_t can_channel)
 {
   CAN_Msg_Queue_t queue_item;
   FDCAN_StdFrame_t rx_frame;
@@ -1122,7 +1231,7 @@ static void TaskSpiPollCan(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t b
   } while (received != 0U);
 }
 
-static bool TaskSpiPollControllerCana(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus)
+static bool SpiCana_Poll(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus)
 {
   CAN_Msg_Queue_t frame_data;
   FDCAN_StdFrame_t rx_frame;
@@ -1159,7 +1268,7 @@ static bool TaskSpiPollControllerCana(const Peripheral_Rx_Frame_t *recv_data, FD
   return decoded_any;
 }
 
-static void TaskSpiPollCdcMonitor(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus)
+static void SpiCdc_Poll(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus)
 {
   CAN_Msg_Queue_t frame_data;
   FDCAN_StdFrame_t rx_frame;
@@ -1192,12 +1301,12 @@ static void TaskSpiPollCdcMonitor(const Peripheral_Rx_Frame_t *recv_data, FDCAN_
   } while (received != 0U);
 }
 
-static void TaskDefault_ParseUsart3Message(void)
+static void Usart3_ParseInput(void)
 {
   /* USART3 parser entry. */
 }
 
-static void Task02_ParseCan1Message(const CAN_Msg_Queue_t *recv_data)
+static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data)
 {
   if (recv_data == NULL)
   {
@@ -1213,7 +1322,7 @@ static void Task02_ParseCan1Message(const CAN_Msg_Queue_t *recv_data)
   }
 }
 
-static void Task03_ParseCan2Message(const CAN_Msg_Queue_t *recv_data)
+static void CanBattery_Dispatch(const CAN_Msg_Queue_t *recv_data)
 {
   CAN_DecodeBatteryBoxMessage(recv_data);
   (void)Publish_QueueTopic(PUBLISH_TOPIC_FAST_TELEMETRY);
@@ -1221,27 +1330,27 @@ static void Task03_ParseCan2Message(const CAN_Msg_Queue_t *recv_data)
   (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_DETAIL);
 }
 
-static void Task05_ParseRs485Message(const Peripheral_Rx_Frame_t *recv_data)
+static void Rs485_Dispatch(const Peripheral_Rx_Frame_t *recv_data)
 {
   (void)recv_data;
   /* USART2 + EN# RS485 parser entry. */
 }
 
-static void Task06_ParseSpi1Message(const Peripheral_Rx_Frame_t *recv_data)
+static void SpiCana_Dispatch(const Peripheral_Rx_Frame_t *recv_data)
 {
-  if (TaskSpiPollControllerCana(recv_data, FDCAN_BUS_A))
+  if (SpiCana_Poll(recv_data, FDCAN_BUS_A))
   {
     (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
     (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
   }
 }
 
-static void Task07_ParseSpi3Message(const Peripheral_Rx_Frame_t *recv_data)
+static void SpiCdc_Dispatch(const Peripheral_Rx_Frame_t *recv_data)
 {
-  TaskSpiPollCdcMonitor(recv_data, FDCAN_BUS_B);
+  SpiCdc_Poll(recv_data, FDCAN_BUS_B);
 }
 
-static void Task09_SendCan1Message(const CAN_Tx_Queue_t *tx_data)
+static void Can1_Send(const CAN_Tx_Queue_t *tx_data)
 {
   if (tx_data == NULL)
   {
@@ -1249,6 +1358,7 @@ static void Task09_SendCan1Message(const CAN_Tx_Queue_t *tx_data)
   }
 
   CAN_Send_Msg(&hcan1, tx_data->std_id, (uint8_t *)tx_data->data);
+  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
 }
 /* USER CODE END Application */
 

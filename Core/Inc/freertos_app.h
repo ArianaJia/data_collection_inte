@@ -9,12 +9,12 @@ extern "C" {
 #include "cmsis_os2.h"
 
 #define APP_UART_TX_MAX_PAYLOAD        288U
-#define TASK01_DEBUG_QUEUE_DEPTH       2U
-#define TASK04_MLX_LINE_BUFFER_SIZE    APP_UART_TX_MAX_PAYLOAD
-#define TASK05_RS485_DMA_BUFFER_SIZE    256U
-#define TASK05_FLAG_RS485_RX_READY      (1UL << 0)
-#define TASK05_FLAG_RS485_RX_RESTART    (1UL << 1)
-#define TASK08_PUBLISH_COOLDOWN_MS      10U
+#define DEBUG_QUEUE_DEPTH       2U
+#define MLX_LINE_BUFFER_SIZE    APP_UART_TX_MAX_PAYLOAD
+#define RS485_DMA_BUFFER_SIZE    256U
+#define RS485_FLAG_RX_READY      (1UL << 0)
+#define RS485_FLAG_RX_RESTART    (1UL << 1)
+#define PUBLISH_COOLDOWN_MS      10U
 
 typedef struct
 {
