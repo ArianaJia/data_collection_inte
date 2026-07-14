@@ -70,6 +70,11 @@ void Y100M_OnUsart1RxIdle(uint16_t size)
     g_y100mUsart1RxDmaDone = 1U;
 }
 
+/* USART IRQ handlers — HAL DMA TX completion enables TC interrupt
+ * to flush the shift register; without these, gState stays BUSY. */
+void USART1_IRQHandler(void) { HAL_UART_IRQHandler(&huart1); }
+void USART3_IRQHandler(void) { HAL_UART_IRQHandler(&huart3); }
+
 /* Keep all DTU power-up AT steps local to usart.c so later command tweaks stay
  * isolated from FreeRTOS tasks and publish/protobuf logic.
  *
@@ -271,7 +276,8 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     __HAL_LINKDMA(uartHandle,hdmarx,hdma_usart1_rx);
 
   /* USER CODE BEGIN USART1_MspInit 1 */
-
+  HAL_NVIC_SetPriority(USART1_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(USART1_IRQn);
   /* USER CODE END USART1_MspInit 1 */
   }
   else if(uartHandle->Instance==USART2)
@@ -359,7 +365,8 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     __HAL_LINKDMA(uartHandle,hdmatx,hdma_usart3_tx);
 
   /* USER CODE BEGIN USART3_MspInit 1 */
-
+  HAL_NVIC_SetPriority(USART3_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(USART3_IRQn);
   /* USER CODE END USART3_MspInit 1 */
   }
 }

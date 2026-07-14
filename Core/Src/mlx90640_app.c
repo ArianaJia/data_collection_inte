@@ -436,9 +436,6 @@ int MLX90640_App_ServiceHealth(void)
       MLX90640_App_SetSensorOffline(sensor_id, status);
       MLX90640_App_LogRecoverStatus(sensor_id, status);
     }
-
-    MLX90640_App_Unlock();
-    return status;
   }
 
   MLX90640_App_Unlock();

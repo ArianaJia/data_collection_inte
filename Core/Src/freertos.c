@@ -780,7 +780,6 @@ static void App_DebugLogString(const char *text)
 
 static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart, uint8_t *data, uint16_t length)
 {
-  /* Block until the DMA transmitter is idle, then wait again for completion. */
   if ((huart == NULL) || (data == NULL) || (length == 0U))
   {
     return HAL_ERROR;

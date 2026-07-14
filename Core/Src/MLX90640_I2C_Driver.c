@@ -77,19 +77,9 @@ static uint8_t TCA9548A_IsBusyOrTimeout(void)
 
 static HAL_StatusTypeDef TCA9548A_WriteChannelMask(uint8_t channelMask)
 {
-  /* Select a downstream channel through the TCA9548A using DMA. */
-  mlx90640I2cRxDone = 0U;
-  mlx90640I2cTxDone = 0U;
-  mlx90640I2cError = 0U;
-
-  tca9548aLastHalStatus = HAL_I2C_Master_Transmit_DMA(
-      &hi2c1, (uint16_t)(TCA9548A_ADDR_7BIT << 1), &channelMask, 1U);
+  tca9548aLastHalStatus = HAL_I2C_Master_Transmit(
+      &hi2c1, (uint16_t)(TCA9548A_ADDR_7BIT << 1), &channelMask, 1U, MLX90640_I2C_TIMEOUT_MS);
   tca9548aLastErrorCode = hi2c1.ErrorCode;
-  if (tca9548aLastHalStatus == HAL_OK)
-  {
-    tca9548aLastHalStatus = MLX90640_I2CWaitForDmaRx(HAL_GetTick());
-    tca9548aLastErrorCode = hi2c1.ErrorCode;
-  }
   return tca9548aLastHalStatus;
 }
 
@@ -156,17 +146,9 @@ void MLX90640_I2CInit(void)
 
 int MLX90640_I2CGeneralReset(void)
 {
-  /* Broadcast the MLX90640 reset command across the active I2C bus. */
   uint8_t command = 0x06U;
-  mlx90640I2cRxDone = 0U;
-  mlx90640I2cTxDone = 0U;
-  mlx90640I2cError = 0U;
 
-  HAL_StatusTypeDef status = HAL_I2C_Master_Transmit_DMA(&hi2c1, 0x00U, &command, 1U);
-  if (status == HAL_OK)
-  {
-    status = MLX90640_I2CWaitForDmaRx(HAL_GetTick());
-  }
+  HAL_StatusTypeDef status = HAL_I2C_Master_Transmit(&hi2c1, 0x00U, &command, 1U, MLX90640_I2C_TIMEOUT_MS);
   mlx90640LastHalStatus = status;
   mlx90640LastErrorCode = hi2c1.ErrorCode;
   return MLX90640_HAL_StatusToError(status);
@@ -333,29 +315,15 @@ int MLX90640_I2CProbe(uint8_t slaveAddr)
 
 int MLX90640_I2CWrite(uint8_t slaveAddr, uint16_t writeAddress, uint16_t data)
 {
-  /* Write one 16-bit register value through the DMA-backed I2C path. */
   uint8_t rawBuffer[2];
   rawBuffer[0] = (uint8_t)(data >> 8);
   rawBuffer[1] = (uint8_t)(data & 0xFFU);
 
-  mlx90640I2cRxDone = 0U;
-  mlx90640I2cTxDone = 0U;
-  mlx90640I2cError = 0U;
-
-  HAL_StatusTypeDef status = HAL_I2C_Mem_Write_DMA(
-      &hi2c1,
-      (uint16_t)(slaveAddr << 1),
-      writeAddress,
-      I2C_MEMADD_SIZE_16BIT,
-      rawBuffer,
-      2U);
-  if (status == HAL_OK)
-  {
-    status = MLX90640_I2CWaitForDmaRx(HAL_GetTick());
-  }
-  mlx90640LastHalStatus = status;
+  mlx90640LastHalStatus = HAL_I2C_Mem_Write(
+      &hi2c1, (uint16_t)(slaveAddr << 1), writeAddress,
+      I2C_MEMADD_SIZE_16BIT, rawBuffer, 2U, MLX90640_I2C_TIMEOUT_MS);
   mlx90640LastErrorCode = hi2c1.ErrorCode;
-  return MLX90640_HAL_StatusToError(status);
+  return MLX90640_HAL_StatusToError(mlx90640LastHalStatus);
 }
 
 void MLX90640_I2CFreqSet(int freq)
