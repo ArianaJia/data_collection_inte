@@ -17,6 +17,7 @@
 #include <MLX90640_I2C_Driver.h>
 #include <MLX90640_API.h>
 #include <math.h>
+#include "cmsis_os.h"
 
 static void ExtractVDDParameters(uint16_t *eeData, paramsMLX90640 *mlx90640);
 static void ExtractPTATParameters(uint16_t *eeData, paramsMLX90640 *mlx90640);
@@ -38,9 +39,40 @@ static int IsPixelBad(uint16_t pixel,paramsMLX90640 *params);
 static int ValidateFrameData(uint16_t *frameData);
 static int ValidateAuxData(uint16_t *auxData);
 static float *mlx90640ExtractScratch = 0;
+static uint16_t mlx90640LastFrameStatus = 0U;
+static uint16_t mlx90640LastFrameErrorIndex = 0xFFFFU;
+static uint16_t mlx90640LastFrameErrorValue = 0U;
+
+static void MLX90640_App_Yield(void)
+{
+    if (osKernelGetState() == osKernelRunning)
+    {
+        osDelay(1U);
+    }
+    else
+    {
+        HAL_Delay(1U);
+    }
+}
+
 void MLX90640_SetExtractScratch(float *scratch)
 {
     mlx90640ExtractScratch = scratch;
+}
+
+uint16_t MLX90640_GetLastFrameStatus(void)
+{
+    return mlx90640LastFrameStatus;
+}
+
+uint16_t MLX90640_GetLastFrameErrorIndex(void)
+{
+    return mlx90640LastFrameErrorIndex;
+}
+
+uint16_t MLX90640_GetLastFrameErrorValue(void)
+{
+    return mlx90640LastFrameErrorValue;
 }
   
 int MLX90640_DumpEE(uint8_t slaveAddr, uint16_t *eeData)
@@ -53,6 +85,11 @@ int MLX90640_SynchFrame(uint8_t slaveAddr)
     uint16_t dataReady = 0;
     uint16_t statusRegister;
     int error = 1;
+    uint32_t startTick = HAL_GetTick();
+
+    mlx90640LastFrameStatus = 0U;
+    mlx90640LastFrameErrorIndex = 0xFFFFU;
+    mlx90640LastFrameErrorValue = 0U;
     
     error = MLX90640_I2CWrite(slaveAddr, MLX90640_STATUS_REG, MLX90640_INIT_STATUS_VALUE);
     if(error == -MLX90640_I2C_NACK_ERROR)
@@ -68,7 +105,16 @@ int MLX90640_SynchFrame(uint8_t slaveAddr)
             return error;
         }    
         //dataReady = statusRegister & 0x0008;
-        dataReady = MLX90640_GET_DATA_READY(statusRegister); 
+        dataReady = MLX90640_GET_DATA_READY(statusRegister);
+        mlx90640LastFrameStatus = statusRegister;
+        if (dataReady == 0)
+        {
+            if ((HAL_GetTick() - startTick) >= MLX90640_FRAME_READY_TIMEOUT_MS)
+            {
+                return -MLX90640_FRAME_NOT_READY_ERROR;
+            }
+            MLX90640_App_Yield();
+        }
     }     
     
    return MLX90640_NO_ERROR;   
@@ -124,6 +170,7 @@ int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
     int error = 1;
     uint16_t data[64];
     uint8_t cnt = 0;
+    uint32_t startTick = HAL_GetTick();
     
     while(dataReady == 0)
     {
@@ -133,7 +180,15 @@ int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
             return error;
         }    
         //dataReady = statusRegister & 0x0008;
-        dataReady = MLX90640_GET_DATA_READY(statusRegister); 
+        dataReady = MLX90640_GET_DATA_READY(statusRegister);
+        if (dataReady == 0)
+        {
+            if ((HAL_GetTick() - startTick) >= MLX90640_FRAME_READY_TIMEOUT_MS)
+            {
+                return -MLX90640_FRAME_NOT_READY_ERROR;
+            }
+            MLX90640_App_Yield();
+        }
     }      
     
     error = MLX90640_I2CWrite(slaveAddr, MLX90640_STATUS_REG, MLX90640_INIT_STATUS_VALUE);
@@ -141,7 +196,7 @@ int MLX90640_GetFrameData(uint8_t slaveAddr, uint16_t *frameData)
     {
         return error;
     }
-                     
+
     error = MLX90640_I2CRead(slaveAddr, MLX90640_PIXEL_DATA_START_ADDRESS, MLX90640_PIXEL_NUM, frameData); 
     if(error != MLX90640_NO_ERROR)
     {
@@ -188,7 +243,12 @@ static int ValidateFrameData(uint16_t *frameData)
     
     for(int i=0; i<MLX90640_PIXEL_NUM; i+=MLX90640_LINE_SIZE)
     {
-        if((frameData[i] == 0x7FFF) && (line%2 == frameData[833])) return -MLX90640_FRAME_DATA_ERROR;
+        if((frameData[i] == 0x7FFF) && (line%2 == frameData[833]))
+        {
+            mlx90640LastFrameErrorIndex = (uint16_t)i;
+            mlx90640LastFrameErrorValue = frameData[i];
+            return -MLX90640_FRAME_DATA_ERROR;
+        }
         line = line + 1;
     }    
         
@@ -198,36 +258,71 @@ static int ValidateFrameData(uint16_t *frameData)
 static int ValidateAuxData(uint16_t *auxData)
 {
     
-    if(auxData[0] == 0x7FFF) return -MLX90640_FRAME_DATA_ERROR;    
+    if(auxData[0] == 0x7FFF)
+    {
+        mlx90640LastFrameErrorIndex = (uint16_t)(MLX90640_PIXEL_NUM + 0U);
+        mlx90640LastFrameErrorValue = auxData[0];
+        return -MLX90640_FRAME_DATA_ERROR;
+    }
     
     for(int i=8; i<19; i++)
     {
-        if(auxData[i] == 0x7FFF) return -MLX90640_FRAME_DATA_ERROR;
+        if(auxData[i] == 0x7FFF)
+        {
+            mlx90640LastFrameErrorIndex = (uint16_t)(MLX90640_PIXEL_NUM + i);
+            mlx90640LastFrameErrorValue = auxData[i];
+            return -MLX90640_FRAME_DATA_ERROR;
+        }
     }
     
     for(int i=20; i<23; i++)
     {
-        if(auxData[i] == 0x7FFF) return -MLX90640_FRAME_DATA_ERROR;
+        if(auxData[i] == 0x7FFF)
+        {
+            mlx90640LastFrameErrorIndex = (uint16_t)(MLX90640_PIXEL_NUM + i);
+            mlx90640LastFrameErrorValue = auxData[i];
+            return -MLX90640_FRAME_DATA_ERROR;
+        }
     }
     
     for(int i=24; i<33; i++)
     {
-        if(auxData[i] == 0x7FFF) return -MLX90640_FRAME_DATA_ERROR;
+        if(auxData[i] == 0x7FFF)
+        {
+            mlx90640LastFrameErrorIndex = (uint16_t)(MLX90640_PIXEL_NUM + i);
+            mlx90640LastFrameErrorValue = auxData[i];
+            return -MLX90640_FRAME_DATA_ERROR;
+        }
     }
     
     for(int i=40; i<51; i++)
     {
-        if(auxData[i] == 0x7FFF) return -MLX90640_FRAME_DATA_ERROR;
+        if(auxData[i] == 0x7FFF)
+        {
+            mlx90640LastFrameErrorIndex = (uint16_t)(MLX90640_PIXEL_NUM + i);
+            mlx90640LastFrameErrorValue = auxData[i];
+            return -MLX90640_FRAME_DATA_ERROR;
+        }
     }
     
     for(int i=52; i<55; i++)
     {
-        if(auxData[i] == 0x7FFF) return -MLX90640_FRAME_DATA_ERROR;
+        if(auxData[i] == 0x7FFF)
+        {
+            mlx90640LastFrameErrorIndex = (uint16_t)(MLX90640_PIXEL_NUM + i);
+            mlx90640LastFrameErrorValue = auxData[i];
+            return -MLX90640_FRAME_DATA_ERROR;
+        }
     }
     
     for(int i=56; i<64; i++)
     {
-        if(auxData[i] == 0x7FFF) return -MLX90640_FRAME_DATA_ERROR;
+        if(auxData[i] == 0x7FFF)
+        {
+            mlx90640LastFrameErrorIndex = (uint16_t)(MLX90640_PIXEL_NUM + i);
+            mlx90640LastFrameErrorValue = auxData[i];
+            return -MLX90640_FRAME_DATA_ERROR;
+        }
     }
     
     return MLX90640_NO_ERROR;
@@ -1464,5 +1559,3 @@ static int IsPixelBad(uint16_t pixel,paramsMLX90640 *params)
 }     
 
 //------------------------------------------------------------------------------
-
-

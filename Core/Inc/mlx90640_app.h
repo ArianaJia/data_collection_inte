@@ -7,9 +7,13 @@ extern "C" {
 
 #include <stdint.h>
 
-#define MLX90640_ADDR            0x33U
+#ifndef MLX90640_ADDR
+#define MLX90640_ADDR            (0x33U << 1)
+#endif
 #define MLX90640_EMISSIVITY      0.95f
 #define MLX90640_FRAME_ATTEMPTS_MAX 4U
+#define MLX90640_FRAME_NOT_READY_ERROR 9U
+#define MLX90640_FRAME_INCOMPLETE_ERROR 10U
 #define MLX90640_LOG_BUFFER_SIZE    160U
 #define MLX90640_APP_LOCK_TIMEOUT_MS 50U
 

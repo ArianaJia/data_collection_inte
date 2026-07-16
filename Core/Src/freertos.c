@@ -63,6 +63,8 @@ typedef StaticQueue_t osStaticMessageQDef_t;
 /* USER CODE BEGIN Variables */
 static App_Uart_Tx_Item_t g_debugTxItem;
 static App_Uart_Tx_Item_t g_uartQueueWorkItem;
+static volatile uint8_t g_bootInitDone = 0U;
+static uint8_t g_mlxCurrentSensor = 0U;
 static char g_mlxLineBuffer[APP_UART_TX_MAX_PAYLOAD];
 static uint8_t g_rs485DmaBuffer[RS485_DMA_BUFFER_SIZE];
 static volatile uint16_t g_rs485DmaLastEventPos = 0U;
@@ -109,7 +111,7 @@ const osThreadAttr_t CanForBMS_attributes = {
 };
 /* Definitions for MLX90640 */
 osThreadId_t MLX90640Handle;
-uint32_t MLX90640Buffer[ 384 ];
+uint32_t MLX90640Buffer[ 768 ];
 osStaticThreadDef_t MLX90640ControlBlock;
 const osThreadAttr_t MLX90640_attributes = {
   .name = "MLX90640",
@@ -181,7 +183,7 @@ const osThreadAttr_t CanBText_attributes = {
 };
 /* Definitions for initTaskBoot */
 osThreadId_t initTaskBootHandle;
-uint32_t initTaskBootBuffer[ 384 ];
+uint32_t initTaskBootBuffer[ 1024 ];
 osStaticThreadDef_t initTaskBootControlBlock;
 const osThreadAttr_t initTaskBoot_attributes = {
   .name = "initTaskBoot",
@@ -189,7 +191,7 @@ const osThreadAttr_t initTaskBoot_attributes = {
   .cb_size = sizeof(initTaskBootControlBlock),
   .stack_mem = &initTaskBootBuffer[0],
   .stack_size = sizeof(initTaskBootBuffer),
-  .priority = (osPriority_t) osPriorityLow1,
+  .priority = (osPriority_t) osPriorityRealtime7,
 };
 /* Definitions for App_Uart_Tx */
 osMessageQueueId_t App_Uart_TxHandle;
@@ -469,42 +471,44 @@ void MLX90640Task(void *argument)
 
   for(;;)
   {
-    uint8_t thermal_summary_updated = 0U;
-
-    for (uint8_t sensor_id = 0U; sensor_id < MLX90640_SENSOR_COUNT; sensor_id++)
+    if (g_bootInitDone == 0U)
     {
-      if (MLX90640_App_IsSensorReady(sensor_id) == 0U)
-      {
-        continue;
-      }
+      osDelay(100);
+      continue;
+    }
 
-      int status = MLX90640_App_CaptureOnce(sensor_id);
+    if (MLX90640_App_IsSensorReady(g_mlxCurrentSensor) != 0U)
+    {
+      int status = MLX90640_App_CaptureOnce(g_mlxCurrentSensor);
       if (status == MLX90640_NO_ERROR)
       {
-        Mlx_SendSummary(sensor_id);
-        Mlx_SendCanSummary(sensor_id);
-        Mlx_SendDebugMatrix(sensor_id, MLX90640_App_GetTempMap());
-        thermal_summary_updated = 1U;
+//        Mlx_SendSummary(g_mlxCurrentSensor);
+//        Mlx_SendCanSummary(g_mlxCurrentSensor);
+        Mlx_SendDebugMatrix(g_mlxCurrentSensor, MLX90640_App_GetTempMap());
+//        (void)Publish_QueueTopic(PUBLISH_TOPIC_THERMAL_SUMMARY);
+      }
+      else if ((status == -MLX90640_FRAME_NOT_READY_ERROR) ||
+               (status == -MLX90640_FRAME_INCOMPLETE_ERROR))
+      {
       }
       else
       {
         (void)snprintf(g_mlxLineBuffer, sizeof(g_mlxLineBuffer),
             "MLX90640 capture error, sensor=%u, status=%d\r\n",
-            (unsigned int)sensor_id, status);
+            (unsigned int)g_mlxCurrentSensor, status);
         App_DebugLogString(g_mlxLineBuffer);
       }
-      osDelay(50);
     }
 
-    if ((HAL_GetTick() - health_tick) >= 2000U)
+    g_mlxCurrentSensor++;
+    if (g_mlxCurrentSensor >= MLX90640_SENSOR_COUNT)
     {
-      (void)MLX90640_App_ServiceHealth();
-      health_tick = HAL_GetTick();
-    }
-
-    if (thermal_summary_updated != 0U)
-    {
-      (void)Publish_QueueTopic(PUBLISH_TOPIC_THERMAL_SUMMARY);
+      g_mlxCurrentSensor = 0U;
+      if ((HAL_GetTick() - health_tick) >= 2000U)
+      {
+        (void)MLX90640_App_ServiceHealth();
+        health_tick = HAL_GetTick();
+      }
     }
 
     HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
@@ -579,7 +583,7 @@ void SPICanControlTask(void *argument)
     {
       SpiCana_Dispatch(&recv_data);
     }
-    osDelay(1);
+    osDelay(10);
   }
   /* USER CODE END SPICanControlTask */
 }
@@ -602,7 +606,7 @@ void SPICanCDCTask(void *argument)
     {
       SpiCdc_Dispatch(&recv_data);
     }
-    osDelay(1);
+    osDelay(10);
   }
   /* USER CODE END SPICanCDCTask */
 }
@@ -637,16 +641,16 @@ void Publish4GTask(void *argument)
         }
         else
         {
-        (void)Publish_QueueTopic(item.topic);
-    }
-  }
-  /* USER CODE END Publish4GTask */
-}
+          (void)Publish_QueueTopic(item.topic);
+        }
+      }
       else
       {
         (void)Publish_QueueTopic(item.topic);
+      }
     }
   }
+   osDelay(10);
   /* USER CODE END Publish4GTask */
 }
 
@@ -687,7 +691,11 @@ void InitTask_Boot(void *argument)
 
   App_DebugLogString("\r\n=== Boot Init Start ===\r\n");
 
-  App_DebugLogString("[BOOT] MLX90640 init...\r\n");
+  App_DebugLogString("[BOOT] CAN start begin\r\n");
+  CAN_Start();
+  App_DebugLogString("[BOOT] CAN start done\r\n");
+
+  App_DebugLogString("[BOOT] MLX90640 init begin\r\n");
   status = MLX90640_App_Init();
   if (status == MLX90640_NO_ERROR)
   {
@@ -697,43 +705,45 @@ void InitTask_Boot(void *argument)
   {
     App_DebugLogString("[BOOT] MLX90640 init pending, will retry via health check\r\n");
   }
-
-  App_DebugLogString("[BOOT] MCP2518FD-A init...\r\n");
-  for (retry = 0; retry < 3; retry++)
-  {
-    if (FDCAN_Init(FDCAN_BUS_A) == HAL_OK)
-    {
-      App_DebugLogString("[BOOT] MCP2518FD-A init ok\r\n");
-      break;
-    }
-    App_DebugLogString("[BOOT] MCP2518FD-A retry...\r\n");
-    osDelay(500U);
-  }
-  if (retry >= 3)
-  {
-    App_DebugLogString("[BOOT] MCP2518FD-A init FAILED after 3 retries\r\n");
-  }
-
-  App_DebugLogString("[BOOT] MCP2518FD-B init...\r\n");
-  for (retry = 0; retry < 3; retry++)
-  {
-    if (FDCAN_Init(FDCAN_BUS_B) == HAL_OK)
-    {
-      App_DebugLogString("[BOOT] MCP2518FD-B init ok\r\n");
-      break;
-    }
-    App_DebugLogString("[BOOT] MCP2518FD-B retry...\r\n");
-    osDelay(500U);
-  }
-  if (retry >= 3)
-  {
-    App_DebugLogString("[BOOT] MCP2518FD-B init FAILED after 3 retries\r\n");
-  }
-
-  App_DebugLogString("[BOOT] 4G bootstrap...\r\n");
-  Y100M_BootstrapOnce();
+  App_DebugLogString("[BOOT] post-MLX delay\r\n");
+  osDelay(1);
+//  App_DebugLogString("[BOOT] MCP2518FD-A init...\r\n");
+//  for (retry = 0; retry < 3; retry++)
+//  {
+//    if (FDCAN_Init(FDCAN_BUS_A) == HAL_OK)
+//    {
+//      App_DebugLogString("[BOOT] MCP2518FD-A init ok\r\n");
+//      break;
+//    }
+//    App_DebugLogString("[BOOT] MCP2518FD-A retry...\r\n");
+//    osDelay(500U);
+//  }
+//  if (retry >= 3)
+//  {
+//    App_DebugLogString("[BOOT] MCP2518FD-A init FAILED after 3 retries\r\n");
+//  }
+//
+//  App_DebugLogString("[BOOT] MCP2518FD-B init...\r\n");
+//  for (retry = 0; retry < 3; retry++)
+//  {
+//    if (FDCAN_Init(FDCAN_BUS_B) == HAL_OK)
+//    {
+//      App_DebugLogString("[BOOT] MCP2518FD-B init ok\r\n");
+//      break;
+//    }
+//    App_DebugLogString("[BOOT] MCP2518FD-B retry...\r\n");
+//    osDelay(500U);
+//  }
+//  if (retry >= 3)
+//  {
+//    App_DebugLogString("[BOOT] MCP2518FD-B init FAILED after 3 retries\r\n");
+//  }
+//
+//  App_DebugLogString("[BOOT] 4G bootstrap...\r\n");
+//  Y100M_BootstrapOnce();
 
   App_DebugLogString("=== Boot Init Complete ===\r\n");
+  g_bootInitDone = 1U;
   osThreadExit();
   /* USER CODE END InitTask_Boot */
 }
@@ -775,7 +785,8 @@ static osStatus_t App_QueueText(osMessageQueueId_t queue_handle, const char *tex
 static void App_DebugLogString(const char *text)
 {
   /* All debug strings are funneled through the USART3 debug queue. */
-  (void)App_QueueText(task01DebugQueueHandle, text, 250U);
+  uint32_t timeout_ms = (g_bootInitDone == 0U) ? 20U : 0U;
+  (void)App_QueueText(task01DebugQueueHandle, text, timeout_ms);
 }
 
 static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart, uint8_t *data, uint16_t length)

@@ -9,7 +9,7 @@ extern "C" {
 #include "cmsis_os2.h"
 
 #define APP_UART_TX_MAX_PAYLOAD        288U
-#define DEBUG_QUEUE_DEPTH       2U
+#define DEBUG_QUEUE_DEPTH       32U
 #define MLX_LINE_BUFFER_SIZE    APP_UART_TX_MAX_PAYLOAD
 #define RS485_DMA_BUFFER_SIZE    256U
 #define RS485_FLAG_RX_READY      (1UL << 0)
