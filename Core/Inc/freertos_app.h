@@ -36,13 +36,13 @@ extern osThreadId_t TensionSensorHandle;
 extern osThreadId_t SPICanControlHandle;
 extern osThreadId_t SPICanCDCHandle;
 extern osThreadId_t Publish4GHandle;
-extern osThreadId_t CanBTextHandle;
+extern osThreadId_t VehicleCanTxHandle;
 extern osThreadId_t initTaskBootHandle;
 
 extern osMessageQueueId_t CAN_Msg_QueueHandle;
 extern osMessageQueueId_t CAN_Msg_Queue_2Handle;
 extern osMessageQueueId_t PublishQueueItemHandle;
-extern osMessageQueueId_t CAN_Tx_QueueHandle;
+extern osMessageQueueId_t VehicleCanTxQueueHandle;
 extern osMessageQueueId_t task01DebugQueueHandle;
 
 void MX_FREERTOS_Init(void);
@@ -54,7 +54,7 @@ void TensionSensorTask(void *argument);
 void SPICanControlTask(void *argument);
 void SPICanCDCTask(void *argument);
 void Publish4GTask(void *argument);
-void CanBTextTask(void *argument);
+void VehicleCanTxTask(void *argument);
 void InitTask_Boot(void *argument);
 
 #ifdef __cplusplus

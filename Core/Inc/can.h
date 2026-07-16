@@ -41,8 +41,8 @@ extern CAN_HandleTypeDef hcan2;
 /* USER CODE BEGIN Private defines */
 /************************** CAN bus/channel ownership **************************/
 /* Physical/virtual channel mapping used by CAN_Msg_Queue_t.can_channel. */
-#define CAN_CHANNEL_VEHICLE_CANB          1U  /* STM32 CAN1: vehicle CANB bus. */
-#define CAN_CHANNEL_BATTERY_BOX           2U  /* STM32 CAN2: battery box bus, reference project CAN1. */
+#define CAN_CHANNEL_BATTERY_BOX           1U  /* STM32 CAN1: battery box bus. */
+#define CAN_CHANNEL_VEHICLE_CANB          2U  /* STM32 CAN2: vehicle CANB bus. */
 #define CAN_CHANNEL_CONTROLLER_CANA       3U  /* MCP2518/SPI1: controller CANA bus, reserved for AMK frames. */
 #define CAN_CHANNEL_CDC_MONITOR           4U  /* MCP2518/SPI3: CDC monitor bus, read-only monitoring path. */
 
@@ -138,13 +138,33 @@ extern CAN_HandleTypeDef hcan2;
 // 声明CAN通信专属结构体（供外部文件引用）,封装CAN通信专属全局变量到结构体，保留所有原有变量名
 typedef struct
 {
-  CAN_TxHeaderTypeDef  g_CANTxHeader;
-  CAN_RxHeaderTypeDef  g_CANRxHeader;
-  uint8_t              g_CANTxData[8];
-  uint8_t              g_CANRxData[8];
-  uint32_t             g_CANTxMailBox;
-  uint32_t             g_CAN1DefSendID;
-} can_msg;
+  CAN_TxHeaderTypeDef  tx_header;
+  CAN_RxHeaderTypeDef  rx_header;
+  uint8_t              tx_data[8];
+  uint8_t              rx_data[8];
+  uint32_t             tx_mailbox;
+  volatile uint32_t    start_status;
+  volatile uint32_t    notify_status;
+  volatile uint32_t    last_tx_status;
+  volatile uint32_t    last_tx_error;
+  volatile uint32_t    last_tx_free_level;
+  volatile uint32_t    tx_request_count;
+  volatile uint32_t    tx_success_count;
+  volatile uint32_t    tx_drop_count;
+  volatile uint32_t    tx_abort_count;
+  volatile uint32_t    last_tx_abort_status;
+  volatile uint32_t    last_tx_free_after_abort;
+  volatile uint32_t    last_tx_error_after_abort;
+  volatile uint32_t    rx_count;
+  volatile uint32_t    rx_error_count;
+  volatile uint32_t    last_rx_error;
+  volatile uint32_t    last_tx_id;
+  volatile uint32_t    last_rx_id;
+  volatile uint32_t    last_rx_ide;
+  volatile uint32_t    last_rx_dlc;
+  volatile uint32_t    last_rx_fifo_fill;
+  volatile uint8_t     last_rx_data[8];
+} CAN_ControllerContext_t;
 
 // 声明FreeRTOS CAN队列数据结构体（核心：供freertos.c调用）
 typedef struct
@@ -163,8 +183,8 @@ typedef struct
     uint8_t data[8];
 } CAN_Tx_Queue_t;
 
-// 声明CAN通信结构体实例（修正命名冲突）
-extern can_msg g_can_msg;
+extern CAN_ControllerContext_t g_can1_ctx;
+extern CAN_ControllerContext_t g_can2_ctx;
 /* USER CODE END Private defines */
 
 void MX_CAN1_Init(void);
@@ -176,7 +196,7 @@ void User_CAN1_Send(void);
 void CAN_Send_Msg(CAN_HandleTypeDef *canHandle, uint32_t SendStdId, uint8_t *pTxData);
 void CAN_Start(void);
 osStatus_t freertos_can_queue_send_from_isr(const CAN_Msg_Queue_t *pData);
-osStatus_t freertos_can1_tx_queue_put(const CAN_Tx_Queue_t *pData, uint32_t timeout_ms);
+osStatus_t freertos_vehicle_can_tx_queue_put(const CAN_Tx_Queue_t *pData, uint32_t timeout_ms);
 
 
 /* USER CODE END Prototypes */
