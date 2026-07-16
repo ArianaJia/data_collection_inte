@@ -820,7 +820,6 @@ static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart,
   {
     return status;
   }
-
   return HAL_OK;
 }
 
@@ -1422,7 +1421,6 @@ static void VehicleCan_Send(const CAN_Tx_Queue_t *tx_data)
   {
     return;
   }
-
   CAN_Send_Msg(&hcan2, tx_data->std_id, (uint8_t *)tx_data->data);
   if (g_can2_ctx.last_tx_status != HAL_OK)
   {
