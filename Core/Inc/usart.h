@@ -29,6 +29,7 @@ extern "C" {
 #include "main.h"
 
 /* USER CODE BEGIN Includes */
+#include <stdint.h>
 
 /* USER CODE END Includes */
 
@@ -49,6 +50,7 @@ void MX_USART3_UART_Init(void);
 /* USER CODE BEGIN Prototypes */
 void Y100M_BootstrapOnce(void);
 void Y100M_OnUsart1RxIdle(uint16_t size);
+HAL_StatusTypeDef Y100M_MqttPublish(const uint8_t *payload, uint16_t payload_length);
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus

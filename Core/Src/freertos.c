@@ -71,7 +71,7 @@ static volatile uint16_t g_rs485DmaLastEventPos = 0U;
 static volatile uint16_t g_rs485DmaPendingBytes = 0U;
 static volatile uint8_t g_rs485DmaOverflow = 0U;
 static uint16_t g_rs485DmaReadPos = 0U;
-static uint8_t g_publishFrameBuffer[PUBLISH_MAX_FRAME_SIZE];
+static uint8_t g_publishFrameBuffer[PUBLISH_MAX_PAYLOAD_SIZE];
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -374,7 +374,7 @@ void MX_FREERTOS_Init(void) {
 //  SPICanCDCHandle = osThreadNew(SPICanCDCTask, NULL, &SPICanCDC_attributes);
 
   /* creation of Publish4G */
-//  Publish4GHandle = osThreadNew(Publish4GTask, NULL, &Publish4G_attributes);
+  Publish4GHandle = osThreadNew(Publish4GTask, NULL, &Publish4G_attributes);
 
   /* creation of VehicleCanTx */
   VehicleCanTxHandle = osThreadNew(VehicleCanTxTask, NULL, &VehicleCanTx_attributes);
@@ -631,14 +631,22 @@ void Publish4GTask(void *argument)
 
   for(;;)
   {
+    while (g_bootInitDone == 0U)
+    {
+      osDelay(100);
+      // continue;
+    }
+
     if (osMessageQueueGet(PublishQueueItemHandle, &item, NULL, osWaitForever) == osOK)
     {
       Publish_OnTopicDequeued(item.topic);
 
-      if (Publish_BuildFrame(item.topic, g_publishFrameBuffer,
+      if (item.topic == PUBLISH_TOPIC_VEHICLE_STATE &&
+          Publish_BuildFrame(item.topic, g_publishFrameBuffer,
                              (uint16_t)sizeof(g_publishFrameBuffer), &frame_length))
       {
-        tx_status = App_UART_TransmitDmaBlocking(&huart1, g_publishFrameBuffer, frame_length);
+        tx_status = Y100M_MqttPublish(g_publishFrameBuffer, frame_length);
+
         if (tx_status == HAL_OK)
         {
           osDelay(PUBLISH_COOLDOWN_MS);
@@ -650,7 +658,10 @@ void Publish4GTask(void *argument)
       }
       else
       {
-        (void)Publish_QueueTopic(item.topic);
+        if (item.topic == PUBLISH_TOPIC_VEHICLE_STATE)
+        {
+          (void)Publish_QueueTopic(item.topic);
+        }
       }
       osDelay(200);
     }
@@ -696,21 +707,21 @@ void InitTask_Boot(void *argument)
 
   App_DebugLogString("\r\n=== Boot Init Start ===\r\n");
 
-  App_DebugLogString("[BOOT] CAN start begin\r\n");
+//  App_DebugLogString("[BOOT] CAN start begin\r\n");
   CAN_Start();
-  App_DebugLogString("[BOOT] CAN start done\r\n");
+//  App_DebugLogString("[BOOT] CAN start done\r\n");
 
-  App_DebugLogString("[BOOT] MLX90640 init begin\r\n");
+//  App_DebugLogString("[BOOT] MLX90640 init begin\r\n");
   status = MLX90640_App_Init();
   if (status == MLX90640_NO_ERROR)
   {
-    App_DebugLogString("[BOOT] MLX90640 init ok\r\n");
+//    App_DebugLogString("[BOOT] MLX90640 init ok\r\n");
   }
   else
   {
     App_DebugLogString("[BOOT] MLX90640 init pending, will retry via health check\r\n");
   }
-  App_DebugLogString("[BOOT] post-MLX delay\r\n");
+//  App_DebugLogString("[BOOT] post-MLX delay\r\n");
   osDelay(1);
 //  App_DebugLogString("[BOOT] MCP2518FD-A init...\r\n");
 //  for (retry = 0; retry < 3; retry++)
@@ -744,11 +755,11 @@ void InitTask_Boot(void *argument)
 //    App_DebugLogString("[BOOT] MCP2518FD-B init FAILED after 3 retries\r\n");
 //  }
 //
-//  App_DebugLogString("[BOOT] 4G bootstrap...\r\n");
-//  Y100M_BootstrapOnce();
-
-  App_DebugLogString("=== Boot Init Complete ===\r\n");
+  App_DebugLogString("[BOOT] 4G bootstrap...\r\n");
+  Y100M_BootstrapOnce();
   g_bootInitDone = 1U;
+  App_DebugLogString("=== Boot Init Complete ===\r\n");
+  (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
   osThreadExit();
   /* USER CODE END InitTask_Boot */
 }
@@ -820,7 +831,6 @@ static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart,
   {
     return status;
   }
-
   return HAL_OK;
 }
 
@@ -1189,9 +1199,9 @@ static uint32_t Mlx_GetCanSummaryId(uint8_t sensor_id)
   switch (sensor_id)
   {
     case 0U:
-      return CAN_ID_CANB_THERMAL_SUMMARY_FL;
-    case 1U:
       return CAN_ID_CANB_THERMAL_SUMMARY_FR;
+    case 1U:
+      return CAN_ID_CANB_THERMAL_SUMMARY_FL;
     case 2U:
       return CAN_ID_CANB_THERMAL_SUMMARY_RL;
     case 3U:
@@ -1422,7 +1432,6 @@ static void VehicleCan_Send(const CAN_Tx_Queue_t *tx_data)
   {
     return;
   }
-
   CAN_Send_Msg(&hcan2, tx_data->std_id, (uint8_t *)tx_data->data);
   if (g_can2_ctx.last_tx_status != HAL_OK)
   {

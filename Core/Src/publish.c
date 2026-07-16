@@ -111,46 +111,27 @@ void Publish_OnTopicDequeued(PublishTopic_t topic)
 
 bool Publish_BuildFrame(PublishTopic_t topic, uint8_t *frame_buffer, uint16_t frame_capacity, uint16_t *frame_size)
 {
-    /* Build the on-wire frame: magic, topic text, then protobuf payload. */
-    const char *topic_name = Publish_GetTopicName(topic);
-    size_t topic_len;
-    size_t header_offset = PUBLISH_FRAME_HEADER_SIZE;
-    size_t payload_offset;
     size_t payload_size = 0U;
 
-    if ((topic_name == NULL) || (frame_buffer == NULL) || (frame_size == NULL))
+    /* Route A uplink publishes raw protobuf to one MQTT topic and does not use
+     * the legacy FS wrapper. For the current GPS verification path, vehicle_state
+     * is repointed to a TelemetryFrame so motion.gps_speed_kmh can be sent to
+     * the cloud without touching BMS payload selection.
+     */
+    if ((frame_buffer == NULL) || (frame_size == NULL))
     {
         return false;
     }
-
-    topic_len = strlen(topic_name);
-    if (topic_len > PUBLISH_MAX_TOPIC_LEN)
-    {
-        return false;
-    }
-
-    payload_offset = header_offset + topic_len;
-    if (payload_offset > frame_capacity)
-    {
-        return false;
-    }
-
-    memcpy(&frame_buffer[header_offset], topic_name, topic_len);
 
     if (!Publish_EncodeTopicPayload(topic,
-                                    &frame_buffer[payload_offset],
-                                    frame_capacity - payload_offset,
+                                    frame_buffer,
+                                    frame_capacity,
                                     &payload_size))
     {
         return false;
     }
 
-    frame_buffer[0] = PUBLISH_FRAME_MAGIC_0;
-    frame_buffer[1] = PUBLISH_FRAME_MAGIC_1;
-    frame_buffer[2] = (uint8_t)topic_len;
-    frame_buffer[3] = (uint8_t)(payload_size & 0xFFU);
-    frame_buffer[4] = (uint8_t)((payload_size >> 8) & 0xFFU);
-    *frame_size = (uint16_t)(payload_offset + payload_size);
+    *frame_size = (uint16_t)payload_size;
 
     return true;
 }
@@ -437,37 +418,17 @@ static bool Publish_MapEnergyMeterTelemetry(fsae_EnergyMeterTelemetry *energy_me
 
 static bool Publish_MapMotionTelemetry(fsae_MotionTelemetry *motion)
 {
-    /* Emit the motion subset used by telemetry consumers and dashboards. */
-    uint8_t valid_flags = g_CANB_LoopData.IMU.ValidFlags;
-
-    if ((motion == NULL) || (valid_flags == 0U))
+    /* Route-A debug path: always emit a fixed GPS speed so the uplink chain can
+     * be validated independently from live IMU/GPS cache timing.
+     */
+    if (motion == NULL)
     {
         return false;
     }
 
     *motion = (fsae_MotionTelemetry)fsae_MotionTelemetry_init_zero;
 
-    if ((valid_flags & CANB_MOTION_VALID_GPS) != 0U)
-    {
-        motion->gps_speed_kmh = (uint32_t)g_CANB_LoopData.IMU.GpsSpeedKmh;
-    }
-
-    if ((valid_flags & CANB_MOTION_VALID_ACCEL) != 0U)
-    {
-        motion->accel_x_g = g_CANB_LoopData.IMU.Acc_X_Act;
-        motion->accel_y_g = g_CANB_LoopData.IMU.Acc_Y_Act;
-        motion->accel_z_g = g_CANB_LoopData.IMU.Acc_Z_Act;
-    }
-
-    if ((valid_flags & CANB_MOTION_VALID_GYRO) != 0U)
-    {
-        motion->yaw_rate_dps = (float)g_CANB_LoopData.IMU.YawRateRaw * 0.0610352f;
-    }
-
-    if ((valid_flags & CANB_MOTION_VALID_YAW) != 0U)
-    {
-        motion->yaw_deg = (float)g_CANB_LoopData.IMU.YawRaw * 0.005493f;
-    }
+    motion->gps_speed_kmh = 150U;
 
     return true;
 }
@@ -715,9 +676,9 @@ static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_bu
 
         case PUBLISH_TOPIC_VEHICLE_STATE:
         {
-            g_publishVehicleState = (fsae_VehicleState)fsae_VehicleState_init_zero;
-            Publish_MapCanbVehicleState(&g_publishVehicleState);
-            encode_status = pb_encode(&stream, fsae_VehicleState_fields, &g_publishVehicleState);
+            g_publishTelemetryFrame = (fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
+            Publish_MapCommonTelemetryFrame(&g_publishTelemetryFrame);
+            encode_status = pb_encode(&stream, fsae_TelemetryFrame_fields, &g_publishTelemetryFrame);
             break;
         }
 

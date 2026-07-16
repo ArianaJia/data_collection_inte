@@ -26,23 +26,24 @@
 #include <string.h>
 #include "FreeRTOS.h"
 
-/* The 4G DTU only needs a bounded AT bootstrap during power-up.
- * After that, USART1 returns to raw TCP payload transport and task08 keeps
- * owning the business publish path exactly as before.
- *
- * Current publish plain-text topics are still defined in publish.c:
- *   fast_telemetry / bms_summary / vehicle_state / bms_detail / thermal_summary
- * The bootstrap below does not rewrite payload encoding or inspect topics.
+/* USART1 now follows the final standard-AT MQTT uplink route:
+ * broker 82.157.204.124:1883, topic fsae/telemetry, payload = raw
+ * TelemetryFrame protobuf. USART1 therefore stays in AT/TCP client mode and
+ * the business task pushes each encoded protobuf through AT+CIPSEND.
  */
-#define Y100M_AT_REPLY_BUFFER_SIZE        256U
+#define Y100M_AT_REPLY_BUFFER_SIZE        512U
 #define Y100M_AT_LOG_BUFFER_SIZE          192U
-#define Y100M_AT_GUARD_TIME_MS           1000U
 #define Y100M_AT_CMD_TIMEOUT_MS          2000U
 #define Y100M_AT_RESET_PULSE_MS          1000U
 #define Y100M_AT_BOOT_WAIT_MS            5000U
 #define Y100M_AT_MAX_HANDSHAKE_ATTEMPTS     2U
-#define Y100M_AT_EXIT_CMD               "AT+ENTM"
+#define Y100M_AT_TCP_OPEN_TIMEOUT_MS    30000U
+#define Y100M_AT_PDP_TIMEOUT_MS         15000U
+#define Y100M_AT_MQTT_CONNACK_TIMEOUT_MS 15000U
 #define Y100M_UART3_LOG_TIMEOUT_MS      1000U
+#define Y100M_MQTT_BROKER               "82.157.204.124"
+#define Y100M_MQTT_PORT                 1883U
+#define Y100M_MQTT_CLIENT_ID            "STM32_DATA_COLLECTION"
 
 typedef struct
 {
@@ -58,7 +59,7 @@ static char g_y100mAtReplyBuffer[Y100M_AT_REPLY_BUFFER_SIZE];
 static char g_y100mLogBuffer[Y100M_AT_LOG_BUFFER_SIZE];
 
 /* ── USART1 RX DMA for AT response reception ── */
-#define Y100M_AT_RX_DMA_BUFFER_SIZE       256U
+#define Y100M_AT_RX_DMA_BUFFER_SIZE       512U
 static uint8_t  g_y100mUsart1RxDmaBuffer[Y100M_AT_RX_DMA_BUFFER_SIZE];
 static volatile uint8_t  g_y100mUsart1RxDmaDone;
 static volatile uint16_t g_y100mUsart1RxDmaSize;
@@ -103,8 +104,11 @@ static void Y100M_DebugLog(const char *text);
 static void Y100M_Uart1DrainRx(void);
 static HAL_StatusTypeDef Y100M_WaitReply(const char *expected, uint32_t timeout_ms, char *reply_buffer, uint16_t reply_capacity);
 static HAL_StatusTypeDef Y100M_SendAtExpect(const char *command, const char *expected, uint32_t timeout_ms);
-static void Y100M_EnterAtMode(void);
-static HAL_StatusTypeDef Y100M_ExitAtMode(void);
+static HAL_StatusTypeDef Y100M_SendRawPayload(const uint8_t *data, uint16_t length, uint32_t timeout_ms);
+static uint8_t Y100M_EncodeMqttRemainingLength(uint32_t value, uint8_t *buffer, uint8_t capacity);
+static HAL_StatusTypeDef Y100M_PdpActivate(void);
+static HAL_StatusTypeDef Y100M_GetLocalIp(void);
+static HAL_StatusTypeDef Y100M_MqttConnect(void);
 static void Y100M_ResetPulse(void);
 static HAL_StatusTypeDef Y100M_RunBootstrapSteps(void);
 void Y100M_BootstrapOnce(void);
@@ -695,26 +699,161 @@ static HAL_StatusTypeDef Y100M_SendAtExpect(const char *command, const char *exp
   return rx_status;
 }
 
-/* Enter AT command mode after the required guard time. */
-static void Y100M_EnterAtMode(void)
+static HAL_StatusTypeDef Y100M_SendRawPayload(const uint8_t *data, uint16_t length, uint32_t timeout_ms)
 {
-  /* "+++" is treated as the lightest escape from transparent transfer back to
-   * AT mode. If the module is already in AT mode, this sequence is harmless.
-   */
-  (void)Y100M_Uart1DmaSend((const uint8_t *)"+++", 3U, Y100M_AT_CMD_TIMEOUT_MS);
-  Y100M_DelayMs(Y100M_AT_GUARD_TIME_MS);
-  Y100M_Uart1DrainRx();
+  HAL_StatusTypeDef tx_status;
+  HAL_StatusTypeDef rx_status;
+  char command[32];
+
+  if ((data == NULL) || (length == 0U))
+  {
+    return HAL_ERROR;
+  }
+
+  (void)snprintf(command, sizeof(command), "AT+CIPSEND=%u", (unsigned int)length);
+  tx_status = Y100M_SendAtExpect(command, ">", timeout_ms);
+  if (tx_status != HAL_OK)
+  {
+    return tx_status;
+  }
+
+  tx_status = Y100M_Uart1DmaSend(data, length, timeout_ms);
+  if (tx_status != HAL_OK)
+  {
+    return tx_status;
+  }
+
+  rx_status = Y100M_WaitReply("SEND OK",
+                              timeout_ms,
+                              g_y100mAtReplyBuffer,
+                              (uint16_t)sizeof(g_y100mAtReplyBuffer));
+  if (rx_status == HAL_OK)
+  {
+    Y100M_DebugLog("[4G] raw payload SEND OK\r\n");
+  }
+
+  return rx_status;
 }
 
-/* Leave AT command mode and return the module to data mode. */
-static HAL_StatusTypeDef Y100M_ExitAtMode(void)
+static uint8_t Y100M_EncodeMqttRemainingLength(uint32_t value, uint8_t *buffer, uint8_t capacity)
 {
-  if (Y100M_AT_EXIT_CMD[0] == '\0')
+  uint8_t count = 0U;
+
+  if ((buffer == NULL) || (capacity == 0U))
+  {
+    return 0U;
+  }
+
+  do
+  {
+    uint8_t digit = (uint8_t)(value % 128U);
+    value /= 128U;
+    if (value > 0U)
+    {
+      digit |= 0x80U;
+    }
+    if (count >= capacity)
+    {
+      return 0U;
+    }
+    buffer[count++] = digit;
+  } while (value > 0U);
+
+  return count;
+}
+
+static HAL_StatusTypeDef Y100M_PdpActivate(void)
+{
+  HAL_StatusTypeDef status;
+
+  status = Y100M_GetLocalIp();
+  if (status != HAL_OK)
+  {
+    status = Y100M_SendAtExpect("AT+CSTT=\"CMNET\"", "OK", Y100M_AT_CMD_TIMEOUT_MS);
+    if (status != HAL_OK)
+    {
+      /* Match the successful PC script strategy: a CSTT failure does not end
+       * the flow because some modem states keep a valid PDP profile already.
+       */
+      Y100M_DebugLog("[4G] AT+CSTT failed, continue with existing PDP profile\r\n");
+    }
+  }
+  else
+  {
+    Y100M_DebugLog("[4G] reuse existing IP context\r\n");
+    return HAL_OK;
+  }
+
+  status = Y100M_SendAtExpect("AT+CIICR", "OK", Y100M_AT_PDP_TIMEOUT_MS);
+  if (status != HAL_OK)
+  {
+    /* The PC script does not treat CIICR failure as fatal if CIFSR can still
+     * produce an IP afterwards. Keep the log and continue to the final check.
+     */
+    Y100M_DebugLog("[4G] AT+CIICR failed, retry local IP query\r\n");
+  }
+
+  status = Y100M_GetLocalIp();
+  if (status == HAL_OK)
   {
     return HAL_OK;
   }
 
-  return Y100M_SendAtExpect(Y100M_AT_EXIT_CMD, "OK", Y100M_AT_CMD_TIMEOUT_MS);
+  Y100M_DebugLog("[4G] local IP unavailable after PDP attempts\r\n");
+  return status;
+}
+
+static HAL_StatusTypeDef Y100M_GetLocalIp(void)
+{
+  HAL_StatusTypeDef status = Y100M_SendAtExpect("AT+CIFSR", ".", Y100M_AT_CMD_TIMEOUT_MS);
+
+  if (status == HAL_OK)
+  {
+    (void)snprintf(g_y100mLogBuffer,
+                   sizeof(g_y100mLogBuffer),
+                   "[4G] local IP: %s\r\n",
+                   g_y100mAtReplyBuffer);
+    Y100M_DebugLog(g_y100mLogBuffer);
+  }
+
+  return status;
+}
+
+static HAL_StatusTypeDef Y100M_MqttConnect(void)
+{
+  static const uint8_t mqtt_connect_packet[] =
+  {
+    0x10U, 0x23U,
+    0x00U, 0x04U, 'M', 'Q', 'T', 'T',
+    0x04U, 0x02U, 0x00U, 0x3CU,
+    0x00U, 0x15U,
+    'S', 'T', 'M', '3', '2', '_', 'D', 'A', 'T', 'A', '_', 'C', 'O', 'L', 'L', 'E', 'C', 'T', 'I', 'O', 'N'
+  };
+  HAL_StatusTypeDef status;
+
+  status = Y100M_SendAtExpect("AT+CIPSTART=\"TCP\",\"82.157.204.124\",1883", "OK", Y100M_AT_TCP_OPEN_TIMEOUT_MS);
+  if (status != HAL_OK)
+  {
+    return status;
+  }
+
+  /* The module may complete socket setup asynchronously after the immediate
+   * OK. Match the successful PC script behavior and leave a short settle time
+   * before requesting CIPSEND for the MQTT CONNECT packet.
+   */
+  Y100M_DelayMs(1000U);
+
+  status = Y100M_SendRawPayload(mqtt_connect_packet,
+                                (uint16_t)sizeof(mqtt_connect_packet),
+                                Y100M_AT_CMD_TIMEOUT_MS);
+  if (status != HAL_OK)
+  {
+    return status;
+  }
+
+  Y100M_DebugLog("[4G] MQTT CONNECT payload accepted by modem\r\n");
+  Y100M_DelayMs(1000U);
+  return HAL_OK;
 }
 
 /* Pulse the external reset pin to force the 4G module to reboot. */
@@ -735,8 +874,6 @@ static HAL_StatusTypeDef Y100M_RunBootstrapSteps(void)
   uint32_t index = 0U;
   uint8_t attempt = 0U;
 
-  Y100M_EnterAtMode();
-
   for (attempt = 0U; attempt < Y100M_AT_MAX_HANDSHAKE_ATTEMPTS; attempt++)
   {
     status = Y100M_SendAtExpect("AT", "OK", Y100M_AT_CMD_TIMEOUT_MS);
@@ -745,21 +882,14 @@ static HAL_StatusTypeDef Y100M_RunBootstrapSteps(void)
       break;
     }
 
-    /* If the AT probe fails, leave the module in business mode first, then
-     * try to re-enter AT mode once more before escalating to hardware reset.
-     */
-    (void)Y100M_ExitAtMode();
-    Y100M_EnterAtMode();
   }
 
   if (status != HAL_OK)
   {
     Y100M_ResetPulse();
-    Y100M_EnterAtMode();
     status = Y100M_SendAtExpect("AT", "OK", Y100M_AT_CMD_TIMEOUT_MS);
     if (status != HAL_OK)
     {
-      (void)Y100M_ExitAtMode();
       return status;
     }
   }
@@ -781,12 +911,25 @@ static HAL_StatusTypeDef Y100M_RunBootstrapSteps(void)
                      "[4G] bootstrap step failed: %s\r\n",
                      step->name);
       Y100M_DebugLog(g_y100mLogBuffer);
-      (void)Y100M_ExitAtMode();
       return status;
     }
   }
 
-  return Y100M_ExitAtMode();
+  status = Y100M_PdpActivate();
+  if (status != HAL_OK)
+  {
+    Y100M_DebugLog("[4G] PDP activation failed\r\n");
+    return status;
+  }
+
+  status = Y100M_MqttConnect();
+  if (status != HAL_OK)
+  {
+    Y100M_DebugLog("[4G] MQTT connect failed\r\n");
+    return status;
+  }
+
+  return HAL_OK;
 }
 
 /* Execute the one-shot bootstrap only once during startup. */
@@ -806,7 +949,7 @@ void Y100M_BootstrapOnce(void)
   if (status == HAL_OK)
   {
     g_y100mBootstrapOk = 1U;
-    Y100M_DebugLog("[4G] bootstrap complete, return USART1 to raw TCP payload mode\r\n");
+    Y100M_DebugLog("[4G] bootstrap complete, MQTT uplink ready on USART1\r\n");
   }
   else
   {
@@ -817,6 +960,63 @@ void Y100M_BootstrapOnce(void)
                    (int)status);
     Y100M_DebugLog(g_y100mLogBuffer);
   }
+}
+
+HAL_StatusTypeDef Y100M_MqttPublish(const uint8_t *payload, uint16_t payload_length)
+{
+  uint8_t mqtt_header[5];
+  uint8_t topic_header[2];
+  uint8_t remaining_length[4];
+  uint16_t topic_length = 14U;
+  uint8_t encoded_count = 0U;
+  uint8_t *packet;
+  uint16_t packet_length;
+  uint16_t offset;
+  HAL_StatusTypeDef status;
+  static const uint8_t topic[] = "fsae/telemetry";
+
+  if ((payload == NULL) || (payload_length == 0U) || (g_y100mBootstrapOk == 0U))
+  {
+    return HAL_ERROR;
+  }
+
+  mqtt_header[0] = 0x30U;
+  encoded_count = Y100M_EncodeMqttRemainingLength((uint32_t)(2U + topic_length + payload_length),
+                                                  remaining_length,
+                                                  (uint8_t)sizeof(remaining_length));
+  if (encoded_count == 0U)
+  {
+    return HAL_ERROR;
+  }
+
+  (void)memcpy(&mqtt_header[1], remaining_length, encoded_count);
+  topic_header[0] = (uint8_t)(topic_length >> 8);
+  topic_header[1] = (uint8_t)(topic_length & 0xFFU);
+
+  packet_length = (uint16_t)(1U + encoded_count + 2U + topic_length + payload_length);
+  packet = g_y100mUsart1RxDmaBuffer;
+  if (packet_length > Y100M_AT_RX_DMA_BUFFER_SIZE)
+  {
+    return HAL_ERROR;
+  }
+
+  offset = 0U;
+  packet[offset++] = mqtt_header[0];
+  (void)memcpy(&packet[offset], &mqtt_header[1], encoded_count);
+  offset = (uint16_t)(offset + encoded_count);
+  packet[offset++] = topic_header[0];
+  packet[offset++] = topic_header[1];
+  (void)memcpy(&packet[offset], topic, topic_length);
+  offset = (uint16_t)(offset + topic_length);
+  (void)memcpy(&packet[offset], payload, payload_length);
+
+  (void)snprintf(g_y100mLogBuffer,
+                 sizeof(g_y100mLogBuffer),
+                 "[4G] MQTT publish payload bytes=%u\r\n",
+                 (unsigned int)payload_length);
+  Y100M_DebugLog(g_y100mLogBuffer);
+
+  return Y100M_SendRawPayload(packet, packet_length, Y100M_AT_CMD_TIMEOUT_MS);
 }
 
 /* USER CODE END 1 */

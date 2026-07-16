@@ -1,0 +1,116 @@
+VERSION "MLX90640 CAN Summary"
+
+NS_ : 
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: DATA_COLLECTION_INTEGRAL VEHICLE_LOGGER
+
+BO_ 113 MLX90640_THERMAL_SUMMARY_FR: 8 DATA_COLLECTION_INTEGRAL
+ SG_ R0_Integer : 0|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R0_Fraction : 8|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+ SG_ R1_Integer : 16|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R1_Fraction : 24|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+ SG_ R2_Integer : 32|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R2_Fraction : 40|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+ SG_ R3_Integer : 48|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R3_Fraction : 56|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+
+BO_ 114 MLX90640_THERMAL_SUMMARY_FL: 8 DATA_COLLECTION_INTEGRAL
+ SG_ R0_Integer : 0|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R0_Fraction : 8|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+ SG_ R1_Integer : 16|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R1_Fraction : 24|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+ SG_ R2_Integer : 32|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R2_Fraction : 40|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+ SG_ R3_Integer : 48|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R3_Fraction : 56|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+
+BO_ 115 MLX90640_THERMAL_SUMMARY_RL: 8 DATA_COLLECTION_INTEGRAL
+ SG_ R0_Integer : 0|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R0_Fraction : 8|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+ SG_ R1_Integer : 16|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R1_Fraction : 24|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+ SG_ R2_Integer : 32|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R2_Fraction : 40|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+ SG_ R3_Integer : 48|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R3_Fraction : 56|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+
+BO_ 116 MLX90640_THERMAL_SUMMARY_RR: 8 DATA_COLLECTION_INTEGRAL
+ SG_ R0_Integer : 0|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R0_Fraction : 8|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+ SG_ R1_Integer : 16|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R1_Fraction : 24|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+ SG_ R2_Integer : 32|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R2_Fraction : 40|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+ SG_ R3_Integer : 48|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
+ SG_ R3_Fraction : 56|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+
+CM_ BO_ 113 "MLX90640 front-right summary. Region meaning is fixed as R0=upper-left, R1=upper-right, R2=lower-left, R3=lower-right inside the sensor field of view. Each region is encoded as integer byte + fractional byte (0.01 degC).";
+CM_ BO_ 114 "MLX90640 front-left summary. Region meaning is fixed as R0=upper-left, R1=upper-right, R2=lower-left, R3=lower-right inside the sensor field of view. Payload layout is identical to FR.";
+CM_ BO_ 115 "MLX90640 rear-left summary. Region meaning is fixed as R0=upper-left, R1=upper-right, R2=lower-left, R3=lower-right inside the sensor field of view. Payload layout is identical to FL.";
+CM_ BO_ 116 "MLX90640 rear-right summary. Region meaning is fixed as R0=upper-left, R1=upper-right, R2=lower-left, R3=lower-right inside the sensor field of view. Payload layout is identical to FL.";
+
+CM_ SG_ 113 R0_Integer "Front-right sensor Region 0 integer part. Region 0 = upper-left quadrant of the sensor image. Final temperature = R0_Integer + R0_Fraction.";
+CM_ SG_ 113 R0_Fraction "Front-right sensor Region 0 fractional part, unit 0.01 degC. Region 0 = upper-left quadrant. Example: Integer=23, Fraction=45 means 23.45 degC.";
+CM_ SG_ 113 R1_Integer "Front-right sensor Region 1 integer part. Region 1 = upper-right quadrant of the sensor image. Final temperature = R1_Integer + R1_Fraction.";
+CM_ SG_ 113 R1_Fraction "Front-right sensor Region 1 fractional part, unit 0.01 degC. Region 1 = upper-right quadrant.";
+CM_ SG_ 113 R2_Integer "Front-right sensor Region 2 integer part. Region 2 = lower-left quadrant of the sensor image. Final temperature = R2_Integer + R2_Fraction.";
+CM_ SG_ 113 R2_Fraction "Front-right sensor Region 2 fractional part, unit 0.01 degC. Region 2 = lower-left quadrant.";
+CM_ SG_ 113 R3_Integer "Front-right sensor Region 3 integer part. Region 3 = lower-right quadrant of the sensor image. Final temperature = R3_Integer + R3_Fraction.";
+CM_ SG_ 113 R3_Fraction "Front-right sensor Region 3 fractional part, unit 0.01 degC. Region 3 = lower-right quadrant.";
+
+CM_ SG_ 114 R0_Integer "Front-left sensor Region 0 integer part. Region 0 = upper-left quadrant of the sensor image. Final temperature = R0_Integer + R0_Fraction.";
+CM_ SG_ 114 R0_Fraction "Front-left sensor Region 0 fractional part, unit 0.01 degC. Region 0 = upper-left quadrant.";
+CM_ SG_ 114 R1_Integer "Front-left sensor Region 1 integer part. Region 1 = upper-right quadrant of the sensor image. Final temperature = R1_Integer + R1_Fraction.";
+CM_ SG_ 114 R1_Fraction "Front-left sensor Region 1 fractional part, unit 0.01 degC. Region 1 = upper-right quadrant.";
+CM_ SG_ 114 R2_Integer "Front-left sensor Region 2 integer part. Region 2 = lower-left quadrant of the sensor image. Final temperature = R2_Integer + R2_Fraction.";
+CM_ SG_ 114 R2_Fraction "Front-left sensor Region 2 fractional part, unit 0.01 degC. Region 2 = lower-left quadrant.";
+CM_ SG_ 114 R3_Integer "Front-left sensor Region 3 integer part. Region 3 = lower-right quadrant of the sensor image. Final temperature = R3_Integer + R3_Fraction.";
+CM_ SG_ 114 R3_Fraction "Front-left sensor Region 3 fractional part, unit 0.01 degC. Region 3 = lower-right quadrant.";
+
+CM_ SG_ 115 R0_Integer "Rear-left sensor Region 0 integer part. Region 0 = upper-left quadrant of the sensor image. Final temperature = R0_Integer + R0_Fraction.";
+CM_ SG_ 115 R0_Fraction "Rear-left sensor Region 0 fractional part, unit 0.01 degC. Region 0 = upper-left quadrant.";
+CM_ SG_ 115 R1_Integer "Rear-left sensor Region 1 integer part. Region 1 = upper-right quadrant of the sensor image. Final temperature = R1_Integer + R1_Fraction.";
+CM_ SG_ 115 R1_Fraction "Rear-left sensor Region 1 fractional part, unit 0.01 degC. Region 1 = upper-right quadrant.";
+CM_ SG_ 115 R2_Integer "Rear-left sensor Region 2 integer part. Region 2 = lower-left quadrant of the sensor image. Final temperature = R2_Integer + R2_Fraction.";
+CM_ SG_ 115 R2_Fraction "Rear-left sensor Region 2 fractional part, unit 0.01 degC. Region 2 = lower-left quadrant.";
+CM_ SG_ 115 R3_Integer "Rear-left sensor Region 3 integer part. Region 3 = lower-right quadrant of the sensor image. Final temperature = R3_Integer + R3_Fraction.";
+CM_ SG_ 115 R3_Fraction "Rear-left sensor Region 3 fractional part, unit 0.01 degC. Region 3 = lower-right quadrant.";
+
+CM_ SG_ 116 R0_Integer "Rear-right sensor Region 0 integer part. Region 0 = upper-left quadrant of the sensor image. Final temperature = R0_Integer + R0_Fraction.";
+CM_ SG_ 116 R0_Fraction "Rear-right sensor Region 0 fractional part, unit 0.01 degC. Region 0 = upper-left quadrant.";
+CM_ SG_ 116 R1_Integer "Rear-right sensor Region 1 integer part. Region 1 = upper-right quadrant of the sensor image. Final temperature = R1_Integer + R1_Fraction.";
+CM_ SG_ 116 R1_Fraction "Rear-right sensor Region 1 fractional part, unit 0.01 degC. Region 1 = upper-right quadrant.";
+CM_ SG_ 116 R2_Integer "Rear-right sensor Region 2 integer part. Region 2 = lower-left quadrant of the sensor image. Final temperature = R2_Integer + R2_Fraction.";
+CM_ SG_ 116 R2_Fraction "Rear-right sensor Region 2 fractional part, unit 0.01 degC. Region 2 = lower-left quadrant.";
+CM_ SG_ 116 R3_Integer "Rear-right sensor Region 3 integer part. Region 3 = lower-right quadrant of the sensor image. Final temperature = R3_Integer + R3_Fraction.";
+CM_ SG_ 116 R3_Fraction "Rear-right sensor Region 3 fractional part, unit 0.01 degC. Region 3 = lower-right quadrant.";

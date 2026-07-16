@@ -506,7 +506,6 @@ void CAN_Filter_Config(CAN_HandleTypeDef *canHandle)
 void CAN_Send_Msg(CAN_HandleTypeDef *canHandle, uint32_t SendStdId, uint8_t *pTxData)
 {
   CAN_ControllerContext_t *ctx = CAN_GetContext(canHandle);
-
   if ((ctx == NULL) || (pTxData == NULL))
   {
     return;
