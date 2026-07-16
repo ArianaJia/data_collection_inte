@@ -294,10 +294,10 @@ void CAN_Send_Msg(CAN_HandleTypeDef *canHandle, uint32_t SendStdId, uint8_t *pTx
   g_can_msg.g_CANTxHeader.TransmitGlobalTime = DISABLE;
   g_can_msg.g_CANTxHeader.DLC = 8;
 
-  // 添加报文到发送邮箱，失败则进入错误处理
+  // 添加报文到发送邮箱；发送邮箱满或总线暂不可用时丢弃本帧，避免进入 Error_Handler 卡死调度。
   if(HAL_CAN_AddTxMessage(canHandle, &g_can_msg.g_CANTxHeader, pTxData, &g_can_msg.g_CANTxMailBox) != HAL_OK)
   {
-    Error_Handler();
+    return;
   }
 }
 

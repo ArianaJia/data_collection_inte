@@ -215,6 +215,10 @@ void Error_Handler(void)
   __disable_irq();
   while (1)
   {
+    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
+    for (volatile uint32_t delay = 0U; delay < 3000000U; delay++)
+    {
+    }
   }
   /* USER CODE END Error_Handler_Debug */
 }

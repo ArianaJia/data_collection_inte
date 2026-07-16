@@ -83,7 +83,7 @@ const osThreadAttr_t defaultTask_attributes = {
   .cb_size = sizeof(defaultTaskControlBlock),
   .stack_mem = &defaultTaskBuffer[0],
   .stack_size = sizeof(defaultTaskBuffer),
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityRealtime,
 };
 /* Definitions for CanForViehcle */
 osThreadId_t CanForViehcleHandle;
@@ -111,7 +111,7 @@ const osThreadAttr_t CanForBMS_attributes = {
 };
 /* Definitions for MLX90640 */
 osThreadId_t MLX90640Handle;
-uint32_t MLX90640Buffer[ 768 ];
+uint32_t MLX90640Buffer[ 1024 ];
 osStaticThreadDef_t MLX90640ControlBlock;
 const osThreadAttr_t MLX90640_attributes = {
   .name = "MLX90640",
@@ -250,7 +250,7 @@ const osMessageQueueAttr_t CAN_Tx_Queue_attributes = {
 };
 /* Definitions for task01DebugQueue */
 osMessageQueueId_t task01DebugQueueHandle;
-uint8_t task01DebugQueueBuffer[ 2 * sizeof( App_Uart_Tx_Item_t ) ];
+uint8_t task01DebugQueueBuffer[ DEBUG_QUEUE_DEPTH * sizeof( App_Uart_Tx_Item_t ) ];
 osStaticMessageQDef_t task01DebugQueueControlBlock;
 const osMessageQueueAttr_t task01DebugQueue_attributes = {
   .name = "task01DebugQueue",
@@ -344,7 +344,7 @@ void MX_FREERTOS_Init(void) {
   CAN_Tx_QueueHandle = osMessageQueueNew (8, sizeof(CAN_Tx_Queue_t), &CAN_Tx_Queue_attributes);
 
   /* creation of task01DebugQueue */
-  task01DebugQueueHandle = osMessageQueueNew (2, sizeof(App_Uart_Tx_Item_t), &task01DebugQueue_attributes);
+  task01DebugQueueHandle = osMessageQueueNew (DEBUG_QUEUE_DEPTH, sizeof(App_Uart_Tx_Item_t), &task01DebugQueue_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -355,25 +355,25 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* creation of CanForViehcle */
-  CanForViehcleHandle = osThreadNew(CanForViehcleTask, NULL, &CanForViehcle_attributes);
+//  CanForViehcleHandle = osThreadNew(CanForViehcleTask, NULL, &CanForViehcle_attributes);
 
   /* creation of CanForBMS */
-  CanForBMSHandle = osThreadNew(CanForBMSTask, NULL, &CanForBMS_attributes);
+//  CanForBMSHandle = osThreadNew(CanForBMSTask, NULL, &CanForBMS_attributes);
 
   /* creation of MLX90640 */
   MLX90640Handle = osThreadNew(MLX90640Task, NULL, &MLX90640_attributes);
 
   /* creation of TensionSensor */
-  TensionSensorHandle = osThreadNew(TensionSensorTask, NULL, &TensionSensor_attributes);
+//  TensionSensorHandle = osThreadNew(TensionSensorTask, NULL, &TensionSensor_attributes);
 
   /* creation of SPICanControl */
-  SPICanControlHandle = osThreadNew(SPICanControlTask, NULL, &SPICanControl_attributes);
+//  SPICanControlHandle = osThreadNew(SPICanControlTask, NULL, &SPICanControl_attributes);
 
   /* creation of SPICanCDC */
-  SPICanCDCHandle = osThreadNew(SPICanCDCTask, NULL, &SPICanCDC_attributes);
+//  SPICanCDCHandle = osThreadNew(SPICanCDCTask, NULL, &SPICanCDC_attributes);
 
   /* creation of Publish4G */
-  Publish4GHandle = osThreadNew(Publish4GTask, NULL, &Publish4G_attributes);
+//  Publish4GHandle = osThreadNew(Publish4GTask, NULL, &Publish4G_attributes);
 
   /* creation of CanBText */
   CanBTextHandle = osThreadNew(CanBTextTask, NULL, &CanBText_attributes);
@@ -401,14 +401,14 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-  MLX90640_App_SetLogCallback(App_DebugLogString);
+//  MLX90640_App_SetLogCallback(App_DebugLogString);
 
   for(;;)
   {
+    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);//LED RED
     Usart3_ParseInput();
     Usart3_SendDebug();
-    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
-    osDelay(10);
+    osDelay(200);
   }
   /* USER CODE END StartDefaultTask */
 }
@@ -431,6 +431,7 @@ void CanForViehcleTask(void *argument)
     {
       CanVehicle_Dispatch(&recv_data);
     }
+    osDelay(200);
   }
   /* USER CODE END CanForViehcleTask */
 }
@@ -453,6 +454,7 @@ void CanForBMSTask(void *argument)
     {
       CanBattery_Dispatch(&recv_data);
     }
+    osDelay(200);
   }
   /* USER CODE END CanForBMSTask */
 }
@@ -482,9 +484,9 @@ void MLX90640Task(void *argument)
       int status = MLX90640_App_CaptureOnce(g_mlxCurrentSensor);
       if (status == MLX90640_NO_ERROR)
       {
-//        Mlx_SendSummary(g_mlxCurrentSensor);
-//        Mlx_SendCanSummary(g_mlxCurrentSensor);
-        Mlx_SendDebugMatrix(g_mlxCurrentSensor, MLX90640_App_GetTempMap());
+        Mlx_SendSummary(g_mlxCurrentSensor);
+        Mlx_SendCanSummary(g_mlxCurrentSensor);
+//        Mlx_SendDebugMatrix(g_mlxCurrentSensor, MLX90640_App_GetTempMap());
 //        (void)Publish_QueueTopic(PUBLISH_TOPIC_THERMAL_SUMMARY);
       }
       else if ((status == -MLX90640_FRAME_NOT_READY_ERROR) ||
@@ -496,7 +498,7 @@ void MLX90640Task(void *argument)
         (void)snprintf(g_mlxLineBuffer, sizeof(g_mlxLineBuffer),
             "MLX90640 capture error, sensor=%u, status=%d\r\n",
             (unsigned int)g_mlxCurrentSensor, status);
-        App_DebugLogString(g_mlxLineBuffer);
+//        App_DebugLogString(g_mlxLineBuffer);
       }
     }
 
@@ -511,8 +513,8 @@ void MLX90640Task(void *argument)
       }
     }
 
-    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
-    osDelay(125);
+    // HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
+    osDelay(200);
   }
   /* USER CODE END MLX90640Task */
 }
@@ -561,6 +563,7 @@ void TensionSensorTask(void *argument)
       dma_running = 0U;
       App_DebugLogString("USART2 RX DMA restart\r\n");
     }
+    osDelay(200);
   }
   /* USER CODE END TensionSensorTask */
 }
@@ -583,7 +586,7 @@ void SPICanControlTask(void *argument)
     {
       SpiCana_Dispatch(&recv_data);
     }
-    osDelay(10);
+    osDelay(200);
   }
   /* USER CODE END SPICanControlTask */
 }
@@ -606,7 +609,7 @@ void SPICanCDCTask(void *argument)
     {
       SpiCdc_Dispatch(&recv_data);
     }
-    osDelay(10);
+    osDelay(200);
   }
   /* USER CODE END SPICanCDCTask */
 }
@@ -648,9 +651,9 @@ void Publish4GTask(void *argument)
       {
         (void)Publish_QueueTopic(item.topic);
       }
+      osDelay(200);
     }
   }
-   osDelay(10);
   /* USER CODE END Publish4GTask */
 }
 
@@ -672,6 +675,7 @@ void CanBTextTask(void *argument)
     {
       Can1_Send(&tx_data);
     }
+    osDelay(200);
   }
   /* USER CODE END CanBTextTask */
 }
@@ -791,14 +795,22 @@ static void App_DebugLogString(const char *text)
 
 static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart, uint8_t *data, uint16_t length)
 {
+  uint32_t start_tick;
+
   if ((huart == NULL) || (data == NULL) || (length == 0U))
   {
     return HAL_ERROR;
   }
 
+  start_tick = HAL_GetTick();
   while ((HAL_UART_GetState(huart) == HAL_UART_STATE_BUSY_TX) ||
          (HAL_UART_GetState(huart) == HAL_UART_STATE_BUSY_TX_RX))
   {
+    if ((HAL_GetTick() - start_tick) >= 20U)
+    {
+      (void)HAL_UART_AbortTransmit(huart);
+      return HAL_TIMEOUT;
+    }
     osDelay(1);
   }
 
@@ -808,9 +820,15 @@ static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart,
     return status;
   }
 
+  start_tick = HAL_GetTick();
   while ((HAL_UART_GetState(huart) == HAL_UART_STATE_BUSY_TX) ||
          (HAL_UART_GetState(huart) == HAL_UART_STATE_BUSY_TX_RX))
   {
+    if ((HAL_GetTick() - start_tick) >= 20U)
+    {
+      (void)HAL_UART_AbortTransmit(huart);
+      return HAL_TIMEOUT;
+    }
     osDelay(1);
   }
 
@@ -1093,6 +1111,14 @@ static void Mlx_SendSummary(uint8_t sensor_id)
 {
   char *line = g_mlxLineBuffer;
 
+  /*  *  *  *  *  *  *  *  *  *  *  *  *  *  *
+   *  摘要含义：
+   *  S：传感器编号。
+   *  Ta：环境温度，单位为 centi-Celsius。
+   *  Tr：反射温度，单位为 centi-Celsius。
+   *  R0~R3：四个区域平均温度，单位为 centi-Celsius。
+   *  C：该传感器成功完整帧计数。
+   *  *  *  *  *  *  *  *  *  *  *  *  *  *  */
   (void)snprintf(line, APP_UART_TX_MAX_PAYLOAD,
       "MLX90640,S=%u,Ta=%ld,Tr=%ld,R0=%ld,R1=%ld,R2=%ld,R3=%ld,C=%lu\r\n",
       (unsigned int)sensor_id,
@@ -1103,7 +1129,7 @@ static void Mlx_SendSummary(uint8_t sensor_id)
       (long)g_MLX90640_Frame.RegionTemp[sensor_id][2],
       (long)g_MLX90640_Frame.RegionTemp[sensor_id][3],
       (unsigned long)g_MLX90640_Frame.FrameCounter[sensor_id]);
-
+   
   App_DebugLogString(line);
 }
 
@@ -1368,7 +1394,7 @@ static void Can1_Send(const CAN_Tx_Queue_t *tx_data)
   }
 
   CAN_Send_Msg(&hcan1, tx_data->std_id, (uint8_t *)tx_data->data);
-  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
+  // HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
 }
 /* USER CODE END Application */
 
