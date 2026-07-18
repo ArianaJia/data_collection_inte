@@ -61,8 +61,7 @@
  * this switch at 0 for timing-sensitive publish tests; temporarily set to 1
  * only when raw modem traces are needed again.
  */
-#define Y100M_DEBUG_LOG_ENABLED            1U
-#define Y100M_DEBUG_RAW_HEX_ENABLED        0U
+#define Y100M_DEBUG_LOG_ENABLED            0U
 
 typedef struct
 {
@@ -122,7 +121,10 @@ static const Y100M_AtStep_t g_y100mBootstrapSteps[] =
 
 static HAL_StatusTypeDef Y100M_DebugUart3DmaBlocking(const uint8_t *data, uint16_t length);
 void Y100M_DebugLog(const char *text);
-#if (Y100M_DEBUG_RAW_HEX_ENABLED != 0U)
+
+static void Y100M_LogRxChunkHex(const char *prefix, const uint8_t *data, uint16_t length);
+
+#if (Y100M_DEBUG_LOG_ENABLED != 0U)
 static void Y100M_LogRxChunkHex(const char *prefix, const uint8_t *data, uint16_t length);
 #else
 #define Y100M_LogRxChunkHex(prefix, data, length) ((void)0)

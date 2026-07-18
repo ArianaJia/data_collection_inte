@@ -755,21 +755,21 @@ void InitTask_Boot(void *argument)
   }
 //  App_DebugLogString("[BOOT] post-MLX delay\r\n");
   osDelay(1);
-//  App_DebugLogString("[BOOT] MCP2518FD-A init...\r\n");
-//  for (retry = 0; retry < 3; retry++)
-//  {
-//    if (FDCAN_Init(FDCAN_BUS_A) == HAL_OK)
-//    {
-//      App_DebugLogString("[BOOT] MCP2518FD-A init ok\r\n");
-//      break;
-//    }
-//    App_DebugLogString("[BOOT] MCP2518FD-A retry...\r\n");
-//    osDelay(500U);
-//  }
-//  if (retry >= 3)
-//  {
-//    App_DebugLogString("[BOOT] MCP2518FD-A init FAILED after 3 retries\r\n");
-//  }
+ App_DebugLogString("[BOOT] MCP2518FD-A init...\r\n");
+ for (retry = 0; retry < 3; retry++)
+ {
+   if (FDCAN_Init(FDCAN_BUS_A) == HAL_OK)
+   {
+     App_DebugLogString("[BOOT] MCP2518FD-A init ok\r\n");
+     break;
+   }
+   App_DebugLogString("[BOOT] MCP2518FD-A retry...\r\n");
+   osDelay(500U);
+ }
+ if (retry >= 3)
+ {
+   App_DebugLogString("[BOOT] MCP2518FD-A init FAILED after 3 retries\r\n");
+ }
 //
 //  App_DebugLogString("[BOOT] MCP2518FD-B init...\r\n");
 //  for (retry = 0; retry < 3; retry++)
@@ -787,8 +787,8 @@ void InitTask_Boot(void *argument)
 //    App_DebugLogString("[BOOT] MCP2518FD-B init FAILED after 3 retries\r\n");
 //  }
 //
-  App_DebugLogString("[BOOT] 4G bootstrap...\r\n");
-  Y100M_BootstrapOnce();
+  // App_DebugLogString("[BOOT] 4G bootstrap...\r\n");
+  // Y100M_BootstrapOnce();
   g_bootInitDone = 1U;
   App_DebugLogString("=== Boot Init Complete ===\r\n");
 //  if (Y100M_IsReady() != 0U)
