@@ -1,5 +1,5 @@
 /* Publish converts the shared telemetry caches into protobuf payloads and
- * hands topic requests to task08 through myQueue04.
+ * hands topic requests to the Publish4G task.
  */
 #include "publish.h"
 
@@ -14,6 +14,8 @@
 #include "pb_encode.h"
 #include "freertos_app.h"
 #include "usart.h"
+
+#define PUBLISH_DEBUG_HEX_DUMP_ENABLED 0U
 
 extern osMessageQueueId_t PublishQueueItemHandle;
 
@@ -48,6 +50,7 @@ static void Publish_MapThermalSummary(fsae_ThermalSummary *thermal_summary);
 static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_buffer, size_t payload_capacity, size_t *payload_size);
 static const char *Publish_GetTopicName(PublishTopic_t topic);
 static bool Publish_IsTopicValid(PublishTopic_t topic);
+static void Publish_LogHexDump(const char *prefix, const uint8_t *data, size_t length);
 
 void Publish_Init(void)
 {
@@ -114,9 +117,8 @@ bool Publish_BuildFrame(PublishTopic_t topic, uint8_t *frame_buffer, uint16_t fr
     size_t payload_size = 0U;
 
     /* Route A uplink publishes raw protobuf to one MQTT topic and does not use
-     * the legacy FS wrapper. For the current GPS verification path, vehicle_state
-     * is repointed to a TelemetryFrame so motion.gps_speed_kmh can be sent to
-     * the cloud without touching BMS payload selection.
+     * the legacy FS wrapper. The selected topic decides which protobuf message
+     * is encoded from the live telemetry caches.
      */
     if ((frame_buffer == NULL) || (frame_size == NULL))
     {
@@ -130,6 +132,15 @@ bool Publish_BuildFrame(PublishTopic_t topic, uint8_t *frame_buffer, uint16_t fr
     {
         return false;
     }
+
+    /* This protobuf HEX dump was used to compare MCU payload bytes with the PC
+     * script during Route-A bring-up. It is disabled for timing-sensitive 4G
+     * publish tests because it formats and sends a long USART3 debug line for
+     * every frame.
+     */
+#if (PUBLISH_DEBUG_HEX_DUMP_ENABLED != 0U)
+    Publish_LogHexDump("[PUB] protobuf hex:", frame_buffer, payload_size);
+#endif
 
     *frame_size = (uint16_t)payload_size;
 
@@ -418,19 +429,89 @@ static bool Publish_MapEnergyMeterTelemetry(fsae_EnergyMeterTelemetry *energy_me
 
 static bool Publish_MapMotionTelemetry(fsae_MotionTelemetry *motion)
 {
-    /* Route-A debug path: always emit a fixed GPS speed so the uplink chain can
-     * be validated independently from live IMU/GPS cache timing.
-     */
+    uint8_t valid_flags = g_CANB_LoopData.IMU.ValidFlags;
+
     if (motion == NULL)
+    {
+        return false;
+    }
+
+    if (valid_flags == 0U)
     {
         return false;
     }
 
     *motion = (fsae_MotionTelemetry)fsae_MotionTelemetry_init_zero;
 
-    motion->gps_speed_kmh = 150U;
+    if ((valid_flags & CANB_MOTION_VALID_GPS) != 0U)
+    {
+        motion->gps_speed_kmh = (uint32_t)g_CANB_LoopData.IMU.GpsSpeedKmh;
+    }
+    if ((valid_flags & CANB_MOTION_VALID_ACCEL) != 0U)
+    {
+        motion->accel_x_g = g_CANB_LoopData.IMU.Acc_X_Act;
+        motion->accel_y_g = g_CANB_LoopData.IMU.Acc_Y_Act;
+        motion->accel_z_g = g_CANB_LoopData.IMU.Acc_Z_Act;
+    }
+    if ((valid_flags & CANB_MOTION_VALID_GYRO) != 0U)
+    {
+        motion->yaw_rate_dps = (float)g_CANB_LoopData.IMU.YawRateRaw;
+    }
+    if ((valid_flags & CANB_MOTION_VALID_YAW) != 0U)
+    {
+        motion->yaw_deg = (float)g_CANB_LoopData.IMU.YawRaw;
+    }
 
     return true;
+}
+
+/* Route-A debug motion note:
+ * The 4G bring-up test temporarily forced motion.gps_speed_kmh = 150 so the
+ * cloud path could be verified without live CANB frames. That assignment is no
+ * longer compiled; motion now reflects g_CANB_LoopData.IMU fields populated by
+ * CanForViehcleTask from injected or live CAN frames.
+ */
+
+/* Route-A debug note:
+ * During 4G/MQTT bring-up, PUBLISH_TOPIC_VEHICLE_STATE was temporarily mapped
+ * to a minimal TelemetryFrame carrying only header.timestamp_ms and
+ * motion.gps_speed_kmh. That isolated the uplink from CAN/BMS cache timing and
+ * proved the broker path with a tiny deterministic payload. The normal path is
+ * now restored below: vehicle_state uses Publish_MapCommonTelemetryFrame() so
+ * direct CAN frame injection can validate the complete CAN decode -> cache ->
+ * protobuf -> 4G publish flow.
+ */
+
+static void Publish_LogHexDump(const char *prefix, const uint8_t *data, size_t length)
+{
+#if (PUBLISH_DEBUG_HEX_DUMP_ENABLED != 0U)
+    char line[APP_UART_TX_MAX_PAYLOAD];
+    uint16_t offset = 0U;
+
+    if ((prefix == NULL) || (data == NULL) || (length == 0U))
+    {
+        return;
+    }
+
+    offset = (uint16_t)snprintf(line, sizeof(line), "%s", prefix);
+    for (size_t i = 0U; (i < length) && (offset + 4U < sizeof(line)); i++)
+    {
+        offset += (uint16_t)snprintf(&line[offset], sizeof(line) - offset, " %02X", data[i]);
+    }
+
+    if (offset + 3U < sizeof(line))
+    {
+        line[offset++] = '\r';
+        line[offset++] = '\n';
+        line[offset] = '\0';
+    }
+
+    Y100M_DebugLog(line);
+#else
+    (void)prefix;
+    (void)data;
+    (void)length;
+#endif
 }
 
 static void Publish_MapCommonTelemetryFrame(fsae_TelemetryFrame *frame)

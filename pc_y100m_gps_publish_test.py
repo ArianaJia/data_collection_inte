@@ -42,7 +42,8 @@ MQTT_PORT = 1883
 MQTT_CLIENT_ID = "CoreY100M_GPS_Test_001"
 MQTT_TOPIC = "fsae/telemetry"
 
-GPS_SPEED_KMH = 42
+GPS_SPEED_SEQUENCE = [150, 42, 56]
+PUBLISH_INTERVAL_S = 0.1
 
 AT_GUARD_S = 0.2
 RESP_POLL_S = 0.05
@@ -192,6 +193,10 @@ def encode_telemetry_frame(gps_speed_kmh: int) -> bytes:
     frame.extend(pb_length_field(TELEMETRY_FRAME_HEADER_TAG, header))
     frame.extend(pb_length_field(TELEMETRY_FRAME_MOTION_TAG, motion))
     return bytes(frame)
+
+
+def bytes_to_hex(data: bytes) -> str:
+    return " ".join(f"{b:02X}" for b in data)
 
 
 def build_mqtt_connect(client_id: str, keepalive=60) -> bytes:
@@ -384,6 +389,8 @@ def mqtt_publish_telemetry_frame(gps_speed_kmh: int):
     log(f"Broker={MQTT_BROKER}:{MQTT_PORT}")
     log(f"TelemetryFrame bytes={len(protobuf_payload)}")
     log(f"GPS speed encoded into TelemetryFrame.motion.gps_speed_kmh={gps_speed_kmh}")
+    log(f"TelemetryFrame HEX: {bytes_to_hex(protobuf_payload)}")
+    log(f"MQTT PUBLISH HEX: {bytes_to_hex(mqtt_packet)}")
 
     ok, _ = cipsend_packet(mqtt_packet, expect_send_ok=True)
     if not ok:
@@ -391,6 +398,27 @@ def mqtt_publish_telemetry_frame(gps_speed_kmh: int):
 
     log("TelemetryFrame MQTT publish sent", "OK")
     return True
+
+
+def mqtt_publish_loop():
+    log("Starting continuous GPS publish loop")
+    log(f"Sequence: {GPS_SPEED_SEQUENCE}")
+    log(f"Interval: {PUBLISH_INTERVAL_S:.1f}s")
+
+    publish_index = 0
+    packet_count = 0
+
+    while True:
+        speed = GPS_SPEED_SEQUENCE[publish_index]
+        if not mqtt_publish_telemetry_frame(speed):
+            log(f"Loop publish failed at packet #{packet_count + 1}", "ERR")
+            return False
+
+        packet_count += 1
+        log(f"Loop packet #{packet_count} sent with gps_speed_kmh={speed}", "OK")
+
+        publish_index = (publish_index + 1) % len(GPS_SPEED_SEQUENCE)
+        time.sleep(PUBLISH_INTERVAL_S)
 
 
 def main():
@@ -432,12 +460,9 @@ def main():
         if not mqtt_connect():
             log("MQTT CONNECT failed", "ERR")
             return 7
-        if not mqtt_publish_telemetry_frame(GPS_SPEED_KMH):
-            log("MQTT publish failed", "ERR")
+        if not mqtt_publish_loop():
+            log("MQTT publish loop failed", "ERR")
             return 8
-
-        log("Full publish flow completed", "OK")
-        return 0
     finally:
         recv_thread_running = False
         time.sleep(0.2)
