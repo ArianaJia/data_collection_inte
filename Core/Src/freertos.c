@@ -72,6 +72,10 @@ static volatile uint16_t g_rs485DmaPendingBytes = 0U;
 static volatile uint8_t g_rs485DmaOverflow = 0U;
 static uint16_t g_rs485DmaReadPos = 0U;
 static uint8_t g_publishFrameBuffer[PUBLISH_MAX_PAYLOAD_SIZE];
+static volatile uint16_t g_diagPublishPayloadLen = 0U;
+static volatile int g_diagPublishStatus = 0;
+static volatile uint32_t g_diagPublishOkCount = 0U;
+static volatile uint32_t g_diagPublishFailCount = 0U;
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -488,7 +492,7 @@ void MLX90640Task(void *argument)
         // Mlx_SendSummary(g_mlxCurrentSensor);
         Mlx_SendCanSummary(g_mlxCurrentSensor);
 //        Mlx_SendDebugMatrix(g_mlxCurrentSensor, MLX90640_App_GetTempMap());
-//        (void)Publish_QueueTopic(PUBLISH_TOPIC_THERMAL_SUMMARY);
+       (void)Publish_QueueTopic(PUBLISH_TOPIC_THERMAL_SUMMARY);
       }
       else if ((status == -MLX90640_FRAME_NOT_READY_ERROR) ||
                (status == -MLX90640_FRAME_INCOMPLETE_ERROR))
@@ -653,29 +657,43 @@ void Publish4GTask(void *argument)
     {
       Publish_OnTopicDequeued(item.topic);
 
-      if (item.topic == PUBLISH_TOPIC_VEHICLE_STATE &&
-          Publish_BuildFrame(item.topic, g_publishFrameBuffer,
+      if (Publish_BuildFrame(item.topic, g_publishFrameBuffer,
                              (uint16_t)sizeof(g_publishFrameBuffer), &frame_length))
       {
+        g_diagPublishPayloadLen = frame_length;
         tx_status = Y100M_MqttPublish(g_publishFrameBuffer, frame_length);
+        g_diagPublishStatus = (int)tx_status;
 
         if (tx_status == HAL_OK)
         {
+          g_diagPublishOkCount++;
+          HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
           osDelay(PUBLISH_COOLDOWN_MS);
         }
         else
         {
+          g_diagPublishFailCount++;
+          (void)snprintf(g_mlxLineBuffer, sizeof(g_mlxLineBuffer),
+                         "[PUB-DIAG] send fail len=%u status=%d ok=%lu fail=%lu\r\n",
+                         (unsigned int)g_diagPublishPayloadLen,
+                         g_diagPublishStatus,
+                         (unsigned long)g_diagPublishOkCount,
+                         (unsigned long)g_diagPublishFailCount);
+          App_DebugLogString(g_mlxLineBuffer);
           osDelay(1000U);
           (void)Publish_QueueTopic(item.topic);
         }
       }
       else
       {
-        if (item.topic == PUBLISH_TOPIC_VEHICLE_STATE)
-        {
-          osDelay(1000U);
-          (void)Publish_QueueTopic(item.topic);
-        }
+        g_diagPublishFailCount++;
+        (void)snprintf(g_mlxLineBuffer, sizeof(g_mlxLineBuffer),
+                       "[PUB-DIAG] build frame failed topic=%u fail=%lu\r\n",
+                       (unsigned int)item.topic,
+                       (unsigned long)g_diagPublishFailCount);
+        App_DebugLogString(g_mlxLineBuffer);
+        osDelay(1000U);
+        (void)Publish_QueueTopic(item.topic);
       }
       osDelay(200);
     }
@@ -773,10 +791,10 @@ void InitTask_Boot(void *argument)
   Y100M_BootstrapOnce();
   g_bootInitDone = 1U;
   App_DebugLogString("=== Boot Init Complete ===\r\n");
-  if (Y100M_IsReady() != 0U)
-  {
-    (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
-  }
+//  if (Y100M_IsReady() != 0U)
+//  {
+//    (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
+//  }
   osThreadExit();
   /* USER CODE END InitTask_Boot */
 }

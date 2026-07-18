@@ -44,7 +44,12 @@
 #define Y100M_MQTT_BROKER               "82.157.204.124"
 #define Y100M_MQTT_PORT                 1883U
 #define Y100M_MQTT_CLIENT_ID            "STM32_DATA_COLLECTION"
-#define Y100M_MQTT_TX_BUFFER_SIZE       256U
+/* MQTT TX must hold the MQTT fixed header, topic header/name, and one protobuf
+ * payload. The thermal summary path has already reached 271 bytes on wire, so
+ * keep this comfortably above the former 256-byte bring-up buffer while still
+ * preserving the explicit packet-too-large guard below.
+ */
+#define Y100M_MQTT_TX_BUFFER_SIZE       512U
 /* USART3 4G debug reports are intentionally compiled out by default.
  * They were used to prove the AT/MQTT bring-up path:
  * - [4G][RXRAW] dumped accumulated AT replies such as echo/OK/ERROR.
@@ -56,7 +61,8 @@
  * this switch at 0 for timing-sensitive publish tests; temporarily set to 1
  * only when raw modem traces are needed again.
  */
-#define Y100M_DEBUG_LOG_ENABLED            0U
+#define Y100M_DEBUG_LOG_ENABLED            1U
+#define Y100M_DEBUG_RAW_HEX_ENABLED        0U
 
 typedef struct
 {
@@ -116,7 +122,7 @@ static const Y100M_AtStep_t g_y100mBootstrapSteps[] =
 
 static HAL_StatusTypeDef Y100M_DebugUart3DmaBlocking(const uint8_t *data, uint16_t length);
 void Y100M_DebugLog(const char *text);
-#if (Y100M_DEBUG_LOG_ENABLED != 0U)
+#if (Y100M_DEBUG_RAW_HEX_ENABLED != 0U)
 static void Y100M_LogRxChunkHex(const char *prefix, const uint8_t *data, uint16_t length);
 #else
 #define Y100M_LogRxChunkHex(prefix, data, length) ((void)0)
@@ -579,7 +585,7 @@ void Y100M_DebugLog(const char *text)
 #endif
 }
 
-#if (Y100M_DEBUG_LOG_ENABLED != 0U)
+#if (Y100M_DEBUG_RAW_HEX_ENABLED != 0U)
 static void Y100M_LogRxChunkHex(const char *prefix, const uint8_t *data, uint16_t length)
 {
   uint16_t log_offset;

@@ -588,7 +588,6 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 
   if (hcan->Instance == CAN2)
   {
-    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
     CAN_DispatchRxMessage(hcan, &g_can2_ctx, CAN_CHANNEL_VEHICLE_CANB);
     // app_can_debug_log_rx_context("CAN2 RX", &g_can2_ctx);
   }

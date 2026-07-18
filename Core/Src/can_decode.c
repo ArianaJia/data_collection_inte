@@ -4,6 +4,7 @@
  */
 #include "can_decode.h"
 
+#include "main.h"
 #include "telemetry_data.h"
 
 #define CAN_DECODE_MOTOR_RL 0U
@@ -464,6 +465,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
       {
         g_CANB_LoopData.IMU.GpsSpeedKmh = CAN_DecodeReadLe16(recv_data->msg_data);
         g_CANB_LoopData.IMU.ValidFlags |= CANB_MOTION_VALID_GPS;
+        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
       }
       break;
 

@@ -1,5 +1,9 @@
 /* Publish converts the shared telemetry caches into protobuf payloads and
  * hands topic requests to the Publish4G task.
+/* Publish converts telemetry state into protobuf payloads. The current Route-A
+ * debug path intentionally emits one minimal TelemetryFrame carrying only a
+ * fixed motion.gps_speed_kmh value so the 4G uplink can be validated without
+ * depending on any other subsystem state.
  */
 #include "publish.h"
 
