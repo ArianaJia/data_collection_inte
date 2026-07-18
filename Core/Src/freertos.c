@@ -474,7 +474,7 @@ void MLX90640Task(void *argument)
 
   for(;;)
   {
-    if (g_bootInitDone == 0U)
+    if ((g_bootInitDone == 0U) || (Y100M_IsReady() == 0U))
     {
       osDelay(100);
       continue;
@@ -628,13 +628,25 @@ void Publish4GTask(void *argument)
   PublishQueueItem_t item;
   uint16_t frame_length = 0U;
   HAL_StatusTypeDef tx_status = HAL_OK;
+  uint32_t wait_log_tick = 0U;
 
   for(;;)
   {
     while (g_bootInitDone == 0U)
     {
       osDelay(100);
-      // continue;
+    }
+
+    if (Y100M_IsReady() == 0U)
+    {
+      uint32_t now = HAL_GetTick();
+      if ((now - wait_log_tick) >= 1000U)
+      {
+        App_DebugLogString("[4G-PUB] waiting for MQTT ready\r\n");
+        wait_log_tick = now;
+      }
+      osDelay(100);
+      continue;
     }
 
     if (osMessageQueueGet(PublishQueueItemHandle, &item, NULL, osWaitForever) == osOK)
@@ -653,6 +665,7 @@ void Publish4GTask(void *argument)
         }
         else
         {
+          osDelay(1000U);
           (void)Publish_QueueTopic(item.topic);
         }
       }
@@ -660,6 +673,7 @@ void Publish4GTask(void *argument)
       {
         if (item.topic == PUBLISH_TOPIC_VEHICLE_STATE)
         {
+          osDelay(1000U);
           (void)Publish_QueueTopic(item.topic);
         }
       }
@@ -759,7 +773,10 @@ void InitTask_Boot(void *argument)
   Y100M_BootstrapOnce();
   g_bootInitDone = 1U;
   App_DebugLogString("=== Boot Init Complete ===\r\n");
-  (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
+  if (Y100M_IsReady() != 0U)
+  {
+    (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
+  }
   osThreadExit();
   /* USER CODE END InitTask_Boot */
 }

@@ -51,6 +51,8 @@ void MX_USART3_UART_Init(void);
 void Y100M_BootstrapOnce(void);
 void Y100M_OnUsart1RxIdle(uint16_t size);
 HAL_StatusTypeDef Y100M_MqttPublish(const uint8_t *payload, uint16_t payload_length);
+uint8_t Y100M_IsReady(void);
+void Y100M_DebugLog(const char *text);
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus

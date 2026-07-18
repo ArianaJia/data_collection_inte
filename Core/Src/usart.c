@@ -33,7 +33,7 @@
  */
 #define Y100M_AT_REPLY_BUFFER_SIZE        512U
 #define Y100M_AT_LOG_BUFFER_SIZE          192U
-#define Y100M_AT_CMD_TIMEOUT_MS          2000U
+#define Y100M_AT_CMD_TIMEOUT_MS          5000U
 #define Y100M_AT_RESET_PULSE_MS          1000U
 #define Y100M_AT_BOOT_WAIT_MS            5000U
 #define Y100M_AT_MAX_HANDSHAKE_ATTEMPTS     2U
@@ -44,6 +44,7 @@
 #define Y100M_MQTT_BROKER               "82.157.204.124"
 #define Y100M_MQTT_PORT                 1883U
 #define Y100M_MQTT_CLIENT_ID            "STM32_DATA_COLLECTION"
+#define Y100M_MQTT_TX_BUFFER_SIZE       256U
 
 typedef struct
 {
@@ -61,6 +62,7 @@ static char g_y100mLogBuffer[Y100M_AT_LOG_BUFFER_SIZE];
 /* ── USART1 RX DMA for AT response reception ── */
 #define Y100M_AT_RX_DMA_BUFFER_SIZE       512U
 static uint8_t  g_y100mUsart1RxDmaBuffer[Y100M_AT_RX_DMA_BUFFER_SIZE];
+static uint8_t  g_y100mMqttTxBuffer[Y100M_MQTT_TX_BUFFER_SIZE];
 static volatile uint8_t  g_y100mUsart1RxDmaDone;
 static volatile uint16_t g_y100mUsart1RxDmaSize;
 
@@ -91,7 +93,8 @@ static const Y100M_AtStep_t g_y100mBootstrapSteps[] =
   { "Disable echo",          "ATE0",      "OK",      1000U },
   { "Check SIM ready",       "AT+CPIN?",  "READY",   2000U },
   { "Check signal quality",  "AT+CSQ",    "+CSQ:",   2000U },
-  { "Check network status",  "AT+CREG?",  "+CREG:",  3000U },
+  { "Check LTE register",    "AT+CEREG?", "+CEREG:", 5000U },
+  { "Check packet attach",   "AT+CGATT?", "+CGATT:", 5000U },
   /* Example placeholders for the final TCP client configuration:
    * { "Set work mode",      "AT+XXXX",   "OK",      2000U },
    * { "Set remote server",  "AT+XXXX",   "OK",      2000U },
@@ -100,14 +103,20 @@ static const Y100M_AtStep_t g_y100mBootstrapSteps[] =
 };
 
 static HAL_StatusTypeDef Y100M_DebugUart3DmaBlocking(const uint8_t *data, uint16_t length);
-static void Y100M_DebugLog(const char *text);
+void Y100M_DebugLog(const char *text);
+static void Y100M_LogRxChunkHex(const char *prefix, const uint8_t *data, uint16_t length);
 static void Y100M_Uart1DrainRx(void);
+static HAL_StatusTypeDef Y100M_StartReplyRxWindow(void);
 static HAL_StatusTypeDef Y100M_WaitReply(const char *expected, uint32_t timeout_ms, char *reply_buffer, uint16_t reply_capacity);
 static HAL_StatusTypeDef Y100M_SendAtExpect(const char *command, const char *expected, uint32_t timeout_ms);
 static HAL_StatusTypeDef Y100M_SendRawPayload(const uint8_t *data, uint16_t length, uint32_t timeout_ms);
 static uint8_t Y100M_EncodeMqttRemainingLength(uint32_t value, uint8_t *buffer, uint8_t capacity);
 static HAL_StatusTypeDef Y100M_PdpActivate(void);
 static HAL_StatusTypeDef Y100M_GetLocalIp(void);
+static HAL_StatusTypeDef Y100M_CloseOldSession(void);
+static HAL_StatusTypeDef Y100M_OpenTcpSession(void);
+static int8_t Y100M_CheckConnackWindow(const uint8_t *data, uint16_t length);
+static HAL_StatusTypeDef Y100M_StartConnackRxWindow(void);
 static HAL_StatusTypeDef Y100M_MqttConnect(void);
 static void Y100M_ResetPulse(void);
 static HAL_StatusTypeDef Y100M_RunBootstrapSteps(void);
@@ -540,7 +549,7 @@ static HAL_StatusTypeDef Y100M_DebugUart3DmaBlocking(const uint8_t *data, uint16
 }
 
 /* Forward a text log to the USART3 debug output path. */
-static void Y100M_DebugLog(const char *text)
+void Y100M_DebugLog(const char *text)
 {
   if (text == NULL)
   {
@@ -548,6 +557,37 @@ static void Y100M_DebugLog(const char *text)
   }
 
   (void)Y100M_DebugUart3DmaBlocking((const uint8_t *)text, (uint16_t)strlen(text));
+}
+
+static void Y100M_LogRxChunkHex(const char *prefix, const uint8_t *data, uint16_t length)
+{
+  uint16_t log_offset;
+  uint16_t index;
+
+  if ((prefix == NULL) || (data == NULL) || (length == 0U))
+  {
+    return;
+  }
+
+  log_offset = (uint16_t)snprintf(g_y100mLogBuffer,
+                                  sizeof(g_y100mLogBuffer),
+                                  "%s len=%u hex:",
+                                  prefix,
+                                  (unsigned int)length);
+  for (index = 0U; (index < length) && (log_offset + 4U < sizeof(g_y100mLogBuffer)); index++)
+  {
+    log_offset += (uint16_t)snprintf(&g_y100mLogBuffer[log_offset],
+                                     sizeof(g_y100mLogBuffer) - log_offset,
+                                     " %02X",
+                                     data[index]);
+  }
+  if (log_offset + 3U < sizeof(g_y100mLogBuffer))
+  {
+    g_y100mLogBuffer[log_offset++] = '\r';
+    g_y100mLogBuffer[log_offset++] = '\n';
+    g_y100mLogBuffer[log_offset] = '\0';
+  }
+  Y100M_DebugLog(g_y100mLogBuffer);
 }
 
 /* Remove any stale bytes from USART1 before the next AT command is sent. */
@@ -571,12 +611,28 @@ static void Y100M_Uart1DrainRx(void)
   }
 }
 
+static HAL_StatusTypeDef Y100M_StartReplyRxWindow(void)
+{
+  g_y100mUsart1RxDmaDone = 0U;
+  g_y100mUsart1RxDmaSize = 0U;
+  (void)HAL_UART_DMAStop(&huart1);
+  __HAL_UART_CLEAR_OREFLAG(&huart1);
+
+  return HAL_UARTEx_ReceiveToIdle_DMA(&huart1,
+                                      g_y100mUsart1RxDmaBuffer,
+                                      Y100M_AT_RX_DMA_BUFFER_SIZE);
+}
+
 /* Wait for a reply that contains the expected text, or fail on timeout.
- * Uses USART1 RX DMA with idle detection instead of byte-by-byte polling. */
+ * Uses USART1 RX DMA with idle detection and accumulates multiple idle chunks.
+ * The caller must open the RX window before sending, so fast modem replies are
+ * not lost between TX completion and ReceiveToIdle_DMA startup.
+ */
 static HAL_StatusTypeDef Y100M_WaitReply(const char *expected, uint32_t timeout_ms, char *reply_buffer, uint16_t reply_capacity)
 {
   uint32_t start_tick = HAL_GetTick();
   HAL_StatusTypeDef status;
+  uint16_t reply_length = 0U;
 
   if ((reply_buffer == NULL) || (reply_capacity == 0U))
   {
@@ -584,19 +640,6 @@ static HAL_StatusTypeDef Y100M_WaitReply(const char *expected, uint32_t timeout_
   }
 
   reply_buffer[0] = '\0';
-
-  g_y100mUsart1RxDmaDone = 0U;
-  g_y100mUsart1RxDmaSize = 0U;
-  (void)HAL_UART_DMAStop(&huart1);
-  __HAL_UART_CLEAR_OREFLAG(&huart1);
-
-  status = HAL_UARTEx_ReceiveToIdle_DMA(&huart1,
-                                         g_y100mUsart1RxDmaBuffer,
-                                         Y100M_AT_RX_DMA_BUFFER_SIZE);
-  if (status != HAL_OK)
-  {
-    return status;
-  }
 
   while ((HAL_GetTick() - start_tick) < timeout_ms)
   {
@@ -606,22 +649,28 @@ static HAL_StatusTypeDef Y100M_WaitReply(const char *expected, uint32_t timeout_
       if (received > 0U && received <= Y100M_AT_RX_DMA_BUFFER_SIZE)
       {
         uint16_t copy_len = received;
-        if (copy_len > (uint16_t)(reply_capacity - 1U))
+        if (copy_len > (uint16_t)((reply_capacity - 1U) - reply_length))
         {
-          copy_len = (uint16_t)(reply_capacity - 1U);
+          copy_len = (uint16_t)((reply_capacity - 1U) - reply_length);
         }
-        (void)memcpy(reply_buffer, g_y100mUsart1RxDmaBuffer, copy_len);
-        reply_buffer[copy_len] = '\0';
+        if (copy_len > 0U)
+        {
+          (void)memcpy(&reply_buffer[reply_length], g_y100mUsart1RxDmaBuffer, copy_len);
+          reply_length = (uint16_t)(reply_length + copy_len);
+          reply_buffer[reply_length] = '\0';
+        }
 
         if ((expected != NULL) && (expected[0] != '\0') &&
             (strstr(reply_buffer, expected) != NULL))
         {
+          Y100M_LogRxChunkHex("[4G][RXRAW]", (const uint8_t *)reply_buffer, reply_length);
           return HAL_OK;
         }
 
         if ((strstr(reply_buffer, "ERROR") != NULL) &&
             ((expected == NULL) || (strstr(expected, "ERROR") == NULL)))
         {
+          Y100M_LogRxChunkHex("[4G][RXRAW]", (const uint8_t *)reply_buffer, reply_length);
           return HAL_ERROR;
         }
       }
@@ -629,8 +678,8 @@ static HAL_StatusTypeDef Y100M_WaitReply(const char *expected, uint32_t timeout_
       g_y100mUsart1RxDmaDone = 0U;
       g_y100mUsart1RxDmaSize = 0U;
       status = HAL_UARTEx_ReceiveToIdle_DMA(&huart1,
-                                             g_y100mUsart1RxDmaBuffer,
-                                             Y100M_AT_RX_DMA_BUFFER_SIZE);
+                                            g_y100mUsart1RxDmaBuffer,
+                                            Y100M_AT_RX_DMA_BUFFER_SIZE);
       if (status != HAL_OK)
       {
         return status;
@@ -640,6 +689,11 @@ static HAL_StatusTypeDef Y100M_WaitReply(const char *expected, uint32_t timeout_
     {
       osDelay(1);
     }
+  }
+
+  if (reply_length > 0U)
+  {
+    Y100M_LogRxChunkHex("[4G][RXRAW]", (const uint8_t *)reply_buffer, reply_length);
   }
 
   return HAL_TIMEOUT;
@@ -658,6 +712,12 @@ static HAL_StatusTypeDef Y100M_SendAtExpect(const char *command, const char *exp
   }
 
   Y100M_Uart1DrainRx();
+
+  rx_status = Y100M_StartReplyRxWindow();
+  if (rx_status != HAL_OK)
+  {
+    return rx_status;
+  }
 
   log_length = (uint16_t)snprintf(g_y100mLogBuffer,
                                   sizeof(g_y100mLogBuffer),
@@ -717,6 +777,12 @@ static HAL_StatusTypeDef Y100M_SendRawPayload(const uint8_t *data, uint16_t leng
     return tx_status;
   }
 
+  rx_status = Y100M_StartReplyRxWindow();
+  if (rx_status != HAL_OK)
+  {
+    return rx_status;
+  }
+
   tx_status = Y100M_Uart1DmaSend(data, length, timeout_ms);
   if (tx_status != HAL_OK)
   {
@@ -729,6 +795,7 @@ static HAL_StatusTypeDef Y100M_SendRawPayload(const uint8_t *data, uint16_t leng
                               (uint16_t)sizeof(g_y100mAtReplyBuffer));
   if (rx_status == HAL_OK)
   {
+    Y100M_LogRxChunkHex("[4G][SENDRAW]", (const uint8_t *)g_y100mAtReplyBuffer, (uint16_t)strlen(g_y100mAtReplyBuffer));
     Y100M_DebugLog("[4G] raw payload SEND OK\r\n");
   }
 
@@ -803,6 +870,17 @@ static HAL_StatusTypeDef Y100M_PdpActivate(void)
   return status;
 }
 
+static HAL_StatusTypeDef Y100M_CloseOldSession(void)
+{
+  Y100M_DebugLog("[4G] close previous TCP session if any\r\n");
+  (void)Y100M_SendAtExpect("AT+CIPCLOSE", "OK", Y100M_AT_CMD_TIMEOUT_MS);
+  Y100M_DelayMs(1000U);
+  (void)Y100M_SendAtExpect("AT+CIPSHUT", "OK", Y100M_AT_CMD_TIMEOUT_MS);
+  Y100M_DelayMs(2000U);
+  Y100M_Uart1DrainRx();
+  return HAL_OK;
+}
+
 static HAL_StatusTypeDef Y100M_GetLocalIp(void)
 {
   HAL_StatusTypeDef status = Y100M_SendAtExpect("AT+CIFSR", ".", Y100M_AT_CMD_TIMEOUT_MS);
@@ -819,11 +897,124 @@ static HAL_StatusTypeDef Y100M_GetLocalIp(void)
   return status;
 }
 
+static int8_t Y100M_CheckConnackWindow(const uint8_t *data, uint16_t length)
+{
+  uint16_t index;
+
+  if ((data == NULL) || (length < 4U))
+  {
+    return 0;
+  }
+
+  for (index = 0U; index + 3U < length; index++)
+  {
+    if ((data[index] == 0x20U) && (data[index + 1U] == 0x02U))
+    {
+      if (data[index + 3U] == 0x00U)
+      {
+        Y100M_DebugLog("[4G] MQTT CONNACK accepted\r\n");
+        return 1;
+      }
+
+      (void)snprintf(g_y100mLogBuffer,
+                     sizeof(g_y100mLogBuffer),
+                     "[4G] MQTT CONNACK reject code=0x%02X\r\n",
+                     data[index + 3U]);
+      Y100M_DebugLog(g_y100mLogBuffer);
+      return -1;
+    }
+  }
+
+  return 0;
+}
+
+static HAL_StatusTypeDef Y100M_OpenTcpSession(void)
+{
+  HAL_StatusTypeDef status;
+  uint32_t start_tick;
+
+  status = Y100M_SendAtExpect("AT+CIPSTART=\"TCP\",\"82.157.204.124\",1883",
+                              "OK",
+                              Y100M_AT_TCP_OPEN_TIMEOUT_MS);
+  if (status != HAL_OK)
+  {
+    return status;
+  }
+
+  status = Y100M_StartReplyRxWindow();
+  if (status != HAL_OK)
+  {
+    return status;
+  }
+
+  start_tick = HAL_GetTick();
+  while ((HAL_GetTick() - start_tick) < Y100M_AT_TCP_OPEN_TIMEOUT_MS)
+  {
+    if (g_y100mUsart1RxDmaDone != 0U)
+    {
+      uint16_t received = g_y100mUsart1RxDmaSize;
+      uint16_t copy_len = received;
+
+      Y100M_LogRxChunkHex("[4G][TCPRAW]", g_y100mUsart1RxDmaBuffer, received);
+
+      if (copy_len > (uint16_t)(sizeof(g_y100mAtReplyBuffer) - 1U))
+      {
+        copy_len = (uint16_t)(sizeof(g_y100mAtReplyBuffer) - 1U);
+      }
+      if (copy_len > 0U)
+      {
+        (void)memcpy(g_y100mAtReplyBuffer, g_y100mUsart1RxDmaBuffer, copy_len);
+        g_y100mAtReplyBuffer[copy_len] = '\0';
+
+        (void)snprintf(g_y100mLogBuffer,
+                       sizeof(g_y100mLogBuffer),
+                       "[4G][TCP] %s\r\n",
+                       g_y100mAtReplyBuffer);
+        Y100M_DebugLog(g_y100mLogBuffer);
+
+        if ((strstr(g_y100mAtReplyBuffer, "CONNECT OK") != NULL) ||
+            (strstr(g_y100mAtReplyBuffer, "ALREADY CONNECT") != NULL))
+        {
+          return HAL_OK;
+        }
+        if ((strstr(g_y100mAtReplyBuffer, "ERROR") != NULL) ||
+            (strstr(g_y100mAtReplyBuffer, "FAIL") != NULL))
+        {
+          return HAL_ERROR;
+        }
+      }
+
+      status = Y100M_StartReplyRxWindow();
+      if (status != HAL_OK)
+      {
+        return status;
+      }
+    }
+
+    osDelay(1);
+  }
+
+  Y100M_DebugLog("[4G] TCP open async status timeout, continue after immediate OK\r\n");
+  return HAL_OK;
+}
+
+static HAL_StatusTypeDef Y100M_StartConnackRxWindow(void)
+{
+  g_y100mUsart1RxDmaDone = 0U;
+  g_y100mUsart1RxDmaSize = 0U;
+  (void)HAL_UART_DMAStop(&huart1);
+  __HAL_UART_CLEAR_OREFLAG(&huart1);
+
+  return HAL_UARTEx_ReceiveToIdle_DMA(&huart1,
+                                      g_y100mUsart1RxDmaBuffer,
+                                      Y100M_AT_RX_DMA_BUFFER_SIZE);
+}
+
 static HAL_StatusTypeDef Y100M_MqttConnect(void)
 {
   static const uint8_t mqtt_connect_packet[] =
   {
-    0x10U, 0x23U,
+    0x10U, 0x21U,
     0x00U, 0x04U, 'M', 'Q', 'T', 'T',
     0x04U, 0x02U, 0x00U, 0x3CU,
     0x00U, 0x15U,
@@ -831,7 +1022,7 @@ static HAL_StatusTypeDef Y100M_MqttConnect(void)
   };
   HAL_StatusTypeDef status;
 
-  status = Y100M_SendAtExpect("AT+CIPSTART=\"TCP\",\"82.157.204.124\",1883", "OK", Y100M_AT_TCP_OPEN_TIMEOUT_MS);
+  status = Y100M_OpenTcpSession();
   if (status != HAL_OK)
   {
     return status;
@@ -852,8 +1043,86 @@ static HAL_StatusTypeDef Y100M_MqttConnect(void)
   }
 
   Y100M_DebugLog("[4G] MQTT CONNECT payload accepted by modem\r\n");
-  Y100M_DelayMs(1000U);
-  return HAL_OK;
+
+  /* Y100M_SendRawPayload waits for SEND OK through the same UART stream. Some
+   * firmware builds can append broker bytes to that same idle window, just like
+   * the PC script's accumulated buffer. Check it before opening a fresh window.
+   */
+  {
+    int8_t connack_status = Y100M_CheckConnackWindow(g_y100mUsart1RxDmaBuffer,
+                                                     g_y100mUsart1RxDmaSize);
+    if (connack_status > 0)
+    {
+      return HAL_OK;
+    }
+    if (connack_status < 0)
+    {
+      return HAL_ERROR;
+    }
+  }
+
+  status = Y100M_StartConnackRxWindow();
+  if (status != HAL_OK)
+  {
+    return status;
+  }
+
+  {
+    uint32_t start_tick = HAL_GetTick();
+
+    while ((HAL_GetTick() - start_tick) < Y100M_AT_MQTT_CONNACK_TIMEOUT_MS)
+    {
+      if (g_y100mUsart1RxDmaDone != 0U)
+      {
+        uint16_t index;
+        int8_t connack_status = Y100M_CheckConnackWindow(g_y100mUsart1RxDmaBuffer,
+                                                         g_y100mUsart1RxDmaSize);
+
+        Y100M_LogRxChunkHex("[4G][CONNACKRAW]", g_y100mUsart1RxDmaBuffer, g_y100mUsart1RxDmaSize);
+
+        if (connack_status > 0)
+        {
+          return HAL_OK;
+        }
+        if (connack_status < 0)
+        {
+          return HAL_ERROR;
+        }
+
+        {
+          uint16_t log_offset = 0U;
+          log_offset = (uint16_t)snprintf(g_y100mLogBuffer,
+                                          sizeof(g_y100mLogBuffer),
+                                          "[4G] CONNACK window hex:");
+          for (index = 0U; (index < g_y100mUsart1RxDmaSize) && (log_offset + 4U < sizeof(g_y100mLogBuffer)); index++)
+          {
+            log_offset += (uint16_t)snprintf(&g_y100mLogBuffer[log_offset],
+                                             sizeof(g_y100mLogBuffer) - log_offset,
+                                             " %02X",
+                                             g_y100mUsart1RxDmaBuffer[index]);
+          }
+          if (log_offset + 3U < sizeof(g_y100mLogBuffer))
+          {
+            g_y100mLogBuffer[log_offset++] = '\r';
+            g_y100mLogBuffer[log_offset++] = '\n';
+            g_y100mLogBuffer[log_offset] = '\0';
+          }
+          Y100M_DebugLog(g_y100mLogBuffer);
+        }
+
+        status = Y100M_StartConnackRxWindow();
+        if (status != HAL_OK)
+        {
+          return status;
+        }
+      }
+
+      osDelay(1);
+    }
+  }
+
+  Y100M_DebugLog("[4G] MQTT CONNACK timeout\r\n");
+  return HAL_TIMEOUT;
 }
 
 /* Pulse the external reset pin to force the 4G module to reboot. */
@@ -915,6 +1184,8 @@ static HAL_StatusTypeDef Y100M_RunBootstrapSteps(void)
     }
   }
 
+  (void)Y100M_CloseOldSession();
+
   status = Y100M_PdpActivate();
   if (status != HAL_OK)
   {
@@ -962,6 +1233,11 @@ void Y100M_BootstrapOnce(void)
   }
 }
 
+uint8_t Y100M_IsReady(void)
+{
+  return g_y100mBootstrapOk;
+}
+
 HAL_StatusTypeDef Y100M_MqttPublish(const uint8_t *payload, uint16_t payload_length)
 {
   uint8_t mqtt_header[5];
@@ -975,10 +1251,21 @@ HAL_StatusTypeDef Y100M_MqttPublish(const uint8_t *payload, uint16_t payload_len
   HAL_StatusTypeDef status;
   static const uint8_t topic[] = "fsae/telemetry";
 
+  Y100M_DebugLog("[4G-PUB] enter mqtt publish\r\n");
+
   if ((payload == NULL) || (payload_length == 0U) || (g_y100mBootstrapOk == 0U))
   {
+    (void)snprintf(g_y100mLogBuffer,
+                   sizeof(g_y100mLogBuffer),
+                   "[4G-PUB] fail: invalid args or not ready payload=%p len=%u ready=%u\r\n",
+                   (const void *)payload,
+                   (unsigned int)payload_length,
+                   (unsigned int)g_y100mBootstrapOk);
+    Y100M_DebugLog(g_y100mLogBuffer);
     return HAL_ERROR;
   }
+
+  Y100M_DebugLog("[4G-PUB] payload accepted for packing\r\n");
 
   mqtt_header[0] = 0x30U;
   encoded_count = Y100M_EncodeMqttRemainingLength((uint32_t)(2U + topic_length + payload_length),
@@ -986,19 +1273,38 @@ HAL_StatusTypeDef Y100M_MqttPublish(const uint8_t *payload, uint16_t payload_len
                                                   (uint8_t)sizeof(remaining_length));
   if (encoded_count == 0U)
   {
+    Y100M_DebugLog("[4G-PUB] fail: remaining length encode failed\r\n");
     return HAL_ERROR;
   }
+
+  (void)snprintf(g_y100mLogBuffer,
+                 sizeof(g_y100mLogBuffer),
+                 "[4G-PUB] remaining length bytes=%u\r\n",
+                 (unsigned int)encoded_count);
+  Y100M_DebugLog(g_y100mLogBuffer);
 
   (void)memcpy(&mqtt_header[1], remaining_length, encoded_count);
   topic_header[0] = (uint8_t)(topic_length >> 8);
   topic_header[1] = (uint8_t)(topic_length & 0xFFU);
 
   packet_length = (uint16_t)(1U + encoded_count + 2U + topic_length + payload_length);
-  packet = g_y100mUsart1RxDmaBuffer;
-  if (packet_length > Y100M_AT_RX_DMA_BUFFER_SIZE)
+  packet = g_y100mMqttTxBuffer;
+  if (packet_length > Y100M_MQTT_TX_BUFFER_SIZE)
   {
+    (void)snprintf(g_y100mLogBuffer,
+                   sizeof(g_y100mLogBuffer),
+                   "[4G-PUB] fail: packet too large len=%u cap=%u\r\n",
+                   (unsigned int)packet_length,
+                   (unsigned int)Y100M_MQTT_TX_BUFFER_SIZE);
+    Y100M_DebugLog(g_y100mLogBuffer);
     return HAL_ERROR;
   }
+
+  (void)snprintf(g_y100mLogBuffer,
+                 sizeof(g_y100mLogBuffer),
+                 "[4G-PUB] packet length=%u\r\n",
+                 (unsigned int)packet_length);
+  Y100M_DebugLog(g_y100mLogBuffer);
 
   offset = 0U;
   packet[offset++] = mqtt_header[0];
@@ -1015,8 +1321,39 @@ HAL_StatusTypeDef Y100M_MqttPublish(const uint8_t *payload, uint16_t payload_len
                  "[4G] MQTT publish payload bytes=%u\r\n",
                  (unsigned int)payload_length);
   Y100M_DebugLog(g_y100mLogBuffer);
+  {
+    uint16_t log_offset = 0U;
+    uint16_t index;
 
-  return Y100M_SendRawPayload(packet, packet_length, Y100M_AT_CMD_TIMEOUT_MS);
+    log_offset = (uint16_t)snprintf(g_y100mLogBuffer,
+                                    sizeof(g_y100mLogBuffer),
+                                    "[4G] MQTT publish packet hex:");
+    for (index = 0U; (index < packet_length) && (log_offset + 4U < sizeof(g_y100mLogBuffer)); index++)
+    {
+      log_offset += (uint16_t)snprintf(&g_y100mLogBuffer[log_offset],
+                                       sizeof(g_y100mLogBuffer) - log_offset,
+                                       " %02X",
+                                       packet[index]);
+    }
+    if (log_offset + 3U < sizeof(g_y100mLogBuffer))
+    {
+      g_y100mLogBuffer[log_offset++] = '\r';
+      g_y100mLogBuffer[log_offset++] = '\n';
+      g_y100mLogBuffer[log_offset] = '\0';
+    }
+    Y100M_DebugLog(g_y100mLogBuffer);
+  }
+
+  Y100M_DebugLog("[4G-PUB] send raw payload begin\r\n");
+
+  status = Y100M_SendRawPayload(packet, packet_length, Y100M_AT_CMD_TIMEOUT_MS);
+  (void)snprintf(g_y100mLogBuffer,
+                 sizeof(g_y100mLogBuffer),
+                 "[4G-PUB] send raw payload status=%d\r\n",
+                 (int)status);
+  Y100M_DebugLog(g_y100mLogBuffer);
+
+  return status;
 }
 
 /* USER CODE END 1 */
