@@ -1,5 +1,9 @@
 /* Publish converts the shared telemetry caches into protobuf payloads and
  * hands topic requests to the Publish4G task.
+/* Publish converts telemetry state into protobuf payloads. The current Route-A
+ * debug path intentionally emits one minimal TelemetryFrame carrying only a
+ * fixed motion.gps_speed_kmh value so the 4G uplink can be validated without
+ * depending on any other subsystem state.
  */
 #include "publish.h"
 
@@ -47,6 +51,7 @@ static void Publish_MapBmsSummaryFrame(fsae_TelemetryFrame *frame);
 static void Publish_MapBmsDetailFrame(fsae_TelemetryFrame *frame);
 static void Publish_MapBatteryModule(fsae_BatteryModule *module, uint8_t module_index);
 static void Publish_MapThermalSummary(fsae_ThermalSummary *thermal_summary);
+static void Publish_MapRouteADebugFrame(fsae_TelemetryFrame *frame);
 static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_buffer, size_t payload_capacity, size_t *payload_size);
 static const char *Publish_GetTopicName(PublishTopic_t topic);
 static bool Publish_IsTopicValid(PublishTopic_t topic);
@@ -758,7 +763,7 @@ static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_bu
         case PUBLISH_TOPIC_VEHICLE_STATE:
         {
             g_publishTelemetryFrame = (fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
-            Publish_MapCommonTelemetryFrame(&g_publishTelemetryFrame);
+            Publish_MapRouteADebugFrame(&g_publishTelemetryFrame);
             encode_status = pb_encode(&stream, fsae_TelemetryFrame_fields, &g_publishTelemetryFrame);
             break;
         }
