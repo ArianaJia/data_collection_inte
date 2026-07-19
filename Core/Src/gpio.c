@@ -57,7 +57,7 @@ void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(RST_4G_GPIO_Port, RST_4G_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, MCP2518_CS_A_Pin|MCP2518_CS_B_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, MCP2518_CS_A_Pin|MCP2518_CS_B_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(EN__GPIO_Port, EN__Pin, GPIO_PIN_RESET);

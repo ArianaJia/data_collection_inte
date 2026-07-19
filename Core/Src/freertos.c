@@ -51,6 +51,7 @@ typedef StaticQueue_t osStaticMessageQDef_t;
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define APP_4G_PUBLISH_LOG_ENABLED       0U
 
 /* USER CODE END PD */
 
@@ -276,7 +277,7 @@ static void SpiCdc_Dispatch(const Peripheral_Rx_Frame_t *recv_data);
 static void VehicleCan_Send(const CAN_Tx_Queue_t *tx_data);
 static osStatus_t App_QueueBytes(osMessageQueueId_t queue_handle, const uint8_t *data, uint16_t length, uint32_t timeout_ms);
 static osStatus_t App_QueueText(osMessageQueueId_t queue_handle, const char *text, uint32_t timeout_ms);
-static void App_DebugLogString(const char *text);
+void App_DebugLogString(const char *text);
 static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart, uint8_t *data, uint16_t length);
 static void App_LogCanRxContext(const char *prefix, const CAN_ControllerContext_t *ctx);
 static uint16_t App_AppendTemperature(char *buffer, uint16_t offset, uint16_t size, float temperature);
@@ -644,7 +645,7 @@ void Publish4GTask(void *argument)
     if (Y100M_IsReady() == 0U)
     {
       uint32_t now = HAL_GetTick();
-      if ((now - wait_log_tick) >= 1000U)
+      if ((APP_4G_PUBLISH_LOG_ENABLED != 0U) && ((now - wait_log_tick) >= 1000U))
       {
         App_DebugLogString("[4G-PUB] waiting for MQTT ready\r\n");
         wait_log_tick = now;
@@ -679,7 +680,10 @@ void Publish4GTask(void *argument)
                          g_diagPublishStatus,
                          (unsigned long)g_diagPublishOkCount,
                          (unsigned long)g_diagPublishFailCount);
-          App_DebugLogString(g_mlxLineBuffer);
+          if (APP_4G_PUBLISH_LOG_ENABLED != 0U)
+          {
+            App_DebugLogString(g_mlxLineBuffer);
+          }
           osDelay(1000U);
           (void)Publish_QueueTopic(item.topic);
         }
@@ -691,7 +695,10 @@ void Publish4GTask(void *argument)
                        "[PUB-DIAG] build frame failed topic=%u fail=%lu\r\n",
                        (unsigned int)item.topic,
                        (unsigned long)g_diagPublishFailCount);
-        App_DebugLogString(g_mlxLineBuffer);
+        if (APP_4G_PUBLISH_LOG_ENABLED != 0U)
+        {
+          App_DebugLogString(g_mlxLineBuffer);
+        }
         osDelay(1000U);
         (void)Publish_QueueTopic(item.topic);
       }
@@ -833,7 +840,7 @@ static osStatus_t App_QueueText(osMessageQueueId_t queue_handle, const char *tex
   return App_QueueBytes(queue_handle, (const uint8_t *)text, (uint16_t)strlen(text), timeout_ms);
 }
 
-static void App_DebugLogString(const char *text)
+void App_DebugLogString(const char *text)
 {
   /* All debug strings are funneled through the USART3 debug queue. */
   uint32_t timeout_ms = (g_bootInitDone == 0U) ? 20U : 0U;

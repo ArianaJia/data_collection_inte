@@ -5,7 +5,9 @@
 #include "mcp2518fd.h"
 
 #include "cmsis_os.h"
+#include <stdio.h>
 #include <string.h>
+#include "freertos_app.h"
 
 typedef struct
 {
@@ -42,11 +44,11 @@ static MCP2518FD_SpiDmaState_t g_mcp2518fdSpiDmaStates[2];
 
 HAL_StatusTypeDef MCP2518FD_Init(MCP2518FD_Handle_t *handle, SPI_HandleTypeDef *hspi, GPIO_TypeDef *cs_port, uint16_t cs_pin)
 {
-  /* Bring the external CAN controller into configuration mode and prepare RAM. */
   uint32_t value;
 
   if ((handle == NULL) || (hspi == NULL) || (cs_port == NULL))
   {
+    App_DebugLogString("[MCP] Init: NULL parameter\r\n");
     return HAL_ERROR;
   }
 
@@ -58,79 +60,114 @@ HAL_StatusTypeDef MCP2518FD_Init(MCP2518FD_Handle_t *handle, SPI_HandleTypeDef *
   MCP2518FD_Deselect(handle);
   MCP2518FD_DelayMs(2U);
 
+  /* ---- 1. SPI Reset ---- */
   if (MCP2518FD_Reset(handle) != HAL_OK)
   {
+    App_DebugLogString("[MCP] FAIL @1 SPI Reset\r\n");
     return HAL_ERROR;
   }
   MCP2518FD_DelayMs(2U);
 
+  /* ---- 2. Enter Configuration Mode ---- */
   if (MCP2518FD_SetMode(handle, MCP2518FD_MODE_CONFIGURATION) != HAL_OK)
   {
+    App_DebugLogString("[MCP] FAIL @2 Config Mode (SPI comm?)\r\n");
     return HAL_ERROR;
   }
 
+  /* ---- 3. OSC register write ---- */
   if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_OSC, 0x00000000UL) != HAL_OK)
   {
+    App_DebugLogString("[MCP] FAIL @3 OSC write\r\n");
     return HAL_ERROR;
   }
+
+  /* ---- 4. Oscillator ready ---- */
   if (MCP2518FD_WaitOscillatorReady(handle) != HAL_OK)
   {
+    App_DebugLogString("[MCP] FAIL @4 OSC not ready (check crystal!)\r\n");
     return HAL_ERROR;
   }
 
+  /* ---- 5. IOCON ---- */
   if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_IOCON, 0x00000000UL) != HAL_OK)
   {
+    App_DebugLogString("[MCP] FAIL @5 IOCON write\r\n");
     return HAL_ERROR;
   }
+
+  /* ---- 6. ECCCON ---- */
   if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_ECCCON, MCP2518FD_ECCCON_ECCEN) != HAL_OK)
   {
+    App_DebugLogString("[MCP] FAIL @6 ECCCON write\r\n");
     return HAL_ERROR;
   }
+
+  /* ---- 7. RAM init (64 chunks x 32 bytes) ---- */
   if (MCP2518FD_InitRam(handle, 0xFFU) != HAL_OK)
   {
+    App_DebugLogString("[MCP] FAIL @7 RAM init\r\n");
     return HAL_ERROR;
   }
 
+  /* ---- 8. Nominal Bit Timing: 500 kbps ---- */
   if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1NBTCFG, MCP2518FD_NBTCFG_500K_40MHZ) != HAL_OK)
   {
-    return HAL_ERROR;
-  }
-  if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1DBTCFG, MCP2518FD_DBTCFG_CLASSIC_SAFE) != HAL_OK)
-  {
-    return HAL_ERROR;
-  }
-  if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1TDC, 0x00000000UL) != HAL_OK)
-  {
+    App_DebugLogString("[MCP] FAIL @8 NBTCFG write\r\n");
     return HAL_ERROR;
   }
 
+  /* ---- 9. Data Bit Timing: classic-only ---- */
+  if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1DBTCFG, MCP2518FD_DBTCFG_CLASSIC_SAFE) != HAL_OK)
+  {
+    App_DebugLogString("[MCP] FAIL @9 DBTCFG write\r\n");
+    return HAL_ERROR;
+  }
+
+  /* ---- 10. TX Delay Compensation ---- */
+  if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1TDC, 0x00000000UL) != HAL_OK)
+  {
+    App_DebugLogString("[MCP] FAIL @10 TDC write\r\n");
+    return HAL_ERROR;
+  }
+
+  /* ---- 11. C1CON read-modify-write ---- */
   if (MCP2518FD_ReadRegister(handle, MCP2518FD_REG_C1CON, &value) != HAL_OK)
   {
+    App_DebugLogString("[MCP] FAIL @11 C1CON read\r\n");
     return HAL_ERROR;
   }
   value &= ~MCP2518FD_C1CON_REQOP_MASK;
   value |= (MCP2518FD_MODE_CONFIGURATION << MCP2518FD_C1CON_REQOP_POS) | MCP2518FD_C1CON_BRSDIS;
   if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1CON, value) != HAL_OK)
   {
+    App_DebugLogString("[MCP] FAIL @11 C1CON write\r\n");
     return HAL_ERROR;
   }
 
+  /* ---- 12. FIFO + Filter config ---- */
   if (MCP2518FD_ConfigRamAndFilters(handle) != HAL_OK)
   {
+    App_DebugLogString("[MCP] FAIL @12 FIFO/Filter\r\n");
     return HAL_ERROR;
   }
 
+  /* ---- 13. Clear interrupts ---- */
   if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1INT, 0x00000000UL) != HAL_OK)
   {
+    App_DebugLogString("[MCP] FAIL @13 C1INT clear\r\n");
     return HAL_ERROR;
   }
 
+  /* ---- 14. Enter Normal Mode (requires CAN bus idle) ---- */
   if (MCP2518FD_SetMode(handle, MCP2518FD_MODE_NORMAL) != HAL_OK)
   {
+    App_DebugLogString("[MCP] FAIL @14 Normal Mode (bus idle?)\r\n");
     return HAL_ERROR;
   }
 
   handle->ready = 1U;
+  App_DebugLogString("[MCP] Init OK\r\n");
   return HAL_OK;
 }
 
@@ -393,12 +430,14 @@ static HAL_StatusTypeDef MCP2518FD_SetMode(MCP2518FD_Handle_t *handle, uint32_t 
   /* Wait until the controller reports the requested operating mode. */
   uint32_t value;
   uint32_t start = HAL_GetTick();
+  char log_line[72];
 
   if (MCP2518FD_ModifyRegister(handle,
                                MCP2518FD_REG_C1CON,
                                MCP2518FD_C1CON_REQOP_MASK,
                                mode << MCP2518FD_C1CON_REQOP_POS) != HAL_OK)
   {
+    App_DebugLogString("[MCP] SetMode C1CON modify failed\r\n");
     return HAL_ERROR;
   }
 
@@ -406,6 +445,7 @@ static HAL_StatusTypeDef MCP2518FD_SetMode(MCP2518FD_Handle_t *handle, uint32_t 
   {
     if (MCP2518FD_ReadRegister(handle, MCP2518FD_REG_C1CON, &value) != HAL_OK)
     {
+      App_DebugLogString("[MCP] SetMode C1CON read failed\r\n");
       return HAL_ERROR;
     }
     if (((value & MCP2518FD_C1CON_OPMOD_MASK) >> MCP2518FD_C1CON_OPMOD_POS) == mode)
@@ -413,6 +453,14 @@ static HAL_StatusTypeDef MCP2518FD_SetMode(MCP2518FD_Handle_t *handle, uint32_t 
       return HAL_OK;
     }
   } while ((uint32_t)(HAL_GetTick() - start) < MCP2518FD_MODE_TIMEOUT_MS);
+
+  (void)snprintf(log_line,
+                 sizeof(log_line),
+                 "[MCP] C1CON=0x%08lX req=%lu op=%lu\r\n",
+                 (unsigned long)value,
+                 (unsigned long)mode,
+                 (unsigned long)((value & MCP2518FD_C1CON_OPMOD_MASK) >> MCP2518FD_C1CON_OPMOD_POS));
+  App_DebugLogString(log_line);
 
   return HAL_TIMEOUT;
 }
@@ -422,6 +470,7 @@ static HAL_StatusTypeDef MCP2518FD_WaitOscillatorReady(MCP2518FD_Handle_t *handl
   /* Wait for the oscillator-ready bit before touching the rest of the chip. */
   uint32_t value;
   uint32_t start = HAL_GetTick();
+  char log_line[48];
 
   do
   {
@@ -434,6 +483,9 @@ static HAL_StatusTypeDef MCP2518FD_WaitOscillatorReady(MCP2518FD_Handle_t *handl
       return HAL_OK;
     }
   } while ((uint32_t)(HAL_GetTick() - start) < MCP2518FD_OSC_TIMEOUT_MS);
+
+  (void)snprintf(log_line, sizeof(log_line), "[MCP] OSC=0x%08lX\r\n", (unsigned long)value);
+  App_DebugLogString(log_line);
 
   return HAL_TIMEOUT;
 }
