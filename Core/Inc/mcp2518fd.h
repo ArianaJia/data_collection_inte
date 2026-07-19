@@ -47,9 +47,10 @@ extern "C" {
 #define MCP2518FD_MODE_NORMAL                0x0UL
 #define MCP2518FD_MODE_CONFIGURATION         0x4UL
 
-#define MCP2518FD_OSC_SCLKRDY                (1UL << 8)
-#define MCP2518FD_OSC_OSCRDY                 (1UL << 9)
-#define MCP2518FD_OSC_READY_MASK             (MCP2518FD_OSC_SCLKRDY | MCP2518FD_OSC_OSCRDY)
+#define MCP2518FD_OSC_PLLRDY                 (1UL << 8)
+#define MCP2518FD_OSC_OSCRDY                 (1UL << 10)
+#define MCP2518FD_OSC_SCLKRDY                (1UL << 12)
+#define MCP2518FD_OSC_READY_MASK             MCP2518FD_OSC_OSCRDY
 
 #define MCP2518FD_ECCCON_ECCEN               (1UL << 0)
 
@@ -75,7 +76,16 @@ extern "C" {
 #define MCP2518FD_MODE_TIMEOUT_MS            20U
 #define MCP2518FD_OSC_TIMEOUT_MS             20U
 
-#define MCP2518FD_NBTCFG_500K_40MHZ          ((4UL << 24) | (12UL << 16) | (1UL << 8) | 1UL)
+/* Nominal Bit Timing: 500 kbps @ 40 MHz crystal, sample point 75%.
+ * Fosc = 40 MHz, TQ = 2*(BRP+1)/Fosc = 2*2/40M = 100 ns
+ * NBT  = 1(Sync) + (TSEG1+1) + (TSEG2+1) = TSEG1 + TSEG2 + 3 = 20 TQ = 2 us
+ * Sample Point = (1 + TSEG1 + 1) / NBT = (1+13+1)/20 = 75 %
+ * SJW = 4 TQ <= PhaseSeg2 (5 TQ)  OK
+ *
+ * Register fields (bits):  [31:24]=SJW-1  [23:16]=TSEG2-1  [15:8]=TSEG1-1  [7:0]=BRP
+ *                        (3)           (4)            (13)           (1)
+ */
+#define MCP2518FD_NBTCFG_500K_40MHZ          ((3UL << 24) | (4UL << 16) | (13UL << 8) | 1UL)
 #define MCP2518FD_DBTCFG_CLASSIC_SAFE        0x00000000UL
 
 
@@ -97,6 +107,9 @@ typedef struct
   uint8_t length;
   uint8_t data[64];
 } MCP2518FD_StdFrame_t;
+
+/* Diagnostic log callback – supplied by the application (freertos.c) before Init. */
+extern void App_DebugLogString(const char *text);
 
 HAL_StatusTypeDef MCP2518FD_Init(MCP2518FD_Handle_t *handle, SPI_HandleTypeDef *hspi, GPIO_TypeDef *cs_port, uint16_t cs_pin);
 uint8_t MCP2518FD_IsReady(const MCP2518FD_Handle_t *handle);
