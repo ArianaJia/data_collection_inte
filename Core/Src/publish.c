@@ -668,13 +668,25 @@ static void Publish_MapBatteryModule(fsae_BatteryModule *module, uint8_t module_
 static void Publish_MapThermalSummary(fsae_ThermalSummary *thermal_summary)
 {
     /* Thermal summary exposes the MLX90640 regions in a compact protobuf form. */
+    uint8_t sensor_count = MLX90640_SENSOR_COUNT;
+    uint8_t region_count = MLX90640_REGION_COUNT;
+
     if (thermal_summary == NULL)
     {
         return;
     }
 
+    if (sensor_count > 4U)
+    {
+        sensor_count = 4U;
+    }
+    if (region_count > 4U)
+    {
+        region_count = 4U;
+    }
+
     *thermal_summary = (fsae_ThermalSummary)fsae_ThermalSummary_init_zero;
-    thermal_summary->sensors_count = MLX90640_SENSOR_COUNT;
+    thermal_summary->sensors_count = sensor_count;
 
     for (uint8_t sensor_index = 0U; sensor_index < thermal_summary->sensors_count; sensor_index++)
     {
@@ -693,11 +705,11 @@ static void Publish_MapThermalSummary(fsae_ThermalSummary *thermal_summary)
             continue;
         }
 
-        sensor->chunks_count = MLX90640_REGION_COUNT;
+        sensor->chunks_count = region_count;
         temp_min = g_MLX90640_Frame.RegionTemp[source_sensor_index][0];
         temp_max = g_MLX90640_Frame.RegionTemp[source_sensor_index][0];
 
-        for (uint8_t region_index = 0U; region_index < MLX90640_REGION_COUNT; region_index++)
+        for (uint8_t region_index = 0U; region_index < region_count; region_index++)
         {
             int32_t region_temp = g_MLX90640_Frame.RegionTemp[source_sensor_index][region_index];
             fsae_ThermalRawChunk *chunk = &sensor->chunks[region_index];
@@ -718,13 +730,13 @@ static void Publish_MapThermalSummary(fsae_ThermalSummary *thermal_summary)
             chunk->position = sensor->position;
             chunk->frame_id = g_MLX90640_Frame.FrameCounter[source_sensor_index];
             chunk->chunk_index = region_index;
-            chunk->chunk_count = MLX90640_REGION_COUNT;
+            chunk->chunk_count = region_count;
             chunk->pixel_temp_centi_c = region_temp;
         }
 
         sensor->min_temp_centi_c = temp_min;
         sensor->max_temp_centi_c = temp_max;
-        sensor->avg_temp_centi_c = temp_sum / (int32_t)MLX90640_REGION_COUNT;
+        sensor->avg_temp_centi_c = temp_sum / (int32_t)region_count;
     }
 }
 

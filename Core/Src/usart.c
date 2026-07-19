@@ -49,7 +49,7 @@
  * keep this comfortably above the former 256-byte bring-up buffer while still
  * preserving the explicit packet-too-large guard below.
  */
-#define Y100M_MQTT_TX_BUFFER_SIZE       512U
+#define Y100M_MQTT_TX_BUFFER_SIZE      1024U
 /* USART3 4G debug reports are intentionally compiled out by default.
  * They were used to prove the AT/MQTT bring-up path:
  * - [4G][RXRAW] dumped accumulated AT replies such as echo/OK/ERROR.

@@ -51,7 +51,12 @@ typedef StaticQueue_t osStaticMessageQDef_t;
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define APP_4G_PUBLISH_LOG_ENABLED       0U
+#define APP_4G_PUBLISH_LOG_ENABLED       1U
+#define APP_SPICANA_READY_CHECK_ENABLED  1U
+#define APP_SPICANA_POLL_ENABLED         1U
+#define APP_SPICANA_DECODE_ENABLED       1U
+#define APP_SPICANA_PUBLISH_ENABLED      1U
+#define APP_MLX90640_PUBLISH_ENABLED     1U
 
 /* USER CODE END PD */
 
@@ -116,7 +121,7 @@ const osThreadAttr_t CanForBMS_attributes = {
 };
 /* Definitions for MLX90640 */
 osThreadId_t MLX90640Handle;
-uint32_t MLX90640Buffer[ 1024 ];
+uint32_t MLX90640Buffer[ 1536 ];
 osStaticThreadDef_t MLX90640ControlBlock;
 const osThreadAttr_t MLX90640_attributes = {
   .name = "MLX90640",
@@ -140,7 +145,7 @@ const osThreadAttr_t TensionSensor_attributes = {
 };
 /* Definitions for SPICanControl */
 osThreadId_t SPICanControlHandle;
-uint32_t SPICanControlBuffer[ 128 ];
+uint32_t SPICanControlBuffer[ 1024 ];
 osStaticThreadDef_t SPICanControlControlBlock;
 const osThreadAttr_t SPICanControl_attributes = {
   .name = "SPICanControl",
@@ -152,7 +157,7 @@ const osThreadAttr_t SPICanControl_attributes = {
 };
 /* Definitions for SPICanCDC */
 osThreadId_t SPICanCDCHandle;
-uint32_t SPICanCDCBuffer[ 128 ];
+uint32_t SPICanCDCBuffer[ 1024 ];
 osStaticThreadDef_t SPICanCDCControlBlock;
 const osThreadAttr_t SPICanCDC_attributes = {
   .name = "SPICanCDC",
@@ -164,7 +169,7 @@ const osThreadAttr_t SPICanCDC_attributes = {
 };
 /* Definitions for Publish4G */
 osThreadId_t Publish4GHandle;
-uint32_t Publish4GBuffer[ 192 ];
+uint32_t Publish4GBuffer[ 1536 ];
 osStaticThreadDef_t Publish4GControlBlock;
 const osThreadAttr_t Publish4G_attributes = {
   .name = "Publish4G",
@@ -188,7 +193,7 @@ const osThreadAttr_t VehicleCanTx_attributes = {
 };
 /* Definitions for initTaskBoot */
 osThreadId_t initTaskBootHandle;
-uint32_t initTaskBootBuffer[ 1024 ];
+uint32_t initTaskBootBuffer[ 1536 ];
 osStaticThreadDef_t initTaskBootControlBlock;
 const osThreadAttr_t initTaskBoot_attributes = {
   .name = "initTaskBoot",
@@ -269,6 +274,7 @@ const osMessageQueueAttr_t task01DebugQueue_attributes = {
 /* USER CODE BEGIN FunctionPrototypes */
 static void Usart3_ParseInput(void);
 static void Usart3_SendDebug(void);
+static void App_WaitForBootInit(void);
 static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data);
 static void CanBattery_Dispatch(const CAN_Msg_Queue_t *recv_data);
 static void Rs485_Dispatch(const Peripheral_Rx_Frame_t *recv_data);
@@ -373,10 +379,10 @@ void MX_FREERTOS_Init(void) {
 //  TensionSensorHandle = osThreadNew(TensionSensorTask, NULL, &TensionSensor_attributes);
 
   /* creation of SPICanControl */
-//  SPICanControlHandle = osThreadNew(SPICanControlTask, NULL, &SPICanControl_attributes);
+  SPICanControlHandle = osThreadNew(SPICanControlTask, NULL, &SPICanControl_attributes);
 
   /* creation of SPICanCDC */
-//  SPICanCDCHandle = osThreadNew(SPICanCDCTask, NULL, &SPICanCDC_attributes);
+  SPICanCDCHandle = osThreadNew(SPICanCDCTask, NULL, &SPICanCDC_attributes);
 
   /* creation of Publish4G */
   Publish4GHandle = osThreadNew(Publish4GTask, NULL, &Publish4G_attributes);
@@ -411,7 +417,7 @@ void StartDefaultTask(void *argument)
 
   for(;;)
   {
-    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);//LED RED
+    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
     Usart3_ParseInput();
     Usart3_SendDebug();
     osDelay(200);
@@ -430,6 +436,8 @@ void CanForViehcleTask(void *argument)
 {
   /* USER CODE BEGIN CanForViehcleTask */
   CAN_Msg_Queue_t recv_data;
+
+  App_WaitForBootInit();
 
   for(;;)
   {
@@ -454,6 +462,8 @@ void CanForBMSTask(void *argument)
   /* USER CODE BEGIN CanForBMSTask */
   CAN_Msg_Queue_t recv_data;
 
+  App_WaitForBootInit();
+
   for(;;)
   {
     if(osMessageQueueGet(CAN_Msg_Queue_2Handle, &recv_data, NULL, osWaitForever) == osOK)
@@ -477,9 +487,11 @@ void MLX90640Task(void *argument)
   /* USER CODE BEGIN MLX90640Task */
   uint32_t health_tick = HAL_GetTick();
 
+  App_WaitForBootInit();
+
   for(;;)
   {
-    if ((g_bootInitDone == 0U) || (Y100M_IsReady() == 0U))
+    if (Y100M_IsReady() == 0U)
     {
       osDelay(100);
       continue;
@@ -493,7 +505,9 @@ void MLX90640Task(void *argument)
         // Mlx_SendSummary(g_mlxCurrentSensor);
         Mlx_SendCanSummary(g_mlxCurrentSensor);
 //        Mlx_SendDebugMatrix(g_mlxCurrentSensor, MLX90640_App_GetTempMap());
-       (void)Publish_QueueTopic(PUBLISH_TOPIC_THERMAL_SUMMARY);
+#if (APP_MLX90640_PUBLISH_ENABLED != 0U)
+        (void)Publish_QueueTopic(PUBLISH_TOPIC_THERMAL_SUMMARY);
+#endif
       }
       else if ((status == -MLX90640_FRAME_NOT_READY_ERROR) ||
                (status == -MLX90640_FRAME_INCOMPLETE_ERROR))
@@ -544,6 +558,8 @@ void TensionSensorTask(void *argument)
   g_rs485DmaOverflow = 0U;
   g_rs485DmaReadPos = 0U;
 
+  App_WaitForBootInit();
+
   for(;;)
   {
     if (dma_running == 0U)
@@ -586,12 +602,18 @@ void SPICanControlTask(void *argument)
   /* USER CODE BEGIN SPICanControlTask */
   Peripheral_Rx_Frame_t recv_data = {0};
 
+  App_WaitForBootInit();
+
   for(;;)
   {
+#if (APP_SPICANA_READY_CHECK_ENABLED != 0U)
     if (FDCAN_IsReady(FDCAN_BUS_A))
     {
       SpiCana_Dispatch(&recv_data);
     }
+#else
+    (void)recv_data;
+#endif
     osDelay(200);
   }
   /* USER CODE END SPICanControlTask */
@@ -608,6 +630,8 @@ void SPICanCDCTask(void *argument)
 {
   /* USER CODE BEGIN SPICanCDCTask */
   Peripheral_Rx_Frame_t recv_data = {0};
+
+  App_WaitForBootInit();
 
   for(;;)
   {
@@ -635,13 +659,10 @@ void Publish4GTask(void *argument)
   HAL_StatusTypeDef tx_status = HAL_OK;
   uint32_t wait_log_tick = 0U;
 
+  App_WaitForBootInit();
+
   for(;;)
   {
-    while (g_bootInitDone == 0U)
-    {
-      osDelay(100);
-    }
-
     if (Y100M_IsReady() == 0U)
     {
       uint32_t now = HAL_GetTick();
@@ -668,7 +689,6 @@ void Publish4GTask(void *argument)
         if (tx_status == HAL_OK)
         {
           g_diagPublishOkCount++;
-          HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
           osDelay(PUBLISH_COOLDOWN_MS);
         }
         else
@@ -720,6 +740,8 @@ void VehicleCanTxTask(void *argument)
   /* USER CODE BEGIN VehicleCanTxTask */
   CAN_Tx_Queue_t tx_data;
 
+  App_WaitForBootInit();
+
   for(;;)
   {
     if (osMessageQueueGet(VehicleCanTxQueueHandle, &tx_data, NULL, osWaitForever) == osOK)
@@ -746,23 +768,23 @@ void InitTask_Boot(void *argument)
 
   App_DebugLogString("\r\n=== Boot Init Start ===\r\n");
 
-//  App_DebugLogString("[BOOT] CAN start begin\r\n");
+  App_DebugLogString("[BOOT] CAN start begin\r\n");
   CAN_Start();
-//  App_DebugLogString("[BOOT] CAN start done\r\n");
+  App_DebugLogString("[BOOT] CAN start done\r\n");
 
-//  App_DebugLogString("[BOOT] MLX90640 init begin\r\n");
+  App_DebugLogString("[BOOT] MLX90640 init begin\r\n");
   status = MLX90640_App_Init();
   if (status == MLX90640_NO_ERROR)
   {
-//    App_DebugLogString("[BOOT] MLX90640 init ok\r\n");
+    App_DebugLogString("[BOOT] MLX90640 init ok\r\n");
   }
   else
   {
     App_DebugLogString("[BOOT] MLX90640 init pending, will retry via health check\r\n");
   }
-//  App_DebugLogString("[BOOT] post-MLX delay\r\n");
-  osDelay(1);
- App_DebugLogString("[BOOT] MCP2518FD-A init...\r\n");
+  App_DebugLogString("[BOOT] post-MLX delay\r\n");
+  HAL_Delay(10);//初始化就不要考虑CPU让渡问题了
+  App_DebugLogString("[BOOT] MCP2518FD-A init...\r\n");
  for (retry = 0; retry < 3; retry++)
  {
    if (FDCAN_Init(FDCAN_BUS_A) == HAL_OK)
@@ -771,37 +793,38 @@ void InitTask_Boot(void *argument)
      break;
    }
    App_DebugLogString("[BOOT] MCP2518FD-A retry...\r\n");
-   osDelay(500U);
+   HAL_Delay(10);
  }
  if (retry >= 3)
  {
    App_DebugLogString("[BOOT] MCP2518FD-A init FAILED after 3 retries\r\n");
  }
-//
-//  App_DebugLogString("[BOOT] MCP2518FD-B init...\r\n");
-//  for (retry = 0; retry < 3; retry++)
-//  {
-//    if (FDCAN_Init(FDCAN_BUS_B) == HAL_OK)
-//    {
-//      App_DebugLogString("[BOOT] MCP2518FD-B init ok\r\n");
-//      break;
-//    }
-//    App_DebugLogString("[BOOT] MCP2518FD-B retry...\r\n");
-//    osDelay(500U);
-//  }
-//  if (retry >= 3)
-//  {
-//    App_DebugLogString("[BOOT] MCP2518FD-B init FAILED after 3 retries\r\n");
-//  }
-//
-  // App_DebugLogString("[BOOT] 4G bootstrap...\r\n");
-  // Y100M_BootstrapOnce();
+  HAL_Delay(10);//初始化就不要考虑CPU让渡问题了
+  App_DebugLogString("[BOOT] MCP2518FD-B init...\r\n");
+  for (retry = 0; retry < 3; retry++)
+  {
+    if (FDCAN_Init(FDCAN_BUS_B) == HAL_OK)
+    {
+      App_DebugLogString("[BOOT] MCP2518FD-B init ok\r\n");
+      break;
+    }
+    App_DebugLogString("[BOOT] MCP2518FD-B retry...\r\n");
+    HAL_Delay(10);
+  }
+  if (retry >= 3)
+  {
+    App_DebugLogString("[BOOT] MCP2518FD-B init FAILED after 3 retries\r\n");
+  }
+
+  /* Keep 4G bootstrap isolated while validating MCP2518FD-A/CANA bring-up.
+   * Y100M_BootstrapOnce currently faults in the USART1/4G path and can prevent
+   * queued boot logs from being flushed by defaultTask, making MCP failures look
+   * like missing logs.
+   */
+  App_DebugLogString("[BOOT] 4G bootstrap...\r\n");
+  Y100M_BootstrapOnce();
   g_bootInitDone = 1U;
   App_DebugLogString("=== Boot Init Complete ===\r\n");
-//  if (Y100M_IsReady() != 0U)
-//  {
-//    (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
-//  }
   osThreadExit();
   /* USER CODE END InitTask_Boot */
 }
@@ -900,6 +923,14 @@ static void App_LogCanRxContext(const char *prefix, const CAN_ControllerContext_
       ctx->last_rx_data[6],
       ctx->last_rx_data[7]);
   App_DebugLogString(g_mlxLineBuffer);
+}
+
+static void App_WaitForBootInit(void)
+{
+  while (g_bootInitDone == 0U)
+  {
+    osDelay(100U);
+  }
 }
 
 void app_can_debug_log_rx_context(const char *prefix, const CAN_ControllerContext_t *ctx)
@@ -1379,7 +1410,10 @@ static bool SpiCana_Poll(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus
     frame_data.is_ext_id = 0U;
     (void)memset(frame_data.msg_data, 0, sizeof(frame_data.msg_data));
     (void)memcpy(frame_data.msg_data, rx_frame.data, rx_frame.length);
+    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
+#if (APP_SPICANA_DECODE_ENABLED != 0U)
     CAN_DecodeControllerCanaMessage(&frame_data);
+#endif
     decoded_any = true;
   } while (received != 0U);
 
@@ -1456,11 +1490,17 @@ static void Rs485_Dispatch(const Peripheral_Rx_Frame_t *recv_data)
 
 static void SpiCana_Dispatch(const Peripheral_Rx_Frame_t *recv_data)
 {
+#if (APP_SPICANA_POLL_ENABLED != 0U)
   if (SpiCana_Poll(recv_data, FDCAN_BUS_A))
   {
+#if (APP_SPICANA_PUBLISH_ENABLED != 0U)
     (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
     (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
+#endif
   }
+#else
+  (void)recv_data;
+#endif
 }
 
 static void SpiCdc_Dispatch(const Peripheral_Rx_Frame_t *recv_data)

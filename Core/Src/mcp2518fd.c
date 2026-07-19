@@ -16,6 +16,13 @@ typedef struct
   volatile uint8_t transfer_error;
 } MCP2518FD_SpiDmaState_t;
 
+typedef struct
+{
+  MCP2518FD_Handle_t *handle;
+  const uint16_t *std_filter_ids;
+  uint8_t std_filter_count;
+} MCP2518FD_FilterConfig_t;
+
 #define MCP2518FD_SPI_TRANSFER_BUFFER_SIZE   (2U + MCP2518FD_OBJECT_SIZE)
 
 static HAL_StatusTypeDef MCP2518FD_Reset(MCP2518FD_Handle_t *handle);
@@ -27,7 +34,7 @@ static HAL_StatusTypeDef MCP2518FD_ModifyRegister(MCP2518FD_Handle_t *handle, ui
 static HAL_StatusTypeDef MCP2518FD_SetMode(MCP2518FD_Handle_t *handle, uint32_t mode);
 static HAL_StatusTypeDef MCP2518FD_WaitOscillatorReady(MCP2518FD_Handle_t *handle);
 static HAL_StatusTypeDef MCP2518FD_InitRam(MCP2518FD_Handle_t *handle, uint8_t fill_value);
-static HAL_StatusTypeDef MCP2518FD_ConfigRamAndFilters(MCP2518FD_Handle_t *handle);
+static HAL_StatusTypeDef MCP2518FD_ConfigRamAndFilters(MCP2518FD_Handle_t *handle, const uint16_t *std_filter_ids, uint8_t std_filter_count);
 static void MCP2518FD_Select(MCP2518FD_Handle_t *handle);
 static void MCP2518FD_Deselect(MCP2518FD_Handle_t *handle);
 static uint16_t MCP2518FD_CommandHeader(uint8_t command, uint16_t address);
@@ -36,15 +43,37 @@ static uint32_t MCP2518FD_LoadLe32(const uint8_t *data);
 static uint8_t MCP2518FD_DlcToBytes(uint8_t dlc);
 static uint8_t MCP2518FD_LengthToDlc(uint8_t length);
 static void MCP2518FD_DelayMs(uint32_t delay_ms);
+static MCP2518FD_FilterConfig_t *MCP2518FD_GetFilterConfig(MCP2518FD_Handle_t *handle);
 static MCP2518FD_SpiDmaState_t *MCP2518FD_GetSpiDmaState(SPI_HandleTypeDef *hspi);
 static HAL_StatusTypeDef MCP2518FD_WaitForSpiReady(SPI_HandleTypeDef *hspi, uint32_t timeout_ms);
 static HAL_StatusTypeDef MCP2518FD_TransferDmaBlocking(MCP2518FD_Handle_t *handle, const uint8_t *tx_data, uint8_t *rx_data, uint16_t length);
 
 static MCP2518FD_SpiDmaState_t g_mcp2518fdSpiDmaStates[2];
+static MCP2518FD_FilterConfig_t g_mcp2518fdFilterConfigs[2];
+
+void MCP2518FD_SetStdFilters(MCP2518FD_Handle_t *handle, const uint16_t *std_filter_ids, uint8_t std_filter_count)
+{
+  MCP2518FD_FilterConfig_t *filter_config;
+
+  if (handle == NULL)
+  {
+    return;
+  }
+
+  filter_config = MCP2518FD_GetFilterConfig(handle);
+  if (filter_config == NULL)
+  {
+    return;
+  }
+
+  filter_config->std_filter_ids = std_filter_ids;
+  filter_config->std_filter_count = std_filter_count;
+}
 
 HAL_StatusTypeDef MCP2518FD_Init(MCP2518FD_Handle_t *handle, SPI_HandleTypeDef *hspi, GPIO_TypeDef *cs_port, uint16_t cs_pin)
 {
   uint32_t value;
+  MCP2518FD_FilterConfig_t *filter_config;
 
   if ((handle == NULL) || (hspi == NULL) || (cs_port == NULL))
   {
@@ -56,6 +85,7 @@ HAL_StatusTypeDef MCP2518FD_Init(MCP2518FD_Handle_t *handle, SPI_HandleTypeDef *
   handle->cs_port = cs_port;
   handle->cs_pin = cs_pin;
   handle->ready = 0U;
+  filter_config = MCP2518FD_GetFilterConfig(handle);
 
   MCP2518FD_Deselect(handle);
   MCP2518FD_DelayMs(2U);
@@ -146,7 +176,9 @@ HAL_StatusTypeDef MCP2518FD_Init(MCP2518FD_Handle_t *handle, SPI_HandleTypeDef *
   }
 
   /* ---- 12. FIFO + Filter config ---- */
-  if (MCP2518FD_ConfigRamAndFilters(handle) != HAL_OK)
+  if (MCP2518FD_ConfigRamAndFilters(handle,
+                                    (filter_config == NULL) ? NULL : filter_config->std_filter_ids,
+                                    (filter_config == NULL) ? 0U : filter_config->std_filter_count) != HAL_OK)
   {
     App_DebugLogString("[MCP] FAIL @12 FIFO/Filter\r\n");
     return HAL_ERROR;
@@ -511,9 +543,19 @@ static HAL_StatusTypeDef MCP2518FD_InitRam(MCP2518FD_Handle_t *handle, uint8_t f
   return HAL_OK;
 }
 
-static HAL_StatusTypeDef MCP2518FD_ConfigRamAndFilters(MCP2518FD_Handle_t *handle)
+static HAL_StatusTypeDef MCP2518FD_ConfigRamAndFilters(MCP2518FD_Handle_t *handle, const uint16_t *std_filter_ids, uint8_t std_filter_count)
 {
   /* Set FIFO/filter defaults used by the application-level CAN routing. */
+  uint32_t fltcon_values[MCP2518FD_FILTER_COUNT / MCP2518FD_FILTERS_PER_CON_REGISTER] = {0};
+  uint8_t filter_index;
+  uint8_t con_index;
+
+  if ((std_filter_count > MCP2518FD_FILTER_COUNT) ||
+      ((std_filter_count > 0U) && (std_filter_ids == NULL)))
+  {
+    return HAL_ERROR;
+  }
+
   if (MCP2518FD_WriteRegister(handle, MCP2518FD_FIFO_CON(MCP2518FD_RX_FIFO), MCP2518FD_RX_FIFO_CONFIG) != HAL_OK)
   {
     return HAL_ERROR;
@@ -523,20 +565,60 @@ static HAL_StatusTypeDef MCP2518FD_ConfigRamAndFilters(MCP2518FD_Handle_t *handl
     return HAL_ERROR;
   }
 
-  if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1FLTCON0, 0x00000000UL) != HAL_OK)
+  for (con_index = 0U; con_index < (MCP2518FD_FILTER_COUNT / MCP2518FD_FILTERS_PER_CON_REGISTER); con_index++)
   {
-    return HAL_ERROR;
+    if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1FLTCON(con_index), 0x00000000UL) != HAL_OK)
+    {
+      return HAL_ERROR;
+    }
   }
-  if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1FLTOBJ0, 0x00000000UL) != HAL_OK)
+
+  if (std_filter_count == 0U)
   {
-    return HAL_ERROR;
+    if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1FLTOBJ0, 0x00000000UL) != HAL_OK)
+    {
+      return HAL_ERROR;
+    }
+    if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1MASK0, 0x00000000UL) != HAL_OK)
+    {
+      return HAL_ERROR;
+    }
+
+    return MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1FLTCON0, MCP2518FD_FILTER0_TO_FIFO1);
   }
-  if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1MASK0, 0x00000000UL) != HAL_OK)
+
+  if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1MASK0, MCP2518FD_STD_FILTER_MASK) != HAL_OK)
   {
     return HAL_ERROR;
   }
 
-  return MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1FLTCON0, MCP2518FD_FILTER0_TO_FIFO1);
+  for (filter_index = 0U; filter_index < std_filter_count; filter_index++)
+  {
+    uint32_t filter_id = (uint32_t)std_filter_ids[filter_index];
+
+    if ((filter_id & ~MCP2518FD_STD_ID_MASK) != 0UL)
+    {
+      return HAL_ERROR;
+    }
+
+    if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1FLTOBJ(filter_index), filter_id) != HAL_OK)
+    {
+      return HAL_ERROR;
+    }
+
+    fltcon_values[filter_index / MCP2518FD_FILTERS_PER_CON_REGISTER] |=
+        ((uint32_t)MCP2518FD_FILTER_TO_FIFO1) << ((filter_index % MCP2518FD_FILTERS_PER_CON_REGISTER) * 8U);
+  }
+
+  for (con_index = 0U; con_index < (MCP2518FD_FILTER_COUNT / MCP2518FD_FILTERS_PER_CON_REGISTER); con_index++)
+  {
+    if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1FLTCON(con_index), fltcon_values[con_index]) != HAL_OK)
+    {
+      return HAL_ERROR;
+    }
+  }
+
+  return HAL_OK;
 }
 
 static void MCP2518FD_Select(MCP2518FD_Handle_t *handle)
@@ -613,6 +695,27 @@ static void MCP2518FD_DelayMs(uint32_t delay_ms)
   {
     HAL_Delay(delay_ms);
   }
+}
+
+static MCP2518FD_FilterConfig_t *MCP2518FD_GetFilterConfig(MCP2518FD_Handle_t *handle)
+{
+  size_t i;
+
+  if (handle == NULL)
+  {
+    return NULL;
+  }
+
+  for (i = 0U; i < (sizeof(g_mcp2518fdFilterConfigs) / sizeof(g_mcp2518fdFilterConfigs[0])); ++i)
+  {
+    if ((g_mcp2518fdFilterConfigs[i].handle == handle) || (g_mcp2518fdFilterConfigs[i].handle == NULL))
+    {
+      g_mcp2518fdFilterConfigs[i].handle = handle;
+      return &g_mcp2518fdFilterConfigs[i];
+    }
+  }
+
+  return NULL;
 }
 
 static MCP2518FD_SpiDmaState_t *MCP2518FD_GetSpiDmaState(SPI_HandleTypeDef *hspi)

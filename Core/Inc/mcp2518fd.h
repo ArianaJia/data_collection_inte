@@ -26,6 +26,9 @@ extern "C" {
 #define MCP2518FD_REG_C1FLTCON0              0x1D0U
 #define MCP2518FD_REG_C1FLTOBJ0              0x1F0U
 #define MCP2518FD_REG_C1MASK0                0x1F4U
+#define MCP2518FD_REG_C1FLTCON(index)        (MCP2518FD_REG_C1FLTCON0 + (((uint16_t)(index)) * 4U))
+#define MCP2518FD_REG_C1FLTOBJ(index)        (MCP2518FD_REG_C1FLTOBJ0 + (((uint16_t)(index)) * 8U))
+#define MCP2518FD_REG_C1MASK(index)          (MCP2518FD_REG_C1MASK0 + (((uint16_t)(index)) * 8U))
 #define MCP2518FD_REG_OSC                    0xE00U
 #define MCP2518FD_REG_IOCON                  0xE04U
 #define MCP2518FD_REG_ECCCON                 0xE0CU
@@ -71,6 +74,12 @@ extern "C" {
 #define MCP2518FD_TX_FIFO_CONFIG             (MCP2518FD_FIFO_PLSIZE_64 | MCP2518FD_FIFO_FSIZE(MCP2518FD_TX_FIFO_DEPTH) | MCP2518FD_FIFO_TXEN)
 
 #define MCP2518FD_FILTER0_TO_FIFO1           0x81U
+#define MCP2518FD_FILTER_TO_FIFO1            0x81U
+#define MCP2518FD_FILTER_COUNT               32U
+#define MCP2518FD_FILTERS_PER_CON_REGISTER   4U
+#define MCP2518FD_STD_ID_MASK                0x7FFUL
+#define MCP2518FD_FILTER_MIDE                (1UL << 30)
+#define MCP2518FD_STD_FILTER_MASK            (MCP2518FD_FILTER_MIDE | MCP2518FD_STD_ID_MASK)
 
 #define MCP2518FD_SPI_TIMEOUT_MS             50U
 #define MCP2518FD_MODE_TIMEOUT_MS            20U
@@ -111,6 +120,7 @@ typedef struct
 /* Diagnostic log callback – supplied by the application (freertos.c) before Init. */
 extern void App_DebugLogString(const char *text);
 
+void MCP2518FD_SetStdFilters(MCP2518FD_Handle_t *handle, const uint16_t *std_filter_ids, uint8_t std_filter_count);
 HAL_StatusTypeDef MCP2518FD_Init(MCP2518FD_Handle_t *handle, SPI_HandleTypeDef *hspi, GPIO_TypeDef *cs_port, uint16_t cs_pin);
 uint8_t MCP2518FD_IsReady(const MCP2518FD_Handle_t *handle);
 HAL_StatusTypeDef MCP2518FD_PollReceive(MCP2518FD_Handle_t *handle, MCP2518FD_StdFrame_t *frame, uint8_t *received);
