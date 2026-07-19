@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "freertos_app.h"
+#include "usart.h"
 
 typedef struct
 {
@@ -24,6 +25,7 @@ typedef struct
 } MCP2518FD_FilterConfig_t;
 
 #define MCP2518FD_SPI_TRANSFER_BUFFER_SIZE   (2U + MCP2518FD_OBJECT_SIZE)
+#define MCP2518FD_DEBUG_LOG_ENABLED          0U
 
 static HAL_StatusTypeDef MCP2518FD_Reset(MCP2518FD_Handle_t *handle);
 static HAL_StatusTypeDef MCP2518FD_Read(MCP2518FD_Handle_t *handle, uint16_t address, uint8_t *data, uint16_t length);
@@ -35,6 +37,10 @@ static HAL_StatusTypeDef MCP2518FD_SetMode(MCP2518FD_Handle_t *handle, uint32_t 
 static HAL_StatusTypeDef MCP2518FD_WaitOscillatorReady(MCP2518FD_Handle_t *handle);
 static HAL_StatusTypeDef MCP2518FD_InitRam(MCP2518FD_Handle_t *handle, uint8_t fill_value);
 static HAL_StatusTypeDef MCP2518FD_ConfigRamAndFilters(MCP2518FD_Handle_t *handle, const uint16_t *std_filter_ids, uint8_t std_filter_count);
+#if (MCP2518FD_DEBUG_LOG_ENABLED != 0U)
+static void MCP2518FD_LogFilterRegisters(MCP2518FD_Handle_t *handle, uint8_t std_filter_count);
+static void MCP2518FD_LogImmediate(const char *text);
+#endif
 static void MCP2518FD_Select(MCP2518FD_Handle_t *handle);
 static void MCP2518FD_Deselect(MCP2518FD_Handle_t *handle);
 static uint16_t MCP2518FD_CommandHeader(uint8_t command, uint16_t address);
@@ -183,6 +189,9 @@ HAL_StatusTypeDef MCP2518FD_Init(MCP2518FD_Handle_t *handle, SPI_HandleTypeDef *
     App_DebugLogString("[MCP] FAIL @12 FIFO/Filter\r\n");
     return HAL_ERROR;
   }
+#if (MCP2518FD_DEBUG_LOG_ENABLED != 0U)
+  MCP2518FD_LogFilterRegisters(handle, (filter_config == NULL) ? 0U : filter_config->std_filter_count);
+#endif
 
   /* ---- 13. Clear interrupts ---- */
   if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1INT, 0x00000000UL) != HAL_OK)
@@ -221,8 +230,15 @@ HAL_StatusTypeDef MCP2518FD_PollReceive(MCP2518FD_Handle_t *handle, MCP2518FD_St
   uint32_t user_address;
   uint32_t id_word;
   uint32_t control_word;
+#if (MCP2518FD_DEBUG_LOG_ENABLED != 0U)
+  static uint32_t last_status_log_tick = 0U;
+  static uint32_t last_frame_log_tick = 0U;
+#endif
   uint8_t object[MCP2518FD_OBJECT_SIZE];
   uint8_t bytes;
+#if (MCP2518FD_DEBUG_LOG_ENABLED != 0U)
+  char log_line[96];
+#endif
 
   if ((handle == NULL) || (frame == NULL) || (received == NULL) || (handle->ready == 0U))
   {
@@ -235,6 +251,18 @@ HAL_StatusTypeDef MCP2518FD_PollReceive(MCP2518FD_Handle_t *handle, MCP2518FD_St
   {
     return HAL_ERROR;
   }
+#if (MCP2518FD_DEBUG_LOG_ENABLED != 0U)
+  if ((uint32_t)(HAL_GetTick() - last_status_log_tick) >= 1000U)
+  {
+    (void)snprintf(log_line,
+                   sizeof(log_line),
+                   "[MCP-RX] STA=0x%08lX ready=%lu\r\n",
+                   (unsigned long)status,
+                   (unsigned long)((status & MCP2518FD_FIFO_TFNRFNIF) != 0U));
+    App_DebugLogString(log_line);
+    last_status_log_tick = HAL_GetTick();
+  }
+#endif
   if ((status & MCP2518FD_FIFO_TFNRFNIF) == 0U)
   {
     return HAL_OK;
@@ -244,7 +272,8 @@ HAL_StatusTypeDef MCP2518FD_PollReceive(MCP2518FD_Handle_t *handle, MCP2518FD_St
   {
     return HAL_ERROR;
   }
-  user_address &= 0x0FFFU;
+  user_address = MCP2518FD_RAM_START_ADDR + (user_address & 0x0FFFU);
+
 
   if (((user_address & 0x3U) != 0U) ||
       (user_address < MCP2518FD_RAM_START_ADDR) ||
@@ -271,6 +300,19 @@ HAL_StatusTypeDef MCP2518FD_PollReceive(MCP2518FD_Handle_t *handle, MCP2518FD_St
   }
 
   id_word = MCP2518FD_LoadLe32(&object[0]);
+#if (MCP2518FD_DEBUG_LOG_ENABLED != 0U)
+  if ((uint32_t)(HAL_GetTick() - last_frame_log_tick) >= 1000U)
+  {
+    (void)snprintf(log_line,
+                   sizeof(log_line),
+                   "[MCP-RX] UA=0x%03lX ID=0x%03lX CTRL=0x%08lX\r\n",
+                   (unsigned long)user_address,
+                   (unsigned long)(id_word & 0x7FFUL),
+                   (unsigned long)control_word);
+    App_DebugLogString(log_line);
+    last_frame_log_tick = HAL_GetTick();
+  }
+#endif
   bytes = MCP2518FD_DlcToBytes((uint8_t)(control_word & 0x0FU));
   if (bytes > MCP2518FD_PAYLOAD_CAPACITY)
   {
@@ -587,11 +629,6 @@ static HAL_StatusTypeDef MCP2518FD_ConfigRamAndFilters(MCP2518FD_Handle_t *handl
     return MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1FLTCON0, MCP2518FD_FILTER0_TO_FIFO1);
   }
 
-  if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1MASK0, MCP2518FD_STD_FILTER_MASK) != HAL_OK)
-  {
-    return HAL_ERROR;
-  }
-
   for (filter_index = 0U; filter_index < std_filter_count; filter_index++)
   {
     uint32_t filter_id = (uint32_t)std_filter_ids[filter_index];
@@ -601,7 +638,16 @@ static HAL_StatusTypeDef MCP2518FD_ConfigRamAndFilters(MCP2518FD_Handle_t *handl
       return HAL_ERROR;
     }
 
-    if (MCP2518FD_WriteRegister(handle, MCP2518FD_REG_C1FLTOBJ(filter_index), filter_id) != HAL_OK)
+    if (MCP2518FD_WriteRegister(handle,
+                                MCP2518FD_REG_C1FLTOBJ(filter_index),
+                                filter_id & MCP2518FD_STD_ID_MASK) != HAL_OK)
+    {
+      return HAL_ERROR;
+    }
+
+    if (MCP2518FD_WriteRegister(handle,
+                                MCP2518FD_REG_C1MASK(filter_index),
+                                MCP2518FD_STD_FILTER_MASK) != HAL_OK)
     {
       return HAL_ERROR;
     }
@@ -620,6 +666,53 @@ static HAL_StatusTypeDef MCP2518FD_ConfigRamAndFilters(MCP2518FD_Handle_t *handl
 
   return HAL_OK;
 }
+
+#if (MCP2518FD_DEBUG_LOG_ENABLED != 0U)
+static void MCP2518FD_LogFilterRegisters(MCP2518FD_Handle_t *handle, uint8_t std_filter_count)
+{
+  uint32_t value;
+  char log_line[80];
+
+  if (handle == NULL)
+  {
+    return;
+  }
+
+  if (MCP2518FD_ReadRegister(handle, MCP2518FD_REG_C1FLTCON0, &value) == HAL_OK)
+  {
+    (void)snprintf(log_line, sizeof(log_line), "[MCP-FLT] FLTCON0=0x%08lX\r\n", (unsigned long)value);
+    MCP2518FD_LogImmediate(log_line);
+  }
+
+  if (MCP2518FD_ReadRegister(handle, MCP2518FD_REG_C1MASK0, &value) == HAL_OK)
+  {
+    (void)snprintf(log_line, sizeof(log_line), "[MCP-FLT] MASK0=0x%08lX\r\n", (unsigned long)value);
+    MCP2518FD_LogImmediate(log_line);
+  }
+
+  if (std_filter_count > 0U)
+  {
+    if (MCP2518FD_ReadRegister(handle, MCP2518FD_REG_C1FLTOBJ0, &value) == HAL_OK)
+    {
+      (void)snprintf(log_line,
+                     sizeof(log_line),
+                     "[MCP-FLT] FLTOBJ0=0x%08lX\r\n",
+                     (unsigned long)value);
+      MCP2518FD_LogImmediate(log_line);
+    }
+  }
+}
+
+static void MCP2518FD_LogImmediate(const char *text)
+{
+  if ((text == NULL) || (huart3.Instance == NULL))
+  {
+    return;
+  }
+
+  (void)HAL_UART_Transmit(&huart3, (uint8_t *)text, (uint16_t)strlen(text), 100U);
+}
+#endif
 
 static void MCP2518FD_Select(MCP2518FD_Handle_t *handle)
 {

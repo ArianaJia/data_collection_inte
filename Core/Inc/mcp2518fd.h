@@ -78,6 +78,7 @@ extern "C" {
 #define MCP2518FD_FILTER_COUNT               32U
 #define MCP2518FD_FILTERS_PER_CON_REGISTER   4U
 #define MCP2518FD_STD_ID_MASK                0x7FFUL
+#define MCP2518FD_FILTER_EXIDE               (1UL << 30)
 #define MCP2518FD_FILTER_MIDE                (1UL << 30)
 #define MCP2518FD_STD_FILTER_MASK            (MCP2518FD_FILTER_MIDE | MCP2518FD_STD_ID_MASK)
 

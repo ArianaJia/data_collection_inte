@@ -51,12 +51,15 @@ typedef StaticQueue_t osStaticMessageQDef_t;
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define APP_4G_PUBLISH_LOG_ENABLED       1U
+#define APP_DEBUG_LOG_ENABLED            0U
+#define APP_4G_PUBLISH_LOG_ENABLED       0U
 #define APP_SPICANA_READY_CHECK_ENABLED  1U
 #define APP_SPICANA_POLL_ENABLED         1U
 #define APP_SPICANA_DECODE_ENABLED       1U
 #define APP_SPICANA_PUBLISH_ENABLED      1U
 #define APP_MLX90640_PUBLISH_ENABLED     1U
+#define APP_TENSION_SENSOR_TASK_ENABLED  0U
+#define APP_SPICDC_TASK_ENABLED          0U
 
 /* USER CODE END PD */
 
@@ -285,7 +288,9 @@ static osStatus_t App_QueueBytes(osMessageQueueId_t queue_handle, const uint8_t 
 static osStatus_t App_QueueText(osMessageQueueId_t queue_handle, const char *text, uint32_t timeout_ms);
 void App_DebugLogString(const char *text);
 static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart, uint8_t *data, uint16_t length);
+#if (APP_DEBUG_LOG_ENABLED != 0U)
 static void App_LogCanRxContext(const char *prefix, const CAN_ControllerContext_t *ctx);
+#endif
 static uint16_t App_AppendTemperature(char *buffer, uint16_t offset, uint16_t size, float temperature);
 static void Mlx_SendDebugMatrix(uint8_t sensor_id, const float *temp_map);
 static void Mlx_SendSummary(uint8_t sensor_id);
@@ -356,7 +361,9 @@ void MX_FREERTOS_Init(void) {
   VehicleCanTxQueueHandle = osMessageQueueNew (8, sizeof(CAN_Tx_Queue_t), &VehicleCanTxQueue_attributes);
 
   /* creation of task01DebugQueue */
+#if (APP_DEBUG_LOG_ENABLED != 0U)
   task01DebugQueueHandle = osMessageQueueNew (DEBUG_QUEUE_DEPTH, sizeof(App_Uart_Tx_Item_t), &task01DebugQueue_attributes);
+#endif
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -376,13 +383,17 @@ void MX_FREERTOS_Init(void) {
   MLX90640Handle = osThreadNew(MLX90640Task, NULL, &MLX90640_attributes);
 
   /* creation of TensionSensor */
-//  TensionSensorHandle = osThreadNew(TensionSensorTask, NULL, &TensionSensor_attributes);
+#if (APP_TENSION_SENSOR_TASK_ENABLED != 0U)
+  TensionSensorHandle = osThreadNew(TensionSensorTask, NULL, &TensionSensor_attributes);
+#endif
 
   /* creation of SPICanControl */
   SPICanControlHandle = osThreadNew(SPICanControlTask, NULL, &SPICanControl_attributes);
 
   /* creation of SPICanCDC */
+#if (APP_SPICDC_TASK_ENABLED != 0U)
   SPICanCDCHandle = osThreadNew(SPICanCDCTask, NULL, &SPICanCDC_attributes);
+#endif
 
   /* creation of Publish4G */
   Publish4GHandle = osThreadNew(Publish4GTask, NULL, &Publish4G_attributes);
@@ -417,9 +428,11 @@ void StartDefaultTask(void *argument)
 
   for(;;)
   {
-    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
-    Usart3_ParseInput();
+	HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
+#if (APP_DEBUG_LOG_ENABLED != 0U)
+	Usart3_ParseInput();
     Usart3_SendDebug();
+#endif
     osDelay(200);
   }
   /* USER CODE END StartDefaultTask */
@@ -801,6 +814,7 @@ void InitTask_Boot(void *argument)
  }
   HAL_Delay(10);//初始化就不要考虑CPU让渡问题了
   App_DebugLogString("[BOOT] MCP2518FD-B init...\r\n");
+#if (APP_SPICDC_TASK_ENABLED != 0U)
   for (retry = 0; retry < 3; retry++)
   {
     if (FDCAN_Init(FDCAN_BUS_B) == HAL_OK)
@@ -815,6 +829,7 @@ void InitTask_Boot(void *argument)
   {
     App_DebugLogString("[BOOT] MCP2518FD-B init FAILED after 3 retries\r\n");
   }
+#endif
 
   /* Keep 4G bootstrap isolated while validating MCP2518FD-A/CANA bring-up.
    * Y100M_BootstrapOnce currently faults in the USART1/4G path and can prevent
@@ -865,9 +880,13 @@ static osStatus_t App_QueueText(osMessageQueueId_t queue_handle, const char *tex
 
 void App_DebugLogString(const char *text)
 {
+#if (APP_DEBUG_LOG_ENABLED != 0U)
   /* All debug strings are funneled through the USART3 debug queue. */
   uint32_t timeout_ms = (g_bootInitDone == 0U) ? 20U : 0U;
   (void)App_QueueText(task01DebugQueueHandle, text, timeout_ms);
+#else
+  (void)text;
+#endif
 }
 
 static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart, uint8_t *data, uint16_t length)
@@ -899,6 +918,7 @@ static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart,
   return HAL_OK;
 }
 
+#if (APP_DEBUG_LOG_ENABLED != 0U)
 static void App_LogCanRxContext(const char *prefix, const CAN_ControllerContext_t *ctx)
 {
   if ((prefix == NULL) || (ctx == NULL))
@@ -924,6 +944,7 @@ static void App_LogCanRxContext(const char *prefix, const CAN_ControllerContext_
       ctx->last_rx_data[7]);
   App_DebugLogString(g_mlxLineBuffer);
 }
+#endif
 
 static void App_WaitForBootInit(void)
 {
@@ -935,7 +956,12 @@ static void App_WaitForBootInit(void)
 
 void app_can_debug_log_rx_context(const char *prefix, const CAN_ControllerContext_t *ctx)
 {
+#if (APP_DEBUG_LOG_ENABLED != 0U)
   App_LogCanRxContext(prefix, ctx);
+#else
+  (void)prefix;
+  (void)ctx;
+#endif
 }
 
 static HAL_StatusTypeDef Rs485_StartDma(void)
@@ -1410,7 +1436,7 @@ static bool SpiCana_Poll(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus
     frame_data.is_ext_id = 0U;
     (void)memset(frame_data.msg_data, 0, sizeof(frame_data.msg_data));
     (void)memcpy(frame_data.msg_data, rx_frame.data, rx_frame.length);
-    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
+    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
 #if (APP_SPICANA_DECODE_ENABLED != 0U)
     CAN_DecodeControllerCanaMessage(&frame_data);
 #endif
