@@ -454,11 +454,11 @@ void CanForViehcleTask(void *argument)
 
   for(;;)
   {
-    if(osMessageQueueGet(CAN_Msg_QueueHandle, &recv_data, NULL, osWaitForever) == osOK)
+    if(osMessageQueueGet(CAN_Msg_QueueHandle, &recv_data, NULL, pdMS_TO_TICKS(20U)) == osOK)
     {
       CanVehicle_Dispatch(&recv_data);
     }
-    osDelay(200);
+    CAN_DecodeVehicleService(HAL_GetTick());
   }
   /* USER CODE END CanForViehcleTask */
 }
@@ -479,11 +479,11 @@ void CanForBMSTask(void *argument)
 
   for(;;)
   {
-    if(osMessageQueueGet(CAN_Msg_Queue_2Handle, &recv_data, NULL, osWaitForever) == osOK)
+    if(osMessageQueueGet(CAN_Msg_Queue_2Handle, &recv_data, NULL, pdMS_TO_TICKS(20U)) == osOK)
     {
       CanBattery_Dispatch(&recv_data);
     }
-    osDelay(200);
+    CAN_DecodeBatteryService(HAL_GetTick());
   }
   /* USER CODE END CanForBMSTask */
 }
@@ -1340,7 +1340,11 @@ osStatus_t freertos_can_queue_send_from_isr(const CAN_Msg_Queue_t *pData)
     return osErrorParameter;
   }
 
-  if(pData->can_channel == CAN_CHANNEL_VEHICLE_CANB)
+  if(CAN_IsBatteryCanbMessage(pData))
+  {
+    queue_handle = CAN_Msg_Queue_2Handle;
+  }
+  else if(pData->can_channel == CAN_CHANNEL_VEHICLE_CANB)
   {
     queue_handle = CAN_Msg_QueueHandle;
   }

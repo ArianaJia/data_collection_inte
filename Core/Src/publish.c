@@ -255,7 +255,7 @@ static void Publish_MapCanbMotorState(fsae_MotorState *motor_state, uint8_t moto
     motor_state->position = Publish_MapCanbMotorPosition(motor_index);
     motor_state->rpm = (int32_t)g_CANB_LoopData.ECU.Motor_RPM[motor_index];
     motor_state->torque_nm = (int32_t)g_CANB_LoopData.ECU.Motor_Torque[motor_index];
-    motor_state->power_w = (int32_t)(g_CANB_LoopData.ECU.Motor_Power[motor_index] * 1000.0f);
+    motor_state->power_w = (int32_t)((g_CANB_LoopData.ECU.MotorPowerW[motor_index] > INT32_MAX) ? INT32_MAX : g_CANB_LoopData.ECU.MotorPowerW[motor_index]);
     motor_state->motor_error = (int32_t)g_CANB_LoopData.ECU.ERRO[motor_index];
 
     motor_state->motor_temp_dc = (int32_t)g_CANB_LoopData.ECU.MotorTempDc[motor_index];
@@ -284,8 +284,8 @@ static void Publish_MapFastTelemetry(fsae_FastTelemetry *fast_telemetry)
 
 static bool Publish_MapIvtTelemetry(fsae_IvtTelemetry *ivt_telemetry)
 {
-    /* Export the legacy IVT cache into its protobuf representation. */
-    uint8_t valid_flags = g_CANB_LoopData.IVT.ValidFlags;
+    /* Adapt the CAN1 battery IVT cache to the existing protobuf schema. */
+    uint8_t valid_flags = g_BatteryInfo.IVT.ValidFlags;
 
     if ((ivt_telemetry == NULL) || (valid_flags == 0U))
     {
@@ -294,33 +294,27 @@ static bool Publish_MapIvtTelemetry(fsae_IvtTelemetry *ivt_telemetry)
 
     *ivt_telemetry = (fsae_IvtTelemetry)fsae_IvtTelemetry_init_zero;
 
-    if ((valid_flags & CANB_IVT_VALID_CURRENT) != 0U)
+    if ((valid_flags & BATTERY_IVT_VALID_CURRENT) != 0U)
     {
-        ivt_telemetry->current_ma = g_CANB_LoopData.IVT.CurrentMa;
-        ivt_telemetry->current_state = g_CANB_LoopData.IVT.CurrentState;
+        ivt_telemetry->current_ma = g_BatteryInfo.IVT.CurrentMa;
+        ivt_telemetry->current_state = g_BatteryInfo.IVT.CurrentState;
     }
 
-    if ((valid_flags & CANB_IVT_VALID_U1) != 0U)
+    if ((valid_flags & BATTERY_IVT_VALID_U1) != 0U)
     {
-        ivt_telemetry->voltage_u1_mv = g_CANB_LoopData.IVT.VoltageU1Mv;
-        ivt_telemetry->voltage_u1_state = g_CANB_LoopData.IVT.VoltageU1State;
+        ivt_telemetry->voltage_u1_mv = g_BatteryInfo.IVT.VoltageU1Mv;
+        ivt_telemetry->voltage_u1_state = g_BatteryInfo.IVT.VoltageU1State;
     }
 
-    if ((valid_flags & CANB_IVT_VALID_POWER) != 0U)
+    if ((valid_flags & BATTERY_IVT_VALID_POWER) != 0U)
     {
-        ivt_telemetry->power_w = g_CANB_LoopData.IVT.PowerW;
-    }
-    else if ((valid_flags & (CANB_IVT_VALID_CURRENT | CANB_IVT_VALID_U1)) ==
-             (CANB_IVT_VALID_CURRENT | CANB_IVT_VALID_U1))
-    {
-        ivt_telemetry->power_w =
-            (int32_t)(((int64_t)g_CANB_LoopData.IVT.CurrentMa * (int64_t)g_CANB_LoopData.IVT.VoltageU1Mv) / 1000000LL);
+        ivt_telemetry->power_w = g_BatteryInfo.IVT.PowerW;
     }
 
-    if ((valid_flags & CANB_IVT_VALID_ENERGY) != 0U)
+    if ((valid_flags & BATTERY_IVT_VALID_ENERGY) != 0U)
     {
-        ivt_telemetry->energy_wh = g_CANB_LoopData.IVT.EnergyWh;
-        ivt_telemetry->energy_state = g_CANB_LoopData.IVT.EnergyState;
+        ivt_telemetry->energy_wh = g_BatteryInfo.IVT.EnergyWh;
+        ivt_telemetry->energy_state = g_BatteryInfo.IVT.EnergyState;
     }
 
     return true;
@@ -328,7 +322,7 @@ static bool Publish_MapIvtTelemetry(fsae_IvtTelemetry *ivt_telemetry)
 
 static bool Publish_MapEnergyMeterTelemetry(fsae_EnergyMeterTelemetry *energy_meter)
 {
-    /* Present one stable energy-meter protobuf regardless of physical source. */
+    /* Competition-only cache. The team IVT belongs to g_BatteryInfo. */
     uint8_t valid_flags;
     uint8_t source;
 
@@ -345,46 +339,7 @@ static bool Publish_MapEnergyMeterTelemetry(fsae_EnergyMeterTelemetry *energy_me
 
     *energy_meter = (fsae_EnergyMeterTelemetry)fsae_EnergyMeterTelemetry_init_zero;
     energy_meter->source = (uint32_t)source;
-
-    if (source == CANB_ENERGY_METER_SOURCE_IVT)
-    {
-        /* IVT source reads directly from the private team meter cache. */
-        valid_flags = g_CANB_LoopData.IVT.ValidFlags;
-        if (valid_flags == 0U)
-        {
-            return false;
-        }
-
-        if ((valid_flags & CANB_IVT_VALID_CURRENT) != 0U)
-        {
-            energy_meter->current_ma = g_CANB_LoopData.IVT.CurrentMa;
-            energy_meter->status = g_CANB_LoopData.IVT.CurrentState;
-        }
-
-        if ((valid_flags & CANB_IVT_VALID_U1) != 0U)
-        {
-            energy_meter->voltage_mv = g_CANB_LoopData.IVT.VoltageU1Mv;
-        }
-
-        if ((valid_flags & CANB_IVT_VALID_ENERGY) != 0U)
-        {
-            energy_meter->energy_wh = g_CANB_LoopData.IVT.EnergyWh;
-        }
-
-        if ((valid_flags & CANB_IVT_VALID_POWER) != 0U)
-        {
-            energy_meter->power_w = g_CANB_LoopData.IVT.PowerW;
-        }
-        else if ((valid_flags & (CANB_IVT_VALID_CURRENT | CANB_IVT_VALID_U1)) ==
-                 (CANB_IVT_VALID_CURRENT | CANB_IVT_VALID_U1))
-        {
-            energy_meter->power_w =
-                (int32_t)(((int64_t)g_CANB_LoopData.IVT.CurrentMa *
-                           (int64_t)g_CANB_LoopData.IVT.VoltageU1Mv) / 1000000LL);
-        }
-
-        return true;
-    }
+    energy_meter->msg_counter = g_CANB_LoopData.EnergyMeter.MsgCounter;
 
     /* FS source reads from the generic energy meter cache populated by the
      * FS status/result frames.
@@ -414,18 +369,10 @@ static bool Publish_MapEnergyMeterTelemetry(fsae_EnergyMeterTelemetry *energy_me
     {
         energy_meter->power_w = g_CANB_LoopData.EnergyMeter.PowerW;
     }
-    else if ((valid_flags & (CANB_ENERGY_VALID_CURRENT | CANB_ENERGY_VALID_VOLTAGE)) ==
-             (CANB_ENERGY_VALID_CURRENT | CANB_ENERGY_VALID_VOLTAGE))
-    {
-        energy_meter->power_w =
-            (int32_t)(((int64_t)g_CANB_LoopData.EnergyMeter.CurrentMa *
-                       (int64_t)g_CANB_LoopData.EnergyMeter.VoltageMv) / 1000000LL);
-    }
 
     if ((valid_flags & CANB_ENERGY_VALID_STATUS) != 0U)
     {
         energy_meter->status = g_CANB_LoopData.EnergyMeter.Status;
-        energy_meter->msg_counter = (uint32_t)g_CANB_LoopData.EnergyMeter.MsgCounter;
     }
 
     return true;

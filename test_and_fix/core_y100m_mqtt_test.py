@@ -17,7 +17,7 @@ Core-Y100M 4G DTU MQTT 通讯测试脚本
   1. 安装依赖: pip install pyserial
   2. 修改下方 SERIAL_PORT 为你的串口号 (Windows: COMx, Linux: /dev/ttyUSBx)
   3. 插入 SIM 卡、接好天线，给模块上电
-  4. 运行: python core_y100m_mqtt_test.py
+  4. 在工程根目录运行: python test_and_fix/core_y100m_mqtt_test.py
 """
 
 import serial

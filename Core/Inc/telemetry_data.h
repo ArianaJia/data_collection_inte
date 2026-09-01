@@ -30,33 +30,40 @@ extern "C" {
 #define CANB_MOTION_VALID_GYRO (1U << 2)
 #define CANB_MOTION_VALID_YAW  (1U << 3)
 
-/* IVT valid bits: private team energy meter values decoded from CANB. */
-#define CANB_IVT_VALID_CURRENT (1U << 0)
-#define CANB_IVT_VALID_U1      (1U << 1)
-#define CANB_IVT_VALID_POWER   (1U << 2)
-#define CANB_IVT_VALID_ENERGY  (1U << 3)
+/* IVT flags follow CAN1 MUX 0..7. Received and usable are distinct. */
+#define BATTERY_IVT_VALID_CURRENT (1U << 0)
+#define BATTERY_IVT_VALID_U1      (1U << 1)
+#define BATTERY_IVT_VALID_U2      (1U << 2)
+#define BATTERY_IVT_VALID_U3      (1U << 3)
+#define BATTERY_IVT_VALID_TEMP    (1U << 4)
+#define BATTERY_IVT_VALID_POWER   (1U << 5)
+#define BATTERY_IVT_VALID_AS      (1U << 6)
+#define BATTERY_IVT_VALID_ENERGY  (1U << 7)
+#define BATTERY_IVT_TIMEOUT_MS   360U
+#define BATTERY_SAMPLE_TIMEOUT_MS 350U
+#define BATTERY_STATUS_TIMEOUT_MS 2000U
+#define BATTERY_PACK_VOLT_VALID  (1U << 0)
+#define BATTERY_PACK_CURR_VALID  (1U << 1)
+#define BATTERY_SOC_VALID        (1U << 2)
 
-/* Unified energy meter valid bits exposed to publish/protobuf. */
 #define CANB_ENERGY_VALID_CURRENT (1U << 0)
 #define CANB_ENERGY_VALID_VOLTAGE (1U << 1)
 #define CANB_ENERGY_VALID_POWER   (1U << 2)
 #define CANB_ENERGY_VALID_ENERGY  (1U << 3)
 #define CANB_ENERGY_VALID_STATUS  (1U << 4)
-
-/* Energy meter source tags.
- * IVT = team-owned energy meter.
- * FS  = competition/Formula Student logger-side energy meter data.
- */
 #define CANB_ENERGY_METER_SOURCE_UNKNOWN 0U
-#define CANB_ENERGY_METER_SOURCE_IVT     1U
+#define CANB_ENERGY_METER_SOURCE_COMPETITION_IVT 1U
 #define CANB_ENERGY_METER_SOURCE_FS      2U
 
-/* IVT payload endianness may differ between devices/bridges, so we remember
- * the most recently plausible byte order after decoding.
- */
-#define CANB_IVT_BYTE_ORDER_UNKNOWN      0U
-#define CANB_IVT_BYTE_ORDER_BE           1U
-#define CANB_IVT_BYTE_ORDER_LE           2U
+typedef struct
+{
+    int32_t CurrentMa, VoltageU1Mv, VoltageU2Mv, VoltageU3Mv;
+    int32_t TemperatureDc, PowerW, ChargeAs, EnergyWh;
+    uint8_t CurrentState, VoltageU1State, VoltageU2State, PowerState, EnergyState;
+    uint8_t State[8], Counter[8];
+    uint32_t LastUpdateMs[8];
+    uint8_t ReceivedFlags, ValidFlags;
+} Battery_IvtData;
 
 /* FS status bits reconstructed from the CANB status frame. */
 #define CANB_FS_STATUS_READY_BIT         (1UL << 0)
@@ -66,13 +73,36 @@ extern "C" {
 
 typedef struct
 {
+    /* All battery-domain sources, including CANB BMS mirrors, live here. */
+    Battery_IvtData IVT;
+    uint8_t PackValidFlags, PackReceived;
+    uint32_t PackLastUpdateMs;
+    uint32_t CellValidMask[6]; /* Bits 0..22; raw invalid values are not measurements. */
+    uint8_t TempValidMask[6];
+    uint32_t CellFrameTick[36], TempFrameTick[6];
+    uint64_t CellFramesReceived;
+    uint8_t TempFramesReceived;
+    uint8_t CellExtremaValid, TempExtremaValid, CellSumValid;
+    uint32_t CellExtremaTick, TempExtremaTick, CellSumTick;
+    uint8_t FaultFlags, SlaveOfflineMask, FaultFrameVersion, FaultValid;
+    uint8_t AlarmLevels[32], AlarmLevelsValid;
+    uint32_t FaultTick, AlarmLevelsTick;
+    uint8_t ChargeCommValid;
+    uint8_t CoolingControl, FanTargetDuty, FanStatusFlags;
+    uint16_t FanSpeedRpm;
+    uint8_t ImdFrequencyClass, ImdFlags, ImdReceived;
+    uint16_t ImdDutyDeciPct, ImdResistanceKohm, ImdFrequencyCentiHz;
+    uint8_t HvRequestFlags, LastPrechargeResult;
+    uint16_t LastPrechargeSuccessMs, LastPrechargeFailureMs;
+    uint16_t SopDischargeCurrentDa, SopChargeCurrentDa;
+    uint16_t SopDischargePowerDkw, SopChargePowerDkw;
     /* Cell voltage matrix: 6 packs/modules, each with 24 cell taps. */
     uint16_t CellVolt[6][24];
     /* Module temperature matrix: 6 packs/modules, each with 8 temperature points. */
     int8_t   ModTemp[6][8];
-    /* Pack total voltage in the raw integer unit used by the BMS frame. */
+    /* Pack total voltage in mV; zero when invalid. */
     uint32_t TotalVolt;
-    /* Pack total current in the raw integer unit used by the BMS frame. */
+    /* Pack current in mA; positive = charging, negative = discharging. */
     int32_t  TotalCurrent;
     /* Highest module/cell temperature observed in the pack. */
     int8_t   MaxTemp;
@@ -145,7 +175,8 @@ typedef struct
     /* Vehicle speed in km/h or another project-defined integer unit. */
     uint8_t  Vehicle_Speed;
     /* Per-motor power estimate for four drive units. */
-    float    Motor_Power[4];
+    float    Motor_Power[4]; /* Compatibility kW view of ActualValue4. */
+    uint32_t MotorPowerW[4]; /* ActualValue4 raw value is W. */
     /* Total vehicle power aggregated from all drive units. */
     float    Total_Power;
     /* Driving mode or torque-map mode reported by the ECU. */
@@ -209,7 +240,8 @@ typedef struct
     /* Lateral acceleration used by vehicle dynamics logic. */
     float    Lat_Accel;
     /* GPS or wheel-speed value in km/h. */
-    uint16_t GpsSpeedKmh;
+    uint16_t GpsSpeedDeciKmh; /* CAN raw unit: 0.1 km/h. */
+    uint16_t GpsSpeedKmh; /* Rounded compatibility view for the existing protobuf. */
     /* Raw yaw-rate reading. */
     int16_t  YawRateRaw;
     /* Raw yaw angle reading. */
@@ -224,36 +256,9 @@ typedef struct
     CANB_ECU_VehicleTypeDef ECU;
     /* IMU telemetry cache. */
     CANB_IMU_TypeDef        IMU;
-    /* Raw IVT cache.
-     * These fields represent the private team energy meter messages directly,
-     * before they are folded into the generic EnergyMeter view.
-     */
-    struct
-    {
-        /* Battery current in milliamps. */
-        int32_t  CurrentMa;
-        /* U1 bus voltage in millivolts. */
-        int32_t  VoltageU1Mv;
-        /* Accumulated energy in watt-hours. */
-        int32_t  EnergyWh;
-        /* Instantaneous power in watts. */
-        int32_t  PowerW;
-        /* Validity/status field for the current value. */
-        uint32_t CurrentState;
-        /* Validity/status field for the U1 voltage value. */
-        uint32_t VoltageU1State;
-        /* Validity/status field for the energy value. */
-        uint32_t EnergyState;
-        /* Validity/status field for the power value. */
-        uint32_t PowerState;
-        /* Bitmask that marks which IVT fields have been decoded. */
-        uint8_t  ValidFlags;
-        /* Last decoded byte order for this IVT source. */
-        uint8_t  ByteOrder;
-    } IVT;
     /* Unified energy meter cache for publish.
      * This layer allows protobuf output to stay stable even if the physical
-     * source is IVT or FS.
+     * source is competition IVT or FS.
      */
     struct
     {
@@ -266,12 +271,16 @@ typedef struct
         /* Instantaneous power in watts. */
         int32_t  PowerW;
         /* Unified status bits exposed to the publish layer. */
-        uint32_t Status;
+        uint32_t Status; /* Only the FS 0x430 status byte, never result state. */
+        uint8_t CurrentState, VoltageState, PowerState, EnergyState;
+        uint8_t ResultCounter[4];
+        uint8_t ReceivedFlags;
+        uint32_t LastUpdateMs[5];
         /* Source message counter used for change detection. */
         uint8_t  MsgCounter;
         /* Validity bits for the unified energy meter view. */
         uint8_t  ValidFlags;
-        /* Auto-selected source tag: unknown, IVT, or FS. */
+        /* Auto-selected source tag: unknown, competition IVT, or FS. */
         uint8_t  AutoSource;
     } EnergyMeter;
 } CANB_LoopAllData;

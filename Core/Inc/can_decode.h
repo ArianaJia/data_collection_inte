@@ -7,6 +7,9 @@ extern "C" {
 
 #include "can.h"
 
+uint8_t CAN_IsBatteryCanbMessage(const CAN_Msg_Queue_t *frame);
+void CAN_DecodeBatteryService(uint32_t now);
+void CAN_DecodeVehicleService(uint32_t now);
 void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data);
 void CAN_DecodeBatteryBoxMessage(const CAN_Msg_Queue_t *recv_data);
 void CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *recv_data);

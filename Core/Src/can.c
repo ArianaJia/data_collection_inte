@@ -23,7 +23,6 @@ void app_can_debug_log_rx_context(const char *prefix, const CAN_ControllerContex
 /* USER CODE BEGIN 0 */
 
 static const uint16_t g_can2_vehicle_filter_ids[] = {
-  CAN_ID_CANB_LEGACY_VEHICLE_STATE,
   CAN_ID_CANB_WHEEL_ACTUAL_TORQUE,
   CAN_ID_CANB_REAR_MOTOR_DIAGNOSTIC_CODE,
   CAN_ID_CANB_FRONT_MOTOR_DIAGNOSTIC_CODE,
@@ -34,6 +33,7 @@ static const uint16_t g_can2_vehicle_filter_ids[] = {
   CAN_ID_CANB_AMK_STATUS_MODE_LOGIC,
   CAN_ID_CANB_BATTERY_POWER_STATUS,
   CAN_ID_CANB_BATTERY_FAULT_STATUS,
+  CAN_ID_CANB_BATTERY_ALARM_LEVELS,
   CAN_ID_CANB_ENERGY_METER_STATUS,
   CAN_ID_IMU_RAW,
   CAN_ID_IMU_TIME,
@@ -43,10 +43,10 @@ static const uint16_t g_can2_vehicle_filter_ids[] = {
   CAN_ID_IMU_PITCH,
   CAN_ID_IMU_YAW,
   CAN_ID_IMU_MAGNETIC,
-  CAN_ID_IVT_CURRENT,
-  CAN_ID_IVT_U1,
-  CAN_ID_IVT_POWER,
-  CAN_ID_IVT_WH,
+  CAN_ID_COMPETITION_CURRENT,
+  CAN_ID_COMPETITION_U1,
+  CAN_ID_COMPETITION_POWER,
+  CAN_ID_COMPETITION_WH,
   CAN_ID_CANB_THERMAL_SUMMARY_FL,
   CAN_ID_CANB_THERMAL_SUMMARY_FR,
   CAN_ID_CANB_THERMAL_SUMMARY_RL,
@@ -64,33 +64,6 @@ CAN_ControllerContext_t g_can1_ctx = {
 CAN_ControllerContext_t g_can2_ctx = {
   .tx_data = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77},
   .rx_data = {0}
-};
-
-static const uint32_t g_can1_battery_filter_ids[] = {
-  CAN_ID_BATTERY_PACK_SUMMARY,
-  CAN_ID_BATTERY_CELL_EXTREMA,
-  CAN_ID_BATTERY_TEMP_EXTREMA,
-  CAN_ID_BATTERY_STATUS,
-  CAN_ID_BATTERY_BALANCE_0,
-  CAN_ID_BATTERY_BALANCE_1,
-  CAN_ID_BATTERY_BALANCE_2,
-  CAN_ID_BATTERY_CELL_SUM,
-  CAN_ID_BATTERY_IMD_DIAG,
-  CAN_ID_BATTERY_ALARM_STATUS,
-  CAN_ID_BATTERY_ALARM_THRESHOLD,
-  CAN_ID_BATTERY_ALARM_SWITCH,
-  CAN_ID_BATTERY_TOOL_CHARGE_PARAM,
-  CAN_ID_BATTERY_TOOL_ALARM_VALUE,
-  CAN_ID_BATTERY_TOOL_ALARM_SWITCH,
-  CAN_ID_BATTERY_TOOL_FAULT_RESET,
-  CAN_ID_BATTERY_TOOL_ADC_CAL,
-  CAN_ID_BATTERY_TOOL_CURRENT_DIR,
-  CAN_ID_BATTERY_TOOL_RTC_SET,
-  CAN_ID_BATTERY_CHARGE_REQUEST,
-  CAN_ID_BATTERY_CHARGER_FEEDBACK,
-  CAN_ID_BATTERY_HALL_CURRENT,
-  CAN_ID_BATTERY_CELL_VOLTAGE_BASE,
-  CAN_ID_BATTERY_CELL_TEMP_BASE
 };
 
 static CAN_ControllerContext_t *CAN_GetContext(CAN_HandleTypeDef *canHandle)
@@ -113,57 +86,37 @@ static CAN_ControllerContext_t *CAN_GetContext(CAN_HandleTypeDef *canHandle)
   return NULL;
 }
 
+/* 32-bit bxCAN masks include IDE and RTR. Coarse frame groups are
+ * narrowed again by the decoder; bank 0..5 belongs exclusively to CAN1.
+ */
 static HAL_StatusTypeDef CAN_ConfigCan1Filters(CAN_HandleTypeDef *canHandle)
 {
+  static const struct { uint32_t id, mask; uint8_t extended; } groups[] = {
+    {CAN_ID_BATTERY_CELL_VOLTAGE_BASE, 0x1FC0FFFFUL, 1U},
+    {CAN_ID_BATTERY_CELL_TEMP_BASE,    0x1FF8FFFFUL, 1U},
+    {CAN_ID_BATTERY_PACK_SUMMARY,      0x1FE0FFFFUL, 1U},
+    {CAN_ID_BATTERY_IVT_CURRENT,       0x7FEU, 0U},
+    {CAN_ID_BATTERY_IVT_U2,            0x7FCU, 0U},
+    {CAN_ID_BATTERY_IVT_AS,            0x7FEU, 0U}
+  };
   CAN_FilterTypeDef filter = {0};
-  uint32_t bank_index;
-  uint32_t id_index = 0U;
-  uint32_t id_count = (uint32_t)(sizeof(g_can1_battery_filter_ids) / sizeof(g_can1_battery_filter_ids[0]));
-  uint32_t bank_count = (id_count + 1U) / 2U;
-
-  if (canHandle == NULL)
-  {
-    return HAL_ERROR;
-  }
-
+  if (canHandle == NULL) return HAL_ERROR;
   filter.FilterActivation = ENABLE;
   filter.FilterFIFOAssignment = CAN_FILTER_FIFO0;
-  filter.FilterMode = CAN_FILTERMODE_IDLIST;
+  filter.FilterMode = CAN_FILTERMODE_IDMASK;
   filter.FilterScale = CAN_FILTERSCALE_32BIT;
-  filter.SlaveStartFilterBank = 14;
-
-  for (bank_index = 0U; bank_index < bank_count; bank_index++)
+  filter.SlaveStartFilterBank = 14U;
+  for (uint32_t i = 0U; i < sizeof(groups) / sizeof(groups[0]); ++i)
   {
-    uint32_t id0 = (g_can1_battery_filter_ids[id_index] <= 0x7FFUL)
-        ? (((uint32_t)g_can1_battery_filter_ids[id_index]) << 21)
-        : ((g_can1_battery_filter_ids[id_index] << 3) | CAN_ID_EXT);
-    uint32_t id1 = 0U;
-
-    id_index++;
-    if (id_index < id_count)
-    {
-      id1 = (g_can1_battery_filter_ids[id_index] <= 0x7FFUL)
-          ? (((uint32_t)g_can1_battery_filter_ids[id_index]) << 21)
-          : ((g_can1_battery_filter_ids[id_index] << 3) | CAN_ID_EXT);
-      id_index++;
-    }
-    else
-    {
-      id1 = id0;
-    }
-
-    filter.FilterBank = bank_index;
-    filter.FilterIdHigh = (uint16_t)(id0 >> 16);
-    filter.FilterIdLow = (uint16_t)(id0 & 0xFFFFU);
-    filter.FilterMaskIdHigh = (uint16_t)(id1 >> 16);
-    filter.FilterMaskIdLow = (uint16_t)(id1 & 0xFFFFU);
-
-    if (HAL_CAN_ConfigFilter(canHandle, &filter) != HAL_OK)
-    {
-      return HAL_ERROR;
-    }
+    uint32_t id = groups[i].extended ? (groups[i].id << 3) | CAN_ID_EXT : groups[i].id << 21;
+    uint32_t mask = (groups[i].extended ? groups[i].mask << 3 : groups[i].mask << 21) | 6U;
+    filter.FilterBank = i;
+    filter.FilterIdHigh = (uint16_t)(id >> 16);
+    filter.FilterIdLow = (uint16_t)id;
+    filter.FilterMaskIdHigh = (uint16_t)(mask >> 16);
+    filter.FilterMaskIdLow = (uint16_t)mask;
+    if (HAL_CAN_ConfigFilter(canHandle, &filter) != HAL_OK) return HAL_ERROR;
   }
-
   return HAL_OK;
 }
 
@@ -175,7 +128,7 @@ static HAL_StatusTypeDef CAN_ConfigCan2Filters(CAN_HandleTypeDef *canHandle)
   uint32_t id_count = (uint32_t)(sizeof(g_can2_vehicle_filter_ids) / sizeof(g_can2_vehicle_filter_ids[0]));
   uint32_t bank_count = (id_count + 3U) / 4U;
 
-  if (canHandle == NULL)
+  if ((canHandle == NULL) || (bank_count > 14U))
   {
     return HAL_ERROR;
   }
@@ -239,6 +192,11 @@ static void CAN_DispatchRxMessage(CAN_HandleTypeDef *hcan,
   {
     ctx->rx_error_count++;
     ctx->last_rx_error = HAL_CAN_GetError(hcan);
+    return;
+  }
+
+  if ((ctx->rx_header.RTR != CAN_RTR_DATA) || (ctx->rx_header.DLC > 8U))
+  {
     return;
   }
 
@@ -480,12 +438,13 @@ void HAL_CAN_MspDeInit(CAN_HandleTypeDef* canHandle)
   */
 void CAN_Filter_Config(CAN_HandleTypeDef *canHandle)
 {
-  if ((canHandle->Instance == CAN1) && (CAN_ConfigCan2Filters(canHandle) == HAL_OK))
+  if (canHandle == NULL) { Error_Handler(); return; }
+  if ((canHandle->Instance == CAN1) && (CAN_ConfigCan1Filters(canHandle) == HAL_OK))
   {
     return;
   }
 
-  if ((canHandle->Instance == CAN2) && (CAN_ConfigCan1Filters(canHandle) == HAL_OK))
+  if ((canHandle->Instance == CAN2) && (CAN_ConfigCan2Filters(canHandle) == HAL_OK))
   {
     return;
   }
