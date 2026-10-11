@@ -285,32 +285,49 @@ static bool Publish_MapIvtTelemetry(fsae_IvtTelemetry *ivt_telemetry)
     /* Adapt the CAN1 battery IVT cache to the existing protobuf schema. */
     uint8_t valid_flags = g_BatteryInfo.IVT.ValidFlags;
 
-    if ((ivt_telemetry == NULL) || (valid_flags == 0U))
+    if (ivt_telemetry == NULL)
     {
         return false;
     }
 
     *ivt_telemetry = (fsae_IvtTelemetry)fsae_IvtTelemetry_init_zero;
 
+    if ((valid_flags & BATTERY_IVT_TELEMETRY_VALID_MASK) == 0U)
+    {
+        return false;
+    }
+
     if ((valid_flags & BATTERY_IVT_VALID_CURRENT) != 0U)
     {
+        ivt_telemetry->has_current_ma = true;
         ivt_telemetry->current_ma = g_BatteryInfo.IVT.CurrentMa;
         ivt_telemetry->current_state = g_BatteryInfo.IVT.CurrentState;
     }
 
     if ((valid_flags & BATTERY_IVT_VALID_U1) != 0U)
     {
+        ivt_telemetry->has_voltage_u1_mv = true;
         ivt_telemetry->voltage_u1_mv = g_BatteryInfo.IVT.VoltageU1Mv;
         ivt_telemetry->voltage_u1_state = g_BatteryInfo.IVT.VoltageU1State;
     }
 
+    if ((valid_flags & BATTERY_IVT_VALID_U2) != 0U)
+    {
+        ivt_telemetry->has_voltage_u2_mv = true;
+        ivt_telemetry->voltage_u2_mv = g_BatteryInfo.IVT.VoltageU2Mv;
+        ivt_telemetry->voltage_u2_state = g_BatteryInfo.IVT.VoltageU2State;
+    }
+
     if ((valid_flags & BATTERY_IVT_VALID_POWER) != 0U)
     {
+        ivt_telemetry->has_power_w = true;
         ivt_telemetry->power_w = g_BatteryInfo.IVT.PowerW;
+        ivt_telemetry->power_state = g_BatteryInfo.IVT.PowerState;
     }
 
     if ((valid_flags & BATTERY_IVT_VALID_ENERGY) != 0U)
     {
+        ivt_telemetry->has_energy_wh = true;
         ivt_telemetry->energy_wh = g_BatteryInfo.IVT.EnergyWh;
         ivt_telemetry->energy_state = g_BatteryInfo.IVT.EnergyState;
     }
@@ -329,13 +346,13 @@ static bool Publish_MapEnergyMeterTelemetry(fsae_EnergyMeterTelemetry *energy_me
         return false;
     }
 
+    *energy_meter = (fsae_EnergyMeterTelemetry)fsae_EnergyMeterTelemetry_init_zero;
     source = g_CANB_LoopData.EnergyMeter.AutoSource;
     if (source == CANB_ENERGY_METER_SOURCE_UNKNOWN)
     {
         return false;
     }
 
-    *energy_meter = (fsae_EnergyMeterTelemetry)fsae_EnergyMeterTelemetry_init_zero;
     energy_meter->source = (uint32_t)source;
     energy_meter->msg_counter = g_CANB_LoopData.EnergyMeter.MsgCounter;
 
@@ -350,21 +367,25 @@ static bool Publish_MapEnergyMeterTelemetry(fsae_EnergyMeterTelemetry *energy_me
 
     if ((valid_flags & CANB_ENERGY_VALID_CURRENT) != 0U)
     {
+        energy_meter->has_current_ma = true;
         energy_meter->current_ma = g_CANB_LoopData.EnergyMeter.CurrentMa;
     }
 
     if ((valid_flags & CANB_ENERGY_VALID_VOLTAGE) != 0U)
     {
+        energy_meter->has_voltage_mv = true;
         energy_meter->voltage_mv = g_CANB_LoopData.EnergyMeter.VoltageMv;
     }
 
     if ((valid_flags & CANB_ENERGY_VALID_ENERGY) != 0U)
     {
+        energy_meter->has_energy_wh = true;
         energy_meter->energy_wh = g_CANB_LoopData.EnergyMeter.EnergyWh;
     }
 
     if ((valid_flags & CANB_ENERGY_VALID_POWER) != 0U)
     {
+        energy_meter->has_power_w = true;
         energy_meter->power_w = g_CANB_LoopData.EnergyMeter.PowerW;
     }
 

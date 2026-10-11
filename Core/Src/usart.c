@@ -43,7 +43,7 @@
 #define Y100M_UART3_LOG_TIMEOUT_MS      1000U
 #define Y100M_MQTT_BROKER               /*"82.157.204.124"*/ "bitfsae.com"//新网址
 #define Y100M_MQTT_PORT                 1883U
-#define Y100M_MQTT_CLIENT_ID            /*"STM32_DATA_COLLECTION"*/ "vehicle_01" //新客户端ID
+#define Y100M_MQTT_CLIENT_ID            /*"STM32_DATA_COLLECTION"*/ "vehicle_02" //新客户端ID
 /* MQTT TX must hold the MQTT fixed header, topic header/name, and one protobuf
  * payload. The thermal summary path has already reached 271 bytes on wire, so
  * keep this comfortably above the former 256-byte bring-up buffer while still
