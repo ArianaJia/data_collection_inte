@@ -42,6 +42,63 @@ PB_BIND(fsae_VehicleState, fsae_VehicleState, AUTO)
 PB_BIND(fsae_BatteryModule, fsae_BatteryModule, AUTO)
 
 
+PB_BIND(fsae_BmsTelemetry, fsae_BmsTelemetry, AUTO)
+
+
+PB_BIND(fsae_ImdTelemetry, fsae_ImdTelemetry, AUTO)
+
+
+PB_BIND(fsae_SopLimits, fsae_SopLimits, AUTO)
+
+
+PB_BIND(fsae_ChargerTelemetry, fsae_ChargerTelemetry, AUTO)
+
+
+PB_BIND(fsae_PdmTelemetry, fsae_PdmTelemetry, AUTO)
+
+
+PB_BIND(fsae_FanTelemetry, fsae_FanTelemetry, AUTO)
+
+
+PB_BIND(fsae_BatteryFanTelemetry, fsae_BatteryFanTelemetry, AUTO)
+
+
+PB_BIND(fsae_CancFrameStatus, fsae_CancFrameStatus, AUTO)
+
+
+PB_BIND(fsae_CancCdcInfo, fsae_CancCdcInfo, AUTO)
+
+
+PB_BIND(fsae_CancCdcAcceleration, fsae_CancCdcAcceleration, AUTO)
+
+
+PB_BIND(fsae_CancCdcRotation, fsae_CancCdcRotation, AUTO)
+
+
+PB_BIND(fsae_CancCdcCurrent, fsae_CancCdcCurrent, AUTO)
+
+
+PB_BIND(fsae_CancAbsStatus, fsae_CancAbsStatus, AUTO)
+
+
+PB_BIND(fsae_CancEscStatus, fsae_CancEscStatus, AUTO)
+
+
+PB_BIND(fsae_CancIbsInfo, fsae_CancIbsInfo, AUTO)
+
+
+PB_BIND(fsae_CancSasSensor, fsae_CancSasSensor, AUTO)
+
+
+PB_BIND(fsae_CancVcuRequests, fsae_CancVcuRequests, AUTO)
+
+
+PB_BIND(fsae_CancVcuStatus, fsae_CancVcuStatus, AUTO)
+
+
+PB_BIND(fsae_CancTelemetry, fsae_CancTelemetry, 2)
+
+
 PB_BIND(fsae_TelemetryFrame, fsae_TelemetryFrame, 2)
 
 

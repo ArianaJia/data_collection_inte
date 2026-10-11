@@ -41,9 +41,9 @@ message PacketHeader { // 通用报文头
 }
 
 message Alarm { // 告警信息
-    uint32 alarm_id = 1; // 告警 ID
-    AlarmSeverity severity = 2; // 告警等级
-    string message = 3; // 告警内容
+    uint32 alarm_id = 1; // 告警 ID；0..31 固定对应 BMS battery_fault_code bit0..31
+    AlarmSeverity severity = 2; // 告警等级；BMS 一级故障映射 FATAL，二级告警映射 WARNING
+    string message = 3; // 告警内容；允许为空，消费者按 alarm_id 使用权威名称表
 }
 
 message FastTelemetry { // 快速遥测摘要
@@ -54,24 +54,31 @@ message FastTelemetry { // 快速遥测摘要
     uint32 speed_kmh = 5; // 车速，单位 km/h
 }
 
-message IvtTelemetry { // IVT-S 电流/电压/能量计
-    sint32 current_ma = 1; // IVT-S Result_I，单位 mA
-    sint32 voltage_u1_mv = 2; // IVT-S Result_U1，单位 mV
-    sint32 energy_wh = 3; // IVT-S Result_Wh，单位 Wh
+message IvtTelemetry { // 车队自有 IVT-S；与仅在比赛安装的赛会能量计独立上报
+    optional sint32 current_ma = 1; // Result_I，单位 mA
+    optional sint32 voltage_u1_mv = 2; // Result_U1，电池侧总压，单位 mV
+    optional sint32 energy_wh = 3; // Result_Wh，单位 Wh；设备不发送时不置 presence
     uint32 current_state = 4; // IVT-S Result_I 状态位
     uint32 voltage_u1_state = 5; // IVT-S Result_U1 状态位
     uint32 energy_state = 6; // IVT-S Result_Wh 状态位
-    sint32 power_w = 7; // IVT-S U1 * I，单位 W
+    optional sint32 power_w = 7; // Result_W，单位 W；不得由 STM32 根据 U/I 补算
+    optional sint32 voltage_u2_mv = 8; // Result_U2，电池外侧/逆变器侧（Pre）总压，单位 mV
+    uint32 voltage_u2_state = 9; // IVT-S Result_U2 状态位
+    uint32 power_state = 10; // IVT-S Result_W 状态位
 }
 
-message EnergyMeterTelemetry { // CANB 上当前生效的能量计
-    uint32 source = 1; // 0 unknown, 1 IVT-S, 2 FS Datalogger
-    sint32 current_ma = 2; // 电流，单位 mA
-    sint32 voltage_mv = 3; // 电压，单位 mV
-    sint32 energy_wh = 4; // 能量，单位 Wh；FS Datalogger 不提供
-    sint32 power_w = 5; // 电压 * 电流，单位 W
-    uint32 status = 6; // 原始状态位：IVT-S Result_state 或 FS status bits
-    uint32 msg_counter = 7; // FS Datalogger MsgCnt；IVT-S 不提供
+message EnergyMeterTelemetry { // 仅在比赛安装的赛会能量计；不得用自有 IVT-S 数据填充
+    uint32 source = 1; // 0 unknown, 1 赛会 IVT 默认协议, 2 FS Datalogger
+    optional sint32 current_ma = 2; // Result_I，单位 mA
+    optional sint32 voltage_mv = 3; // Result_U1，逆变器侧总压，单位 mV
+    optional sint32 energy_wh = 4; // Result_Wh，单位 Wh；设备不发送时不置 presence
+    optional sint32 power_w = 5; // Result_W，单位 W；不得由 STM32 根据 U/I 补算
+    uint32 status = 6; // FS 0x430 状态位；未收到该帧时为 0
+    uint32 msg_counter = 7; // 0x52x 结果帧低四位计数，或 FS 0x430 完整 MsgCnt
+    uint32 current_state = 8; // Result_I 状态位
+    uint32 voltage_state = 9; // Result_U1 状态位
+    uint32 power_state = 10; // Result_W 状态位
+    uint32 energy_state = 11; // Result_Wh 状态位
 }
 
 message MotionTelemetry { // CANB GPS/IMU 运动状态
@@ -108,7 +115,7 @@ message MotorState { // 单个电机状态
     MotorPosition position = 1; // 电机位置
     sint32 rpm = 2; // 电机转速
     sint32 torque_nm = 3; // AMK 实际扭矩原始值，单位 0.1%Mn；显示 Nm 时乘 9.8 / 1000
-    sint32 power_w = 4; // 电机功率，单位 W
+    sint32 power_w = 4; // 电机功率，单位 W；CANA ActualValue4 AMK_PowerValue 接入前保持缺失
     sint32 motor_temp_dc = 5; // 电机温度，单位 0.1 摄氏度
     sint32 inverter_temp_dc = 6; // 电机控制器温度，单位 0.1 摄氏度
     sint32 motor_error = 7; // 兼容旧表的 AMK 诊断码有符号镜像
@@ -165,6 +172,219 @@ message BatteryModule {
     sint32 t7 = 36;
     sint32 t8 = 37;
 }
+
+message BmsTelemetry { // BMS 状态机与高压控制；预充电压即自有 IVT-S U2（ivt_telemetry.voltage_u2_mv），不在此重复
+    optional uint32 battery_state = 1; // BMS 状态机：2 自检 / 3 待机 / 4 预充 / 5 高压接通 / 7 故障保持
+    optional uint32 battery_alarm_level = 2; // 0 正常 / 1 一级故障 / 2 二级告警
+    optional uint32 pos_relay_state = 3; // 正极继电器状态
+    optional uint32 neg_relay_state = 4; // 负极继电器状态
+    optional uint32 pre_relay_state = 5; // 预充继电器状态
+    optional uint32 charge_state = 6; // 充电状态
+    optional uint32 charge_comm_state = 7; // 充电通信状态
+    optional uint32 last_precharge_result = 8; // 0 无 / 1 成功 / 2 失败
+    optional uint32 last_precharge_success_ms = 9; // 最近一次预充成功耗时，单位 ms
+    optional uint32 last_precharge_failure_ms = 10; // 最近一次预充失败耗时，单位 ms
+}
+
+message ImdTelemetry { // CAN1 0x186850F4 BMS_IMDDiagnostic
+    optional uint32 resistance_kohm = 1; // 绝缘电阻，单位 kOhm
+    optional uint32 duty_pct_x10 = 2; // PWM 占空比，单位 0.1%
+    optional uint32 frequency_hz_x100 = 3; // PWM 频率，单位 0.01 Hz
+    optional uint32 frequency_class = 4; // 频率分类
+    optional uint32 status_code = 5; // IMD 状态码
+    optional uint32 flags = 6; // 状态与有效位图（DB1）
+}
+
+message SopLimits { // CANB 0x4A0/0x4A3/0x4A4 与 CAN1 0x186A50F4 镜像
+    optional uint32 discharge_current_limit_a_x10 = 1; // 放电电流上限，单位 0.1 A
+    optional uint32 charge_current_limit_a_x10 = 2; // 充电电流上限，单位 0.1 A
+    optional uint32 discharge_power_limit_kw_x10 = 3; // 放电功率上限，单位 0.1 kW
+    optional uint32 charge_power_limit_kw_x10 = 4; // 充电功率上限，单位 0.1 kW
+    optional uint32 sequence = 5; // SOP 计数；V2 为 0..255
+    optional uint32 protocol_version = 6; // SOP 协议版本
+    optional uint32 bms_flags = 7; // BMS 控制标志；V2 为 0x4A0 Byte6，bit0 限值有效
+    optional uint32 ecu_flags = 8; // ECU 确认标志；V2 为 0x4A4 Byte2，bit0 已用于最终扭矩限制
+}
+
+message ChargerTelemetry { // CANB Chroma 0x201/0x202/0x204/0x205
+    optional float voltage_v = 1; // 充电电压，单位 V
+    optional float current_a = 2; // 充电电流，单位 A
+    optional uint32 protection = 3; // 保护状态位图
+    optional uint32 output_state = 4; // 输出状态
+}
+
+message PdmTelemetry { // CANB 0x5A0/0x5A1 低压配电
+    optional float bus_voltage_v = 1; // 低压母线电压，单位 V
+    optional float bus_current_a = 2; // 低压母线电流，单位 A
+    optional float bus_power_w = 3; // 低压母线功率，单位 W
+    optional float bus_energy_wh = 4; // 低压母线累计能量，单位 Wh
+    optional float battery_voltage_v = 5; // 低压蓄电池电压，单位 V
+    optional float battery_current_a = 6; // 低压蓄电池电流，单位 A
+    optional float battery_power_w = 7; // 低压蓄电池功率，单位 W
+    optional float battery_energy_wh = 8; // 低压蓄电池累计能量，单位 Wh
+}
+
+message FanTelemetry { // CANB 0x5A2/0x5A3/0x5A5/0x5A6/0x5A7 风扇控制器
+    optional uint32 fan1_rpm = 1; // 0x5A2
+    optional uint32 fan2_rpm = 2;
+    optional uint32 fan3_rpm = 3;
+    optional uint32 pwm1_duty_pct = 4; // 0x5A2 当前占空比
+    optional uint32 pwm2_duty_pct = 5;
+    optional uint32 pwm1_target_pct = 6; // 0x5A3 目标占空比
+    optional uint32 pwm2_target_pct = 7;
+    optional uint32 ack_actual_pwm1_pct = 8; // 0x5A5 应答实测占空比
+    optional uint32 ack_actual_pwm2_pct = 9;
+    optional uint32 faults = 10; // 0x5A3 故障位图
+    optional uint32 status_flags = 11; // 0x5A3 状态位图
+    optional sint32 max_motor_temp_dc = 12; // 0x5A3 最高电机温度，单位 0.1 摄氏度
+    optional sint32 max_controller_temp_dc = 13; // 最高控制器温度，单位 0.1 摄氏度
+    optional uint32 ack_result = 14; // 0x5A5 命令应答结果
+    optional uint32 ack_mode = 15;
+    optional uint32 ack_failsafe = 16;
+    optional uint32 curve_temp_off = 17; // 0x5A6 风扇曲线参数
+    optional uint32 curve_temp_on = 18;
+    optional uint32 curve_temp_full = 19;
+    optional uint32 curve_min_duty_pct = 20;
+    optional uint32 curve_ramp_up_pct_per_s = 21;
+    optional uint32 failsafe_strategy = 22; // 0x5A7 故障安全策略
+    optional uint32 failsafe_fallback1_pct = 23;
+    optional uint32 failsafe_fallback2_pct = 24;
+    optional uint32 failsafe_stale_hold_s = 25;
+    optional uint32 failsafe_ramp_down_pct_per_s = 26;
+    optional uint32 control_mode = 27;
+    optional uint32 control_lease_remaining_s = 28;
+}
+message BatteryFanTelemetry { // BMS 电池箱风扇；与整车 FanTelemetry 独立
+    optional uint32 rpm = 1; // rpm；CAN1 0x186E50F4 优先，CANB 0x5AA 备用
+    optional uint32 actual_duty_pct_x10 = 2; // 实际输出占空比，0.1%，0..1000
+}
+
+// CANC 原始编码与逐帧状态；物理换算使用正式 DBC 的比例和偏移。
+// age_ms <= 100 时 fresh=1；该临时门限待实车周期/抖动确认。
+// 超时后保留状态和最后原始负载，省略全部信号字段；有效位=0 时仍保留诊断原始值。
+message CancFrameStatus {
+    optional uint32 seen = 1; // 收到过完整合法帧为 1，只有短帧/长帧为 0
+    optional uint32 fresh = 2; // 1 新鲜，0 超时或尚未收到完整帧
+    optional uint32 received_ms = 3; // 网关本次启动内最后完整帧接收时间，允许为 0
+    optional uint32 age_ms = 4; // 无符号差值，支持网关毫秒计数回绕
+    optional uint32 interval_ms = 5; // 最近两条完整帧的间隔，首帧省略
+    optional uint32 rx_count = 6; // 本次启动内完整帧累计数
+    optional uint32 rejected_count = 7; // 该标准 ID 的 DLC 不符帧累计数
+    optional uint32 out_of_range_mask = 8; // bit(n-1) 对应该消息信号字段号 n
+    optional uint32 unknown_enum_mask = 9; // CDC/VCU 模式 5 及以上置对应位
+    bytes raw_payload = 10; // 最后完整经典 CAN 负载，长度按各帧 DLC
+}
+
+message CancCdcInfo { // CANC 0x301 CDC_Info，DLC=8
+    optional uint32 CDC_HeiFL = 1; // 原始 无符号 12 bit；物理值 = raw × 0.0001 + (-0.2)，单位 m
+    optional uint32 CDC_Mod = 2; // 原始 无符号 4 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 CDC_HeiFR = 3; // 原始 无符号 12 bit；物理值 = raw × 0.0001 + (-0.2)，单位 m
+    optional uint32 CDC_OprlSts = 4; // 原始 无符号 2 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 CDC_HeiRL = 5; // 原始 无符号 12 bit；物理值 = raw × 0.0001 + (-0.2)，单位 m
+    optional uint32 CDC_HeiRR = 6; // 原始 无符号 12 bit；物理值 = raw × 0.0001 + (-0.2)，单位 m
+    CancFrameStatus status = 20;
+}
+
+message CancCdcAcceleration { // CANC 0x302 CDC_IMUAccelerationSignals，DLC=6
+    optional uint32 CDC_HeaveAccV = 1; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 CDC_HeaveAcc = 2; // 原始 无符号 12 bit；物理值 = raw × 0.01 + (-30)，单位 m/s2
+    optional uint32 CDC_LatAccV = 3; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 CDC_LatAcc = 4; // 原始 无符号 12 bit；物理值 = raw × 0.01 + (-30)，单位 m/s2
+    optional uint32 CDC_LgtAccV = 5; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 CDC_LgtAcc = 6; // 原始 无符号 12 bit；物理值 = raw × 0.01 + (-30)，单位 m/s2
+    CancFrameStatus status = 20;
+}
+
+message CancCdcRotation { // CANC 0x303 CDC_IMURotationSignals，DLC=7
+    optional uint32 CDC_YawRate = 1; // 原始 无符号 16 bit；物理值 = raw × 0.01 + (-300)，单位 deg/s
+    optional uint32 CDC_PitchRate = 2; // 原始 无符号 16 bit；物理值 = raw × 0.01 + (-300)，单位 deg/s
+    optional uint32 CDC_RollRate = 3; // 原始 无符号 16 bit；物理值 = raw × 0.01 + (-300)，单位 deg/s
+    optional uint32 CDC_YawRateV = 4; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 CDC_PitchRateV = 5; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 CDC_RollRateV = 6; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    CancFrameStatus status = 20;
+}
+
+message CancCdcCurrent { // CANC 0x304 CDC_Curr，DLC=8
+    optional uint32 CDC_CurrCmprFL = 1; // 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA
+    optional uint32 CDC_CurrCmprFR = 2; // 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA
+    optional uint32 CDC_CurrCmprRL = 3; // 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA
+    optional uint32 CDC_CurrCmprRR = 4; // 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA
+    optional uint32 CDC_CurrRbndFL = 5; // 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA
+    optional uint32 CDC_CurrRbndFR = 6; // 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA
+    optional uint32 CDC_CurrRbndRL = 7; // 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA
+    optional uint32 CDC_CurrRbndRR = 8; // 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA
+    CancFrameStatus status = 20;
+}
+
+message CancAbsStatus { // CANC 0x125 ABS_Status，DLC=8
+    optional uint32 ABS_VehSpd = 1; // 原始 无符号 13 bit；物理值 = raw × 0.05625 + (0)，单位 Km/h
+    optional uint32 ABS_VehSpdV = 2; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    CancFrameStatus status = 20;
+}
+
+message CancEscStatus { // CANC 0x132 ESC_Status_0x132，DLC=2
+    optional uint32 ESC_MstCylPV = 1; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 ESC_TcsCtrlActv = 2; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 ESC_EscCtrlActv = 3; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 ESC_MstCylP = 4; // 原始 无符号 12 bit；物理值 = raw × 0.1 + (-100)，单位 bar
+    CancFrameStatus status = 20;
+}
+
+message CancIbsInfo { // CANC 0x270 IBS_Info，DLC=5
+    optional uint32 AB_BrkPdlSwtStsV = 1; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 AB_BrkPdlSwtSts = 2; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 AB_BrkPdlPct = 3; // 原始 无符号 8 bit；物理值 = raw × 0.4 + (0)，单位 %
+    optional uint32 AB_BrkPdlTrvl = 4; // 原始 无符号 10 bit；物理值 = raw × 0.1 + (0)，单位 %
+    optional uint32 AB_AccPdlSwtSts = 5; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 AB_AccPdlSwtStsV = 6; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 AB_AccPdlPct = 7; // 原始 无符号 8 bit；物理值 = raw × 0.4 + (0)，单位 %
+    optional uint32 AB_AccPdlTrvl = 8; // 原始 无符号 10 bit；物理值 = raw × 0.1 + (0)，单位 %
+    CancFrameStatus status = 20;
+}
+
+message CancSasSensor { // CANC 0x17E SAS_Sensor_0x17E，DLC=5
+    optional uint32 SAS_SteerAgV = 1; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 SAS_SASStsSnsr = 2; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 SAS_SteerRotSpd = 3; // 原始 无符号 14 bit；物理值 = raw × 0.125 + (-1024)，单位 deg/s
+    optional uint32 SAS_SteerRotSpdV = 4; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 SAS_SteerAg = 5; // 原始 无符号 16 bit；物理值 = raw × 0.0238 + (-780)，单位 deg
+    CancFrameStatus status = 20;
+}
+
+message CancVcuRequests { // CANC 0x0AB VCU_MCU_Ctrl，DLC=7
+    optional uint32 VCU_FMCU_TarTqReqV = 1; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 VCU_RMCU_TarTqReqV = 2; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 VCU_MCU_TarDrvgReqV = 3; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 VCU_FMCU_TarTqReq = 4; // 原始 无符号 16 bit；物理值 = raw × 0.1 + (-400)，单位 Nm
+    optional uint32 VCU_RMCU_TarTqReq = 5; // 原始 无符号 16 bit；物理值 = raw × 0.1 + (-400)，单位 Nm
+    optional uint32 VCU_MCU_TarDrvgReq = 6; // 原始 无符号 16 bit；物理值 = raw × 1 + (-5000)，单位 N
+    CancFrameStatus status = 20;
+}
+
+message CancVcuStatus { // CANC 0x166 VCU_Status，DLC=8
+    optional uint32 VCU_EOLoffsetOvrdSwt = 1; // 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional uint32 VCU_DrvModSts = 2; // 原始 无符号 3 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码
+    optional sint32 VCU_EOLoffsetFL = 3; // 原始 有符号 15 bit；物理值 = raw × 0.1 + (0)，单位 未定义/状态码
+    optional sint32 VCU_EOLoffsetFR = 4; // 原始 有符号 15 bit；物理值 = raw × 0.1 + (0)，单位 未定义/状态码
+    optional sint32 VCU_EOLoffsetRL = 5; // 原始 有符号 15 bit；物理值 = raw × 0.1 + (0)，单位 未定义/状态码
+    optional sint32 VCU_EOLoffsetRR = 6; // 原始 有符号 15 bit；物理值 = raw × 0.1 + (0)，单位 未定义/状态码
+    CancFrameStatus status = 20;
+}
+
+message CancTelemetry { // 全部 10 条 CANC 重点报文，独立于 CANB GPS/IMU/实际电机状态
+    CancCdcInfo cdc_info = 1;
+    CancCdcAcceleration cdc_acceleration = 2;
+    CancCdcRotation cdc_rotation = 3;
+    CancCdcCurrent cdc_current = 4;
+    CancAbsStatus abs_status = 5;
+    CancEscStatus esc_status = 6;
+    CancIbsInfo ibs_info = 7;
+    CancSasSensor sas_sensor = 8;
+    CancVcuRequests vcu_requests = 9;
+    CancVcuStatus vcu_status = 10;
+}
+
 message TelemetryFrame {
     // --- 0. STM32 legacy fields, kept for CAN2RS485 firmware compatibility ---
     uint32 timestamp_ms = 1;
@@ -179,8 +399,8 @@ message TelemetryFrame {
     int32 motor_rpm = 10;
     float motor_temp = 11;
     float inverter_temp = 12;
-    uint32 ready_to_drive = 13;
-    uint32 vcu_status = 14;
+    uint32 ready_to_drive = 13; // legacy；无真实 ECU/VCU 源时保持 0，禁止用 BMS 状态代填
+    uint32 vcu_status = 14; // legacy；BMS 状态请使用 bms_telemetry.battery_state；VCU 源接入前保持 0
 
     // --- 1. BMS 详细数据（保持现网结构，兼容现有 modules 拆表） ---
     repeated BatteryModule modules = 15;
@@ -203,9 +423,17 @@ message TelemetryFrame {
     PacketHeader header = 26;
     FastTelemetry fast_telemetry = 27;
     VehicleState vehicle_state = 28;
-    ThermalSummary thermal_summary = 29;
-    repeated Alarm alarms = 30;
+    ThermalSummary thermal_summary = 29; // 轮胎温度（CANB 0x071~0x074）按轮位填充 min/max/avg 与 chunks
+    repeated Alarm alarms = 30; // BMS 明细存在时按 fault bit 展开；其他系统不得占用 0..31
     IvtTelemetry ivt_telemetry = 31;
     EnergyMeterTelemetry energy_meter = 32;
     MotionTelemetry motion = 33;
+    BmsTelemetry bms_telemetry = 34; // BMS 状态机/继电器/预充结果；预充电压见 ivt_telemetry.voltage_u2_mv
+    ImdTelemetry imd_telemetry = 35; // 绝缘监测
+    SopLimits sop_limits = 36; // BMS 功率/电流限制
+    ChargerTelemetry charger_telemetry = 37; // Chroma 充电机
+    PdmTelemetry pdm_telemetry = 38; // 低压配电
+    FanTelemetry fan_telemetry = 39; // 风扇控制器
+    BatteryFanTelemetry battery_fan = 40; // BMS 电池箱风扇
+    CancTelemetry canc = 41; // CANC 10 帧/57 信号及逐帧诊断；旧消费者忽略新增字段
 }

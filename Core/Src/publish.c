@@ -23,10 +23,8 @@
 
 extern osMessageQueueId_t PublishQueueItemHandle;
 
-static fsae_FastTelemetry g_publishFastTelemetry;
 static fsae_TelemetryFrame g_publishTelemetryFrame;
 static fsae_VehicleState g_publishVehicleState;
-static fsae_ThermalSummary g_publishThermalSummary;
 static volatile uint32_t g_publishQueuedTopicMask = 0U;
 
 static fsae_DrivingMode Publish_MapDrivingMode(uint8_t raw_mode);
@@ -689,7 +687,7 @@ static void Publish_MapThermalSummary(fsae_ThermalSummary *thermal_summary)
 
 static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_buffer, size_t payload_capacity, size_t *payload_size)
 {
-    /* Encode only the selected topic payload; the frame header is added later. */
+    /* Every MQTT payload uses TelemetryFrame, including compact updates. */
     pb_ostream_t stream;
     bool encode_status = false;
 
@@ -704,9 +702,13 @@ static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_bu
     {
         case PUBLISH_TOPIC_FAST_TELEMETRY:
         {
-            g_publishFastTelemetry = (fsae_FastTelemetry)fsae_FastTelemetry_init_zero;
-            Publish_MapFastTelemetry(&g_publishFastTelemetry);
-            encode_status = pb_encode(&stream, fsae_FastTelemetry_fields, &g_publishFastTelemetry);
+            g_publishTelemetryFrame = (fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
+            g_publishTelemetryFrame.timestamp_ms = HAL_GetTick();
+            g_publishTelemetryFrame.has_header = true;
+            g_publishTelemetryFrame.header.timestamp_ms = g_publishTelemetryFrame.timestamp_ms;
+            g_publishTelemetryFrame.has_fast_telemetry = true;
+            Publish_MapFastTelemetry(&g_publishTelemetryFrame.fast_telemetry);
+            encode_status = pb_encode(&stream, fsae_TelemetryFrame_fields, &g_publishTelemetryFrame);
             break;
         }
 
@@ -736,9 +738,13 @@ static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_bu
 
         case PUBLISH_TOPIC_THERMAL_SUMMARY:
         {
-            g_publishThermalSummary = (fsae_ThermalSummary)fsae_ThermalSummary_init_zero;
-            Publish_MapThermalSummary(&g_publishThermalSummary);
-            encode_status = pb_encode(&stream, fsae_ThermalSummary_fields, &g_publishThermalSummary);
+            g_publishTelemetryFrame = (fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
+            g_publishTelemetryFrame.timestamp_ms = HAL_GetTick();
+            g_publishTelemetryFrame.has_header = true;
+            g_publishTelemetryFrame.header.timestamp_ms = g_publishTelemetryFrame.timestamp_ms;
+            g_publishTelemetryFrame.has_thermal_summary = true;
+            Publish_MapThermalSummary(&g_publishTelemetryFrame.thermal_summary);
+            encode_status = pb_encode(&stream, fsae_TelemetryFrame_fields, &g_publishTelemetryFrame);
             break;
         }
 

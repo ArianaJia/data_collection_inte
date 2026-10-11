@@ -504,12 +504,7 @@ void MLX90640Task(void *argument)
 
   for(;;)
   {
-    if (Y100M_IsReady() == 0U)
-    {
-      osDelay(100);
-      continue;
-    }
-
+    /* After boot, local acquisition and CAN output run even when MQTT is offline. */
     if (MLX90640_App_IsSensorReady(g_mlxCurrentSensor) != 0U)
     {
       int status = MLX90640_App_CaptureOnce(g_mlxCurrentSensor);

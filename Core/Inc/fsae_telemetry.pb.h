@@ -51,9 +51,9 @@ typedef struct _fsae_PacketHeader { /* 通用报文头 */
 } fsae_PacketHeader;
 
 typedef struct _fsae_Alarm { /* 告警信息 */
-    uint32_t alarm_id; /* 告警 ID */
-    fsae_AlarmSeverity severity; /* 告警等级 */
-    char message[64]; /* 告警内容 */
+    uint32_t alarm_id; /* 告警 ID；0..31 固定对应 BMS battery_fault_code bit0..31 */
+    fsae_AlarmSeverity severity; /* 告警等级；BMS 一级故障映射 FATAL，二级告警映射 WARNING */
+    char message[64]; /* 告警内容；允许为空，消费者按 alarm_id 使用权威名称表 */
 } fsae_Alarm;
 
 typedef struct _fsae_FastTelemetry { /* 快速遥测摘要 */
@@ -64,24 +64,40 @@ typedef struct _fsae_FastTelemetry { /* 快速遥测摘要 */
     uint32_t speed_kmh; /* 车速，单位 km/h */
 } fsae_FastTelemetry;
 
-typedef struct _fsae_IvtTelemetry { /* IVT-S 电流/电压/能量计 */
-    int32_t current_ma; /* IVT-S Result_I，单位 mA */
-    int32_t voltage_u1_mv; /* IVT-S Result_U1，单位 mV */
-    int32_t energy_wh; /* IVT-S Result_Wh，单位 Wh */
+typedef struct _fsae_IvtTelemetry { /* 车队自有 IVT-S；与仅在比赛安装的赛会能量计独立上报 */
+    bool has_current_ma;
+    int32_t current_ma; /* Result_I，单位 mA */
+    bool has_voltage_u1_mv;
+    int32_t voltage_u1_mv; /* Result_U1，电池侧总压，单位 mV */
+    bool has_energy_wh;
+    int32_t energy_wh; /* Result_Wh，单位 Wh；设备不发送时不置 presence */
     uint32_t current_state; /* IVT-S Result_I 状态位 */
     uint32_t voltage_u1_state; /* IVT-S Result_U1 状态位 */
     uint32_t energy_state; /* IVT-S Result_Wh 状态位 */
-    int32_t power_w; /* IVT-S U1 * I，单位 W */
+    bool has_power_w;
+    int32_t power_w; /* Result_W，单位 W；不得由 STM32 根据 U/I 补算 */
+    bool has_voltage_u2_mv;
+    int32_t voltage_u2_mv; /* Result_U2，电池外侧/逆变器侧（Pre）总压，单位 mV */
+    uint32_t voltage_u2_state; /* IVT-S Result_U2 状态位 */
+    uint32_t power_state; /* IVT-S Result_W 状态位 */
 } fsae_IvtTelemetry;
 
-typedef struct _fsae_EnergyMeterTelemetry { /* CANB 上当前生效的能量计 */
-    uint32_t source; /* 0 unknown, 1 IVT-S, 2 FS Datalogger */
-    int32_t current_ma; /* 电流，单位 mA */
-    int32_t voltage_mv; /* 电压，单位 mV */
-    int32_t energy_wh; /* 能量，单位 Wh；FS Datalogger 不提供 */
-    int32_t power_w; /* 电压 * 电流，单位 W */
-    uint32_t status; /* 原始状态位：IVT-S Result_state 或 FS status bits */
-    uint32_t msg_counter; /* FS Datalogger MsgCnt；IVT-S 不提供 */
+typedef struct _fsae_EnergyMeterTelemetry { /* 仅在比赛安装的赛会能量计；不得用自有 IVT-S 数据填充 */
+    uint32_t source; /* 0 unknown, 1 赛会 IVT 默认协议, 2 FS Datalogger */
+    bool has_current_ma;
+    int32_t current_ma; /* Result_I，单位 mA */
+    bool has_voltage_mv;
+    int32_t voltage_mv; /* Result_U1，逆变器侧总压，单位 mV */
+    bool has_energy_wh;
+    int32_t energy_wh; /* Result_Wh，单位 Wh；设备不发送时不置 presence */
+    bool has_power_w;
+    int32_t power_w; /* Result_W，单位 W；不得由 STM32 根据 U/I 补算 */
+    uint32_t status; /* FS 0x430 状态位；未收到该帧时为 0 */
+    uint32_t msg_counter; /* 0x52x 结果帧低四位计数，或 FS 0x430 完整 MsgCnt */
+    uint32_t current_state; /* Result_I 状态位 */
+    uint32_t voltage_state; /* Result_U1 状态位 */
+    uint32_t power_state; /* Result_W 状态位 */
+    uint32_t energy_state; /* Result_Wh 状态位 */
 } fsae_EnergyMeterTelemetry;
 
 typedef struct _fsae_MotionTelemetry { /* CANB GPS/IMU 运动状态 */
@@ -119,7 +135,7 @@ typedef struct _fsae_MotorState { /* 单个电机状态 */
     fsae_MotorPosition position; /* 电机位置 */
     int32_t rpm; /* 电机转速 */
     int32_t torque_nm; /* AMK 实际扭矩原始值，单位 0.1%Mn；显示 Nm 时乘 9.8 / 1000 */
-    int32_t power_w; /* 电机功率，单位 W */
+    int32_t power_w; /* 电机功率，单位 W；CANA ActualValue4 AMK_PowerValue 接入前保持缺失 */
     int32_t motor_temp_dc; /* 电机温度，单位 0.1 摄氏度 */
     int32_t inverter_temp_dc; /* 电机控制器温度，单位 0.1 摄氏度 */
     int32_t motor_error; /* 兼容旧表的 AMK 诊断码有符号镜像 */
@@ -176,6 +192,372 @@ typedef struct _fsae_BatteryModule {
     int32_t t8;
 } fsae_BatteryModule;
 
+typedef struct _fsae_BmsTelemetry { /* BMS 状态机与高压控制；预充电压即自有 IVT-S U2（ivt_telemetry.voltage_u2_mv），不在此重复 */
+    bool has_battery_state;
+    uint32_t battery_state; /* BMS 状态机：2 自检 / 3 待机 / 4 预充 / 5 高压接通 / 7 故障保持 */
+    bool has_battery_alarm_level;
+    uint32_t battery_alarm_level; /* 0 正常 / 1 一级故障 / 2 二级告警 */
+    bool has_pos_relay_state;
+    uint32_t pos_relay_state; /* 正极继电器状态 */
+    bool has_neg_relay_state;
+    uint32_t neg_relay_state; /* 负极继电器状态 */
+    bool has_pre_relay_state;
+    uint32_t pre_relay_state; /* 预充继电器状态 */
+    bool has_charge_state;
+    uint32_t charge_state; /* 充电状态 */
+    bool has_charge_comm_state;
+    uint32_t charge_comm_state; /* 充电通信状态 */
+    bool has_last_precharge_result;
+    uint32_t last_precharge_result; /* 0 无 / 1 成功 / 2 失败 */
+    bool has_last_precharge_success_ms;
+    uint32_t last_precharge_success_ms; /* 最近一次预充成功耗时，单位 ms */
+    bool has_last_precharge_failure_ms;
+    uint32_t last_precharge_failure_ms; /* 最近一次预充失败耗时，单位 ms */
+} fsae_BmsTelemetry;
+
+typedef struct _fsae_ImdTelemetry { /* CAN1 0x186850F4 BMS_IMDDiagnostic */
+    bool has_resistance_kohm;
+    uint32_t resistance_kohm; /* 绝缘电阻，单位 kOhm */
+    bool has_duty_pct_x10;
+    uint32_t duty_pct_x10; /* PWM 占空比，单位 0.1% */
+    bool has_frequency_hz_x100;
+    uint32_t frequency_hz_x100; /* PWM 频率，单位 0.01 Hz */
+    bool has_frequency_class;
+    uint32_t frequency_class; /* 频率分类 */
+    bool has_status_code;
+    uint32_t status_code; /* IMD 状态码 */
+    bool has_flags;
+    uint32_t flags; /* 状态与有效位图（DB1） */
+} fsae_ImdTelemetry;
+
+typedef struct _fsae_SopLimits { /* CANB 0x4A0/0x4A3/0x4A4 与 CAN1 0x186A50F4 镜像 */
+    bool has_discharge_current_limit_a_x10;
+    uint32_t discharge_current_limit_a_x10; /* 放电电流上限，单位 0.1 A */
+    bool has_charge_current_limit_a_x10;
+    uint32_t charge_current_limit_a_x10; /* 充电电流上限，单位 0.1 A */
+    bool has_discharge_power_limit_kw_x10;
+    uint32_t discharge_power_limit_kw_x10; /* 放电功率上限，单位 0.1 kW */
+    bool has_charge_power_limit_kw_x10;
+    uint32_t charge_power_limit_kw_x10; /* 充电功率上限，单位 0.1 kW */
+    bool has_sequence;
+    uint32_t sequence; /* SOP 计数；V2 为 0..255 */
+    bool has_protocol_version;
+    uint32_t protocol_version; /* SOP 协议版本 */
+    bool has_bms_flags;
+    uint32_t bms_flags; /* BMS 控制标志；V2 为 0x4A0 Byte6，bit0 限值有效 */
+    bool has_ecu_flags;
+    uint32_t ecu_flags; /* ECU 确认标志；V2 为 0x4A4 Byte2，bit0 已用于最终扭矩限制 */
+} fsae_SopLimits;
+
+typedef struct _fsae_ChargerTelemetry { /* CANB Chroma 0x201/0x202/0x204/0x205 */
+    bool has_voltage_v;
+    float voltage_v; /* 充电电压，单位 V */
+    bool has_current_a;
+    float current_a; /* 充电电流，单位 A */
+    bool has_protection;
+    uint32_t protection; /* 保护状态位图 */
+    bool has_output_state;
+    uint32_t output_state; /* 输出状态 */
+} fsae_ChargerTelemetry;
+
+typedef struct _fsae_PdmTelemetry { /* CANB 0x5A0/0x5A1 低压配电 */
+    bool has_bus_voltage_v;
+    float bus_voltage_v; /* 低压母线电压，单位 V */
+    bool has_bus_current_a;
+    float bus_current_a; /* 低压母线电流，单位 A */
+    bool has_bus_power_w;
+    float bus_power_w; /* 低压母线功率，单位 W */
+    bool has_bus_energy_wh;
+    float bus_energy_wh; /* 低压母线累计能量，单位 Wh */
+    bool has_battery_voltage_v;
+    float battery_voltage_v; /* 低压蓄电池电压，单位 V */
+    bool has_battery_current_a;
+    float battery_current_a; /* 低压蓄电池电流，单位 A */
+    bool has_battery_power_w;
+    float battery_power_w; /* 低压蓄电池功率，单位 W */
+    bool has_battery_energy_wh;
+    float battery_energy_wh; /* 低压蓄电池累计能量，单位 Wh */
+} fsae_PdmTelemetry;
+
+typedef struct _fsae_FanTelemetry { /* CANB 0x5A2/0x5A3/0x5A5/0x5A6/0x5A7 风扇控制器 */
+    bool has_fan1_rpm;
+    uint32_t fan1_rpm; /* 0x5A2 */
+    bool has_fan2_rpm;
+    uint32_t fan2_rpm;
+    bool has_fan3_rpm;
+    uint32_t fan3_rpm;
+    bool has_pwm1_duty_pct;
+    uint32_t pwm1_duty_pct; /* 0x5A2 当前占空比 */
+    bool has_pwm2_duty_pct;
+    uint32_t pwm2_duty_pct;
+    bool has_pwm1_target_pct;
+    uint32_t pwm1_target_pct; /* 0x5A3 目标占空比 */
+    bool has_pwm2_target_pct;
+    uint32_t pwm2_target_pct;
+    bool has_ack_actual_pwm1_pct;
+    uint32_t ack_actual_pwm1_pct; /* 0x5A5 应答实测占空比 */
+    bool has_ack_actual_pwm2_pct;
+    uint32_t ack_actual_pwm2_pct;
+    bool has_faults;
+    uint32_t faults; /* 0x5A3 故障位图 */
+    bool has_status_flags;
+    uint32_t status_flags; /* 0x5A3 状态位图 */
+    bool has_max_motor_temp_dc;
+    int32_t max_motor_temp_dc; /* 0x5A3 最高电机温度，单位 0.1 摄氏度 */
+    bool has_max_controller_temp_dc;
+    int32_t max_controller_temp_dc; /* 最高控制器温度，单位 0.1 摄氏度 */
+    bool has_ack_result;
+    uint32_t ack_result; /* 0x5A5 命令应答结果 */
+    bool has_ack_mode;
+    uint32_t ack_mode;
+    bool has_ack_failsafe;
+    uint32_t ack_failsafe;
+    bool has_curve_temp_off;
+    uint32_t curve_temp_off; /* 0x5A6 风扇曲线参数 */
+    bool has_curve_temp_on;
+    uint32_t curve_temp_on;
+    bool has_curve_temp_full;
+    uint32_t curve_temp_full;
+    bool has_curve_min_duty_pct;
+    uint32_t curve_min_duty_pct;
+    bool has_curve_ramp_up_pct_per_s;
+    uint32_t curve_ramp_up_pct_per_s;
+    bool has_failsafe_strategy;
+    uint32_t failsafe_strategy; /* 0x5A7 故障安全策略 */
+    bool has_failsafe_fallback1_pct;
+    uint32_t failsafe_fallback1_pct;
+    bool has_failsafe_fallback2_pct;
+    uint32_t failsafe_fallback2_pct;
+    bool has_failsafe_stale_hold_s;
+    uint32_t failsafe_stale_hold_s;
+    bool has_failsafe_ramp_down_pct_per_s;
+    uint32_t failsafe_ramp_down_pct_per_s;
+    bool has_control_mode;
+    uint32_t control_mode;
+    bool has_control_lease_remaining_s;
+    uint32_t control_lease_remaining_s;
+} fsae_FanTelemetry;
+
+typedef struct _fsae_BatteryFanTelemetry { /* BMS 电池箱风扇；与整车 FanTelemetry 独立 */
+    bool has_rpm;
+    uint32_t rpm; /* rpm；CAN1 0x186E50F4 优先，CANB 0x5AA 备用 */
+    bool has_actual_duty_pct_x10;
+    uint32_t actual_duty_pct_x10; /* 实际输出占空比，0.1%，0..1000 */
+} fsae_BatteryFanTelemetry;
+
+typedef PB_BYTES_ARRAY_T(8) fsae_CancFrameStatus_raw_payload_t;
+/* CANC 原始编码与逐帧状态；物理换算使用正式 DBC 的比例和偏移。
+ age_ms <= 100 时 fresh=1；该临时门限待实车周期/抖动确认。
+ 超时后保留状态和最后原始负载，省略全部信号字段；有效位=0 时仍保留诊断原始值。 */
+typedef struct _fsae_CancFrameStatus {
+    bool has_seen;
+    uint32_t seen; /* 收到过完整合法帧为 1，只有短帧/长帧为 0 */
+    bool has_fresh;
+    uint32_t fresh; /* 1 新鲜，0 超时或尚未收到完整帧 */
+    bool has_received_ms;
+    uint32_t received_ms; /* 网关本次启动内最后完整帧接收时间，允许为 0 */
+    bool has_age_ms;
+    uint32_t age_ms; /* 无符号差值，支持网关毫秒计数回绕 */
+    bool has_interval_ms;
+    uint32_t interval_ms; /* 最近两条完整帧的间隔，首帧省略 */
+    bool has_rx_count;
+    uint32_t rx_count; /* 本次启动内完整帧累计数 */
+    bool has_rejected_count;
+    uint32_t rejected_count; /* 该标准 ID 的 DLC 不符帧累计数 */
+    bool has_out_of_range_mask;
+    uint32_t out_of_range_mask; /* bit(n-1) 对应该消息信号字段号 n */
+    bool has_unknown_enum_mask;
+    uint32_t unknown_enum_mask; /* CDC/VCU 模式 5 及以上置对应位 */
+    fsae_CancFrameStatus_raw_payload_t raw_payload; /* 最后完整经典 CAN 负载，长度按各帧 DLC */
+} fsae_CancFrameStatus;
+
+typedef struct _fsae_CancCdcInfo { /* CANC 0x301 CDC_Info，DLC=8 */
+    bool has_CDC_HeiFL;
+    uint16_t CDC_HeiFL; /* 原始 无符号 12 bit；物理值 = raw × 0.0001 + (-0.2)，单位 m */
+    bool has_CDC_Mod;
+    uint16_t CDC_Mod; /* 原始 无符号 4 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_CDC_HeiFR;
+    uint16_t CDC_HeiFR; /* 原始 无符号 12 bit；物理值 = raw × 0.0001 + (-0.2)，单位 m */
+    bool has_CDC_OprlSts;
+    uint16_t CDC_OprlSts; /* 原始 无符号 2 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_CDC_HeiRL;
+    uint16_t CDC_HeiRL; /* 原始 无符号 12 bit；物理值 = raw × 0.0001 + (-0.2)，单位 m */
+    bool has_CDC_HeiRR;
+    uint16_t CDC_HeiRR; /* 原始 无符号 12 bit；物理值 = raw × 0.0001 + (-0.2)，单位 m */
+    bool has_status;
+    fsae_CancFrameStatus status;
+} fsae_CancCdcInfo;
+
+typedef struct _fsae_CancCdcAcceleration { /* CANC 0x302 CDC_IMUAccelerationSignals，DLC=6 */
+    bool has_CDC_HeaveAccV;
+    uint16_t CDC_HeaveAccV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_CDC_HeaveAcc;
+    uint16_t CDC_HeaveAcc; /* 原始 无符号 12 bit；物理值 = raw × 0.01 + (-30)，单位 m/s2 */
+    bool has_CDC_LatAccV;
+    uint16_t CDC_LatAccV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_CDC_LatAcc;
+    uint16_t CDC_LatAcc; /* 原始 无符号 12 bit；物理值 = raw × 0.01 + (-30)，单位 m/s2 */
+    bool has_CDC_LgtAccV;
+    uint16_t CDC_LgtAccV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_CDC_LgtAcc;
+    uint16_t CDC_LgtAcc; /* 原始 无符号 12 bit；物理值 = raw × 0.01 + (-30)，单位 m/s2 */
+    bool has_status;
+    fsae_CancFrameStatus status;
+} fsae_CancCdcAcceleration;
+
+typedef struct _fsae_CancCdcRotation { /* CANC 0x303 CDC_IMURotationSignals，DLC=7 */
+    bool has_CDC_YawRate;
+    uint16_t CDC_YawRate; /* 原始 无符号 16 bit；物理值 = raw × 0.01 + (-300)，单位 deg/s */
+    bool has_CDC_PitchRate;
+    uint16_t CDC_PitchRate; /* 原始 无符号 16 bit；物理值 = raw × 0.01 + (-300)，单位 deg/s */
+    bool has_CDC_RollRate;
+    uint16_t CDC_RollRate; /* 原始 无符号 16 bit；物理值 = raw × 0.01 + (-300)，单位 deg/s */
+    bool has_CDC_YawRateV;
+    uint16_t CDC_YawRateV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_CDC_PitchRateV;
+    uint16_t CDC_PitchRateV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_CDC_RollRateV;
+    uint16_t CDC_RollRateV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_status;
+    fsae_CancFrameStatus status;
+} fsae_CancCdcRotation;
+
+typedef struct _fsae_CancCdcCurrent { /* CANC 0x304 CDC_Curr，DLC=8 */
+    bool has_CDC_CurrCmprFL;
+    uint16_t CDC_CurrCmprFL; /* 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA */
+    bool has_CDC_CurrCmprFR;
+    uint16_t CDC_CurrCmprFR; /* 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA */
+    bool has_CDC_CurrCmprRL;
+    uint16_t CDC_CurrCmprRL; /* 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA */
+    bool has_CDC_CurrCmprRR;
+    uint16_t CDC_CurrCmprRR; /* 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA */
+    bool has_CDC_CurrRbndFL;
+    uint16_t CDC_CurrRbndFL; /* 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA */
+    bool has_CDC_CurrRbndFR;
+    uint16_t CDC_CurrRbndFR; /* 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA */
+    bool has_CDC_CurrRbndRL;
+    uint16_t CDC_CurrRbndRL; /* 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA */
+    bool has_CDC_CurrRbndRR;
+    uint16_t CDC_CurrRbndRR; /* 原始 无符号 8 bit；物理值 = raw × 7 + (0)，单位 mA */
+    bool has_status;
+    fsae_CancFrameStatus status;
+} fsae_CancCdcCurrent;
+
+typedef struct _fsae_CancAbsStatus { /* CANC 0x125 ABS_Status，DLC=8 */
+    bool has_ABS_VehSpd;
+    uint16_t ABS_VehSpd; /* 原始 无符号 13 bit；物理值 = raw × 0.05625 + (0)，单位 Km/h */
+    bool has_ABS_VehSpdV;
+    uint16_t ABS_VehSpdV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_status;
+    fsae_CancFrameStatus status;
+} fsae_CancAbsStatus;
+
+typedef struct _fsae_CancEscStatus { /* CANC 0x132 ESC_Status_0x132，DLC=2 */
+    bool has_ESC_MstCylPV;
+    uint16_t ESC_MstCylPV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_ESC_TcsCtrlActv;
+    uint16_t ESC_TcsCtrlActv; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_ESC_EscCtrlActv;
+    uint16_t ESC_EscCtrlActv; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_ESC_MstCylP;
+    uint16_t ESC_MstCylP; /* 原始 无符号 12 bit；物理值 = raw × 0.1 + (-100)，单位 bar */
+    bool has_status;
+    fsae_CancFrameStatus status;
+} fsae_CancEscStatus;
+
+typedef struct _fsae_CancIbsInfo { /* CANC 0x270 IBS_Info，DLC=5 */
+    bool has_AB_BrkPdlSwtStsV;
+    uint16_t AB_BrkPdlSwtStsV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_AB_BrkPdlSwtSts;
+    uint16_t AB_BrkPdlSwtSts; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_AB_BrkPdlPct;
+    uint16_t AB_BrkPdlPct; /* 原始 无符号 8 bit；物理值 = raw × 0.4 + (0)，单位 % */
+    bool has_AB_BrkPdlTrvl;
+    uint16_t AB_BrkPdlTrvl; /* 原始 无符号 10 bit；物理值 = raw × 0.1 + (0)，单位 % */
+    bool has_AB_AccPdlSwtSts;
+    uint16_t AB_AccPdlSwtSts; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_AB_AccPdlSwtStsV;
+    uint16_t AB_AccPdlSwtStsV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_AB_AccPdlPct;
+    uint16_t AB_AccPdlPct; /* 原始 无符号 8 bit；物理值 = raw × 0.4 + (0)，单位 % */
+    bool has_AB_AccPdlTrvl;
+    uint16_t AB_AccPdlTrvl; /* 原始 无符号 10 bit；物理值 = raw × 0.1 + (0)，单位 % */
+    bool has_status;
+    fsae_CancFrameStatus status;
+} fsae_CancIbsInfo;
+
+typedef struct _fsae_CancSasSensor { /* CANC 0x17E SAS_Sensor_0x17E，DLC=5 */
+    bool has_SAS_SteerAgV;
+    uint16_t SAS_SteerAgV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_SAS_SASStsSnsr;
+    uint16_t SAS_SASStsSnsr; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_SAS_SteerRotSpd;
+    uint16_t SAS_SteerRotSpd; /* 原始 无符号 14 bit；物理值 = raw × 0.125 + (-1024)，单位 deg/s */
+    bool has_SAS_SteerRotSpdV;
+    uint16_t SAS_SteerRotSpdV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_SAS_SteerAg;
+    uint16_t SAS_SteerAg; /* 原始 无符号 16 bit；物理值 = raw × 0.0238 + (-780)，单位 deg */
+    bool has_status;
+    fsae_CancFrameStatus status;
+} fsae_CancSasSensor;
+
+typedef struct _fsae_CancVcuRequests { /* CANC 0x0AB VCU_MCU_Ctrl，DLC=7 */
+    bool has_VCU_FMCU_TarTqReqV;
+    uint16_t VCU_FMCU_TarTqReqV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_VCU_RMCU_TarTqReqV;
+    uint16_t VCU_RMCU_TarTqReqV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_VCU_MCU_TarDrvgReqV;
+    uint16_t VCU_MCU_TarDrvgReqV; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_VCU_FMCU_TarTqReq;
+    uint16_t VCU_FMCU_TarTqReq; /* 原始 无符号 16 bit；物理值 = raw × 0.1 + (-400)，单位 Nm */
+    bool has_VCU_RMCU_TarTqReq;
+    uint16_t VCU_RMCU_TarTqReq; /* 原始 无符号 16 bit；物理值 = raw × 0.1 + (-400)，单位 Nm */
+    bool has_VCU_MCU_TarDrvgReq;
+    uint16_t VCU_MCU_TarDrvgReq; /* 原始 无符号 16 bit；物理值 = raw × 1 + (-5000)，单位 N */
+    bool has_status;
+    fsae_CancFrameStatus status;
+} fsae_CancVcuRequests;
+
+typedef struct _fsae_CancVcuStatus { /* CANC 0x166 VCU_Status，DLC=8 */
+    bool has_VCU_EOLoffsetOvrdSwt;
+    uint16_t VCU_EOLoffsetOvrdSwt; /* 原始 无符号 1 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_VCU_DrvModSts;
+    uint16_t VCU_DrvModSts; /* 原始 无符号 3 bit；物理值 = raw × 1 + (0)，单位 未定义/状态码 */
+    bool has_VCU_EOLoffsetFL;
+    int16_t VCU_EOLoffsetFL; /* 原始 有符号 15 bit；物理值 = raw × 0.1 + (0)，单位 未定义/状态码 */
+    bool has_VCU_EOLoffsetFR;
+    int16_t VCU_EOLoffsetFR; /* 原始 有符号 15 bit；物理值 = raw × 0.1 + (0)，单位 未定义/状态码 */
+    bool has_VCU_EOLoffsetRL;
+    int16_t VCU_EOLoffsetRL; /* 原始 有符号 15 bit；物理值 = raw × 0.1 + (0)，单位 未定义/状态码 */
+    bool has_VCU_EOLoffsetRR;
+    int16_t VCU_EOLoffsetRR; /* 原始 有符号 15 bit；物理值 = raw × 0.1 + (0)，单位 未定义/状态码 */
+    bool has_status;
+    fsae_CancFrameStatus status;
+} fsae_CancVcuStatus;
+
+typedef struct _fsae_CancTelemetry { /* 全部 10 条 CANC 重点报文，独立于 CANB GPS/IMU/实际电机状态 */
+    bool has_cdc_info;
+    fsae_CancCdcInfo cdc_info;
+    bool has_cdc_acceleration;
+    fsae_CancCdcAcceleration cdc_acceleration;
+    bool has_cdc_rotation;
+    fsae_CancCdcRotation cdc_rotation;
+    bool has_cdc_current;
+    fsae_CancCdcCurrent cdc_current;
+    bool has_abs_status;
+    fsae_CancAbsStatus abs_status;
+    bool has_esc_status;
+    fsae_CancEscStatus esc_status;
+    bool has_ibs_info;
+    fsae_CancIbsInfo ibs_info;
+    bool has_sas_sensor;
+    fsae_CancSasSensor sas_sensor;
+    bool has_vcu_requests;
+    fsae_CancVcuRequests vcu_requests;
+    bool has_vcu_status;
+    fsae_CancVcuStatus vcu_status;
+} fsae_CancTelemetry;
+
 typedef struct _fsae_TelemetryFrame {
     /* --- 0. STM32 legacy fields, kept for CAN2RS485 firmware compatibility --- */
     uint32_t timestamp_ms;
@@ -190,8 +572,8 @@ typedef struct _fsae_TelemetryFrame {
     int32_t motor_rpm;
     float motor_temp;
     float inverter_temp;
-    uint32_t ready_to_drive;
-    uint32_t vcu_status;
+    uint32_t ready_to_drive; /* legacy；无真实 ECU/VCU 源时保持 0，禁止用 BMS 状态代填 */
+    uint32_t vcu_status; /* legacy；BMS 状态请使用 bms_telemetry.battery_state；VCU 源接入前保持 0 */
     /* --- 1. BMS 详细数据（保持现网结构，兼容现有 modules 拆表） --- */
     pb_size_t modules_count;
     fsae_BatteryModule modules[6];
@@ -215,15 +597,31 @@ typedef struct _fsae_TelemetryFrame {
     bool has_vehicle_state;
     fsae_VehicleState vehicle_state;
     bool has_thermal_summary;
-    fsae_ThermalSummary thermal_summary;
+    fsae_ThermalSummary thermal_summary; /* 轮胎温度（CANB 0x071~0x074）按轮位填充 min/max/avg 与 chunks */
     pb_size_t alarms_count;
-    fsae_Alarm alarms[8];
+    fsae_Alarm alarms[32]; /* BMS 明细存在时按 fault bit 展开；其他系统不得占用 0..31 */
     bool has_ivt_telemetry;
     fsae_IvtTelemetry ivt_telemetry;
     bool has_energy_meter;
     fsae_EnergyMeterTelemetry energy_meter;
     bool has_motion;
     fsae_MotionTelemetry motion;
+    bool has_bms_telemetry;
+    fsae_BmsTelemetry bms_telemetry; /* BMS 状态机/继电器/预充结果；预充电压见 ivt_telemetry.voltage_u2_mv */
+    bool has_imd_telemetry;
+    fsae_ImdTelemetry imd_telemetry; /* 绝缘监测 */
+    bool has_sop_limits;
+    fsae_SopLimits sop_limits; /* BMS 功率/电流限制 */
+    bool has_charger_telemetry;
+    fsae_ChargerTelemetry charger_telemetry; /* Chroma 充电机 */
+    bool has_pdm_telemetry;
+    fsae_PdmTelemetry pdm_telemetry; /* 低压配电 */
+    bool has_fan_telemetry;
+    fsae_FanTelemetry fan_telemetry; /* 风扇控制器 */
+    bool has_battery_fan;
+    fsae_BatteryFanTelemetry battery_fan; /* BMS 电池箱风扇 */
+    bool has_canc;
+    fsae_CancTelemetry canc; /* CANC 10 帧/57 信号及逐帧诊断；旧消费者忽略新增字段 */
 } fsae_TelemetryFrame;
 
 
@@ -269,12 +667,31 @@ extern "C" {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 /* Initializer values for message structs */
 #define fsae_PacketHeader_init_default           {0, 0, 0}
 #define fsae_Alarm_init_default                  {0, _fsae_AlarmSeverity_MIN, ""}
 #define fsae_FastTelemetry_init_default          {0, 0, 0, _fsae_DrivingMode_MIN, 0}
-#define fsae_IvtTelemetry_init_default           {0, 0, 0, 0, 0, 0, 0}
-#define fsae_EnergyMeterTelemetry_init_default   {0, 0, 0, 0, 0, 0, 0}
+#define fsae_IvtTelemetry_init_default           {false, 0, false, 0, false, 0, 0, 0, 0, false, 0, false, 0, 0, 0}
+#define fsae_EnergyMeterTelemetry_init_default   {0, false, 0, false, 0, false, 0, false, 0, 0, 0, 0, 0, 0, 0}
 #define fsae_MotionTelemetry_init_default        {0, 0, 0, 0, 0, 0}
 #define fsae_ThermalRawChunk_init_default        {_fsae_MotorPosition_MIN, 0, 0, 0, 0}
 #define fsae_ThermalSensorSummary_init_default   {_fsae_MotorPosition_MIN, 0, 0, 0, 0, {fsae_ThermalRawChunk_init_default, fsae_ThermalRawChunk_init_default, fsae_ThermalRawChunk_init_default, fsae_ThermalRawChunk_init_default}}
@@ -282,12 +699,31 @@ extern "C" {
 #define fsae_MotorState_init_default             {_fsae_MotorPosition_MIN, 0, 0, 0, 0, 0, 0, 0, 0, false, 0}
 #define fsae_VehicleState_init_default           {0, _fsae_DrivingMode_MIN, 0, 0, _fsae_VcuStatus_MIN, 0, {fsae_MotorState_init_default, fsae_MotorState_init_default, fsae_MotorState_init_default, fsae_MotorState_init_default}}
 #define fsae_BatteryModule_init_default          {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-#define fsae_TelemetryFrame_init_default         {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, fsae_PacketHeader_init_default, false, fsae_FastTelemetry_init_default, false, fsae_VehicleState_init_default, false, fsae_ThermalSummary_init_default, 0, {fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default}, false, fsae_IvtTelemetry_init_default, false, fsae_EnergyMeterTelemetry_init_default, false, fsae_MotionTelemetry_init_default}
+#define fsae_BmsTelemetry_init_default           {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0}
+#define fsae_ImdTelemetry_init_default           {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0}
+#define fsae_SopLimits_init_default              {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0}
+#define fsae_ChargerTelemetry_init_default       {false, 0, false, 0, false, 0, false, 0}
+#define fsae_PdmTelemetry_init_default           {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0}
+#define fsae_FanTelemetry_init_default           {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0}
+#define fsae_BatteryFanTelemetry_init_default    {false, 0, false, 0}
+#define fsae_CancFrameStatus_init_default        {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, {0, {0}}}
+#define fsae_CancCdcInfo_init_default            {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_default}
+#define fsae_CancCdcAcceleration_init_default    {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_default}
+#define fsae_CancCdcRotation_init_default        {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_default}
+#define fsae_CancCdcCurrent_init_default         {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_default}
+#define fsae_CancAbsStatus_init_default          {false, 0, false, 0, false, fsae_CancFrameStatus_init_default}
+#define fsae_CancEscStatus_init_default          {false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_default}
+#define fsae_CancIbsInfo_init_default            {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_default}
+#define fsae_CancSasSensor_init_default          {false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_default}
+#define fsae_CancVcuRequests_init_default        {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_default}
+#define fsae_CancVcuStatus_init_default          {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_default}
+#define fsae_CancTelemetry_init_default          {false, fsae_CancCdcInfo_init_default, false, fsae_CancCdcAcceleration_init_default, false, fsae_CancCdcRotation_init_default, false, fsae_CancCdcCurrent_init_default, false, fsae_CancAbsStatus_init_default, false, fsae_CancEscStatus_init_default, false, fsae_CancIbsInfo_init_default, false, fsae_CancSasSensor_init_default, false, fsae_CancVcuRequests_init_default, false, fsae_CancVcuStatus_init_default}
+#define fsae_TelemetryFrame_init_default         {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, fsae_PacketHeader_init_default, false, fsae_FastTelemetry_init_default, false, fsae_VehicleState_init_default, false, fsae_ThermalSummary_init_default, 0, {fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default}, false, fsae_IvtTelemetry_init_default, false, fsae_EnergyMeterTelemetry_init_default, false, fsae_MotionTelemetry_init_default, false, fsae_BmsTelemetry_init_default, false, fsae_ImdTelemetry_init_default, false, fsae_SopLimits_init_default, false, fsae_ChargerTelemetry_init_default, false, fsae_PdmTelemetry_init_default, false, fsae_FanTelemetry_init_default, false, fsae_BatteryFanTelemetry_init_default, false, fsae_CancTelemetry_init_default}
 #define fsae_PacketHeader_init_zero              {0, 0, 0}
 #define fsae_Alarm_init_zero                     {0, _fsae_AlarmSeverity_MIN, ""}
 #define fsae_FastTelemetry_init_zero             {0, 0, 0, _fsae_DrivingMode_MIN, 0}
-#define fsae_IvtTelemetry_init_zero              {0, 0, 0, 0, 0, 0, 0}
-#define fsae_EnergyMeterTelemetry_init_zero      {0, 0, 0, 0, 0, 0, 0}
+#define fsae_IvtTelemetry_init_zero              {false, 0, false, 0, false, 0, 0, 0, 0, false, 0, false, 0, 0, 0}
+#define fsae_EnergyMeterTelemetry_init_zero      {0, false, 0, false, 0, false, 0, false, 0, 0, 0, 0, 0, 0, 0}
 #define fsae_MotionTelemetry_init_zero           {0, 0, 0, 0, 0, 0}
 #define fsae_ThermalRawChunk_init_zero           {_fsae_MotorPosition_MIN, 0, 0, 0, 0}
 #define fsae_ThermalSensorSummary_init_zero      {_fsae_MotorPosition_MIN, 0, 0, 0, 0, {fsae_ThermalRawChunk_init_zero, fsae_ThermalRawChunk_init_zero, fsae_ThermalRawChunk_init_zero, fsae_ThermalRawChunk_init_zero}}
@@ -295,7 +731,26 @@ extern "C" {
 #define fsae_MotorState_init_zero                {_fsae_MotorPosition_MIN, 0, 0, 0, 0, 0, 0, 0, 0, false, 0}
 #define fsae_VehicleState_init_zero              {0, _fsae_DrivingMode_MIN, 0, 0, _fsae_VcuStatus_MIN, 0, {fsae_MotorState_init_zero, fsae_MotorState_init_zero, fsae_MotorState_init_zero, fsae_MotorState_init_zero}}
 #define fsae_BatteryModule_init_zero             {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-#define fsae_TelemetryFrame_init_zero            {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, fsae_PacketHeader_init_zero, false, fsae_FastTelemetry_init_zero, false, fsae_VehicleState_init_zero, false, fsae_ThermalSummary_init_zero, 0, {fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero}, false, fsae_IvtTelemetry_init_zero, false, fsae_EnergyMeterTelemetry_init_zero, false, fsae_MotionTelemetry_init_zero}
+#define fsae_BmsTelemetry_init_zero              {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0}
+#define fsae_ImdTelemetry_init_zero              {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0}
+#define fsae_SopLimits_init_zero                 {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0}
+#define fsae_ChargerTelemetry_init_zero          {false, 0, false, 0, false, 0, false, 0}
+#define fsae_PdmTelemetry_init_zero              {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0}
+#define fsae_FanTelemetry_init_zero              {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0}
+#define fsae_BatteryFanTelemetry_init_zero       {false, 0, false, 0}
+#define fsae_CancFrameStatus_init_zero           {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, {0, {0}}}
+#define fsae_CancCdcInfo_init_zero               {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_zero}
+#define fsae_CancCdcAcceleration_init_zero       {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_zero}
+#define fsae_CancCdcRotation_init_zero           {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_zero}
+#define fsae_CancCdcCurrent_init_zero            {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_zero}
+#define fsae_CancAbsStatus_init_zero             {false, 0, false, 0, false, fsae_CancFrameStatus_init_zero}
+#define fsae_CancEscStatus_init_zero             {false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_zero}
+#define fsae_CancIbsInfo_init_zero               {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_zero}
+#define fsae_CancSasSensor_init_zero             {false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_zero}
+#define fsae_CancVcuRequests_init_zero           {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_zero}
+#define fsae_CancVcuStatus_init_zero             {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_zero}
+#define fsae_CancTelemetry_init_zero             {false, fsae_CancCdcInfo_init_zero, false, fsae_CancCdcAcceleration_init_zero, false, fsae_CancCdcRotation_init_zero, false, fsae_CancCdcCurrent_init_zero, false, fsae_CancAbsStatus_init_zero, false, fsae_CancEscStatus_init_zero, false, fsae_CancIbsInfo_init_zero, false, fsae_CancSasSensor_init_zero, false, fsae_CancVcuRequests_init_zero, false, fsae_CancVcuStatus_init_zero}
+#define fsae_TelemetryFrame_init_zero            {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, fsae_PacketHeader_init_zero, false, fsae_FastTelemetry_init_zero, false, fsae_VehicleState_init_zero, false, fsae_ThermalSummary_init_zero, 0, {fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero}, false, fsae_IvtTelemetry_init_zero, false, fsae_EnergyMeterTelemetry_init_zero, false, fsae_MotionTelemetry_init_zero, false, fsae_BmsTelemetry_init_zero, false, fsae_ImdTelemetry_init_zero, false, fsae_SopLimits_init_zero, false, fsae_ChargerTelemetry_init_zero, false, fsae_PdmTelemetry_init_zero, false, fsae_FanTelemetry_init_zero, false, fsae_BatteryFanTelemetry_init_zero, false, fsae_CancTelemetry_init_zero}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define fsae_PacketHeader_timestamp_ms_tag       1
@@ -316,6 +771,9 @@ extern "C" {
 #define fsae_IvtTelemetry_voltage_u1_state_tag   5
 #define fsae_IvtTelemetry_energy_state_tag       6
 #define fsae_IvtTelemetry_power_w_tag            7
+#define fsae_IvtTelemetry_voltage_u2_mv_tag      8
+#define fsae_IvtTelemetry_voltage_u2_state_tag   9
+#define fsae_IvtTelemetry_power_state_tag        10
 #define fsae_EnergyMeterTelemetry_source_tag     1
 #define fsae_EnergyMeterTelemetry_current_ma_tag 2
 #define fsae_EnergyMeterTelemetry_voltage_mv_tag 3
@@ -323,6 +781,10 @@ extern "C" {
 #define fsae_EnergyMeterTelemetry_power_w_tag    5
 #define fsae_EnergyMeterTelemetry_status_tag     6
 #define fsae_EnergyMeterTelemetry_msg_counter_tag 7
+#define fsae_EnergyMeterTelemetry_current_state_tag 8
+#define fsae_EnergyMeterTelemetry_voltage_state_tag 9
+#define fsae_EnergyMeterTelemetry_power_state_tag 10
+#define fsae_EnergyMeterTelemetry_energy_state_tag 11
 #define fsae_MotionTelemetry_gps_speed_kmh_tag   1
 #define fsae_MotionTelemetry_accel_x_g_tag       2
 #define fsae_MotionTelemetry_accel_y_g_tag       3
@@ -388,6 +850,159 @@ extern "C" {
 #define fsae_BatteryModule_t6_tag                35
 #define fsae_BatteryModule_t7_tag                36
 #define fsae_BatteryModule_t8_tag                37
+#define fsae_BmsTelemetry_battery_state_tag      1
+#define fsae_BmsTelemetry_battery_alarm_level_tag 2
+#define fsae_BmsTelemetry_pos_relay_state_tag    3
+#define fsae_BmsTelemetry_neg_relay_state_tag    4
+#define fsae_BmsTelemetry_pre_relay_state_tag    5
+#define fsae_BmsTelemetry_charge_state_tag       6
+#define fsae_BmsTelemetry_charge_comm_state_tag  7
+#define fsae_BmsTelemetry_last_precharge_result_tag 8
+#define fsae_BmsTelemetry_last_precharge_success_ms_tag 9
+#define fsae_BmsTelemetry_last_precharge_failure_ms_tag 10
+#define fsae_ImdTelemetry_resistance_kohm_tag    1
+#define fsae_ImdTelemetry_duty_pct_x10_tag       2
+#define fsae_ImdTelemetry_frequency_hz_x100_tag  3
+#define fsae_ImdTelemetry_frequency_class_tag    4
+#define fsae_ImdTelemetry_status_code_tag        5
+#define fsae_ImdTelemetry_flags_tag              6
+#define fsae_SopLimits_discharge_current_limit_a_x10_tag 1
+#define fsae_SopLimits_charge_current_limit_a_x10_tag 2
+#define fsae_SopLimits_discharge_power_limit_kw_x10_tag 3
+#define fsae_SopLimits_charge_power_limit_kw_x10_tag 4
+#define fsae_SopLimits_sequence_tag              5
+#define fsae_SopLimits_protocol_version_tag      6
+#define fsae_SopLimits_bms_flags_tag             7
+#define fsae_SopLimits_ecu_flags_tag             8
+#define fsae_ChargerTelemetry_voltage_v_tag      1
+#define fsae_ChargerTelemetry_current_a_tag      2
+#define fsae_ChargerTelemetry_protection_tag     3
+#define fsae_ChargerTelemetry_output_state_tag   4
+#define fsae_PdmTelemetry_bus_voltage_v_tag      1
+#define fsae_PdmTelemetry_bus_current_a_tag      2
+#define fsae_PdmTelemetry_bus_power_w_tag        3
+#define fsae_PdmTelemetry_bus_energy_wh_tag      4
+#define fsae_PdmTelemetry_battery_voltage_v_tag  5
+#define fsae_PdmTelemetry_battery_current_a_tag  6
+#define fsae_PdmTelemetry_battery_power_w_tag    7
+#define fsae_PdmTelemetry_battery_energy_wh_tag  8
+#define fsae_FanTelemetry_fan1_rpm_tag           1
+#define fsae_FanTelemetry_fan2_rpm_tag           2
+#define fsae_FanTelemetry_fan3_rpm_tag           3
+#define fsae_FanTelemetry_pwm1_duty_pct_tag      4
+#define fsae_FanTelemetry_pwm2_duty_pct_tag      5
+#define fsae_FanTelemetry_pwm1_target_pct_tag    6
+#define fsae_FanTelemetry_pwm2_target_pct_tag    7
+#define fsae_FanTelemetry_ack_actual_pwm1_pct_tag 8
+#define fsae_FanTelemetry_ack_actual_pwm2_pct_tag 9
+#define fsae_FanTelemetry_faults_tag             10
+#define fsae_FanTelemetry_status_flags_tag       11
+#define fsae_FanTelemetry_max_motor_temp_dc_tag  12
+#define fsae_FanTelemetry_max_controller_temp_dc_tag 13
+#define fsae_FanTelemetry_ack_result_tag         14
+#define fsae_FanTelemetry_ack_mode_tag           15
+#define fsae_FanTelemetry_ack_failsafe_tag       16
+#define fsae_FanTelemetry_curve_temp_off_tag     17
+#define fsae_FanTelemetry_curve_temp_on_tag      18
+#define fsae_FanTelemetry_curve_temp_full_tag    19
+#define fsae_FanTelemetry_curve_min_duty_pct_tag 20
+#define fsae_FanTelemetry_curve_ramp_up_pct_per_s_tag 21
+#define fsae_FanTelemetry_failsafe_strategy_tag  22
+#define fsae_FanTelemetry_failsafe_fallback1_pct_tag 23
+#define fsae_FanTelemetry_failsafe_fallback2_pct_tag 24
+#define fsae_FanTelemetry_failsafe_stale_hold_s_tag 25
+#define fsae_FanTelemetry_failsafe_ramp_down_pct_per_s_tag 26
+#define fsae_FanTelemetry_control_mode_tag       27
+#define fsae_FanTelemetry_control_lease_remaining_s_tag 28
+#define fsae_BatteryFanTelemetry_rpm_tag         1
+#define fsae_BatteryFanTelemetry_actual_duty_pct_x10_tag 2
+#define fsae_CancFrameStatus_seen_tag            1
+#define fsae_CancFrameStatus_fresh_tag           2
+#define fsae_CancFrameStatus_received_ms_tag     3
+#define fsae_CancFrameStatus_age_ms_tag          4
+#define fsae_CancFrameStatus_interval_ms_tag     5
+#define fsae_CancFrameStatus_rx_count_tag        6
+#define fsae_CancFrameStatus_rejected_count_tag  7
+#define fsae_CancFrameStatus_out_of_range_mask_tag 8
+#define fsae_CancFrameStatus_unknown_enum_mask_tag 9
+#define fsae_CancFrameStatus_raw_payload_tag     10
+#define fsae_CancCdcInfo_CDC_HeiFL_tag           1
+#define fsae_CancCdcInfo_CDC_Mod_tag             2
+#define fsae_CancCdcInfo_CDC_HeiFR_tag           3
+#define fsae_CancCdcInfo_CDC_OprlSts_tag         4
+#define fsae_CancCdcInfo_CDC_HeiRL_tag           5
+#define fsae_CancCdcInfo_CDC_HeiRR_tag           6
+#define fsae_CancCdcInfo_status_tag              20
+#define fsae_CancCdcAcceleration_CDC_HeaveAccV_tag 1
+#define fsae_CancCdcAcceleration_CDC_HeaveAcc_tag 2
+#define fsae_CancCdcAcceleration_CDC_LatAccV_tag 3
+#define fsae_CancCdcAcceleration_CDC_LatAcc_tag  4
+#define fsae_CancCdcAcceleration_CDC_LgtAccV_tag 5
+#define fsae_CancCdcAcceleration_CDC_LgtAcc_tag  6
+#define fsae_CancCdcAcceleration_status_tag      20
+#define fsae_CancCdcRotation_CDC_YawRate_tag     1
+#define fsae_CancCdcRotation_CDC_PitchRate_tag   2
+#define fsae_CancCdcRotation_CDC_RollRate_tag    3
+#define fsae_CancCdcRotation_CDC_YawRateV_tag    4
+#define fsae_CancCdcRotation_CDC_PitchRateV_tag  5
+#define fsae_CancCdcRotation_CDC_RollRateV_tag   6
+#define fsae_CancCdcRotation_status_tag          20
+#define fsae_CancCdcCurrent_CDC_CurrCmprFL_tag   1
+#define fsae_CancCdcCurrent_CDC_CurrCmprFR_tag   2
+#define fsae_CancCdcCurrent_CDC_CurrCmprRL_tag   3
+#define fsae_CancCdcCurrent_CDC_CurrCmprRR_tag   4
+#define fsae_CancCdcCurrent_CDC_CurrRbndFL_tag   5
+#define fsae_CancCdcCurrent_CDC_CurrRbndFR_tag   6
+#define fsae_CancCdcCurrent_CDC_CurrRbndRL_tag   7
+#define fsae_CancCdcCurrent_CDC_CurrRbndRR_tag   8
+#define fsae_CancCdcCurrent_status_tag           20
+#define fsae_CancAbsStatus_ABS_VehSpd_tag        1
+#define fsae_CancAbsStatus_ABS_VehSpdV_tag       2
+#define fsae_CancAbsStatus_status_tag            20
+#define fsae_CancEscStatus_ESC_MstCylPV_tag      1
+#define fsae_CancEscStatus_ESC_TcsCtrlActv_tag   2
+#define fsae_CancEscStatus_ESC_EscCtrlActv_tag   3
+#define fsae_CancEscStatus_ESC_MstCylP_tag       4
+#define fsae_CancEscStatus_status_tag            20
+#define fsae_CancIbsInfo_AB_BrkPdlSwtStsV_tag    1
+#define fsae_CancIbsInfo_AB_BrkPdlSwtSts_tag     2
+#define fsae_CancIbsInfo_AB_BrkPdlPct_tag        3
+#define fsae_CancIbsInfo_AB_BrkPdlTrvl_tag       4
+#define fsae_CancIbsInfo_AB_AccPdlSwtSts_tag     5
+#define fsae_CancIbsInfo_AB_AccPdlSwtStsV_tag    6
+#define fsae_CancIbsInfo_AB_AccPdlPct_tag        7
+#define fsae_CancIbsInfo_AB_AccPdlTrvl_tag       8
+#define fsae_CancIbsInfo_status_tag              20
+#define fsae_CancSasSensor_SAS_SteerAgV_tag      1
+#define fsae_CancSasSensor_SAS_SASStsSnsr_tag    2
+#define fsae_CancSasSensor_SAS_SteerRotSpd_tag   3
+#define fsae_CancSasSensor_SAS_SteerRotSpdV_tag  4
+#define fsae_CancSasSensor_SAS_SteerAg_tag       5
+#define fsae_CancSasSensor_status_tag            20
+#define fsae_CancVcuRequests_VCU_FMCU_TarTqReqV_tag 1
+#define fsae_CancVcuRequests_VCU_RMCU_TarTqReqV_tag 2
+#define fsae_CancVcuRequests_VCU_MCU_TarDrvgReqV_tag 3
+#define fsae_CancVcuRequests_VCU_FMCU_TarTqReq_tag 4
+#define fsae_CancVcuRequests_VCU_RMCU_TarTqReq_tag 5
+#define fsae_CancVcuRequests_VCU_MCU_TarDrvgReq_tag 6
+#define fsae_CancVcuRequests_status_tag          20
+#define fsae_CancVcuStatus_VCU_EOLoffsetOvrdSwt_tag 1
+#define fsae_CancVcuStatus_VCU_DrvModSts_tag     2
+#define fsae_CancVcuStatus_VCU_EOLoffsetFL_tag   3
+#define fsae_CancVcuStatus_VCU_EOLoffsetFR_tag   4
+#define fsae_CancVcuStatus_VCU_EOLoffsetRL_tag   5
+#define fsae_CancVcuStatus_VCU_EOLoffsetRR_tag   6
+#define fsae_CancVcuStatus_status_tag            20
+#define fsae_CancTelemetry_cdc_info_tag          1
+#define fsae_CancTelemetry_cdc_acceleration_tag  2
+#define fsae_CancTelemetry_cdc_rotation_tag      3
+#define fsae_CancTelemetry_cdc_current_tag       4
+#define fsae_CancTelemetry_abs_status_tag        5
+#define fsae_CancTelemetry_esc_status_tag        6
+#define fsae_CancTelemetry_ibs_info_tag          7
+#define fsae_CancTelemetry_sas_sensor_tag        8
+#define fsae_CancTelemetry_vcu_requests_tag      9
+#define fsae_CancTelemetry_vcu_status_tag        10
 #define fsae_TelemetryFrame_timestamp_ms_tag     1
 #define fsae_TelemetryFrame_frame_id_tag         2
 #define fsae_TelemetryFrame_apps_position_tag    3
@@ -421,6 +1036,14 @@ extern "C" {
 #define fsae_TelemetryFrame_ivt_telemetry_tag    31
 #define fsae_TelemetryFrame_energy_meter_tag     32
 #define fsae_TelemetryFrame_motion_tag           33
+#define fsae_TelemetryFrame_bms_telemetry_tag    34
+#define fsae_TelemetryFrame_imd_telemetry_tag    35
+#define fsae_TelemetryFrame_sop_limits_tag       36
+#define fsae_TelemetryFrame_charger_telemetry_tag 37
+#define fsae_TelemetryFrame_pdm_telemetry_tag    38
+#define fsae_TelemetryFrame_fan_telemetry_tag    39
+#define fsae_TelemetryFrame_battery_fan_tag      40
+#define fsae_TelemetryFrame_canc_tag             41
 
 /* Struct field encoding specification for nanopb */
 #define fsae_PacketHeader_FIELDLIST(X, a) \
@@ -447,24 +1070,31 @@ X(a, STATIC,   SINGULAR, UINT32,   speed_kmh,         5)
 #define fsae_FastTelemetry_DEFAULT NULL
 
 #define fsae_IvtTelemetry_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, SINT32,   current_ma,        1) \
-X(a, STATIC,   SINGULAR, SINT32,   voltage_u1_mv,     2) \
-X(a, STATIC,   SINGULAR, SINT32,   energy_wh,         3) \
+X(a, STATIC,   OPTIONAL, SINT32,   current_ma,        1) \
+X(a, STATIC,   OPTIONAL, SINT32,   voltage_u1_mv,     2) \
+X(a, STATIC,   OPTIONAL, SINT32,   energy_wh,         3) \
 X(a, STATIC,   SINGULAR, UINT32,   current_state,     4) \
 X(a, STATIC,   SINGULAR, UINT32,   voltage_u1_state,   5) \
 X(a, STATIC,   SINGULAR, UINT32,   energy_state,      6) \
-X(a, STATIC,   SINGULAR, SINT32,   power_w,           7)
+X(a, STATIC,   OPTIONAL, SINT32,   power_w,           7) \
+X(a, STATIC,   OPTIONAL, SINT32,   voltage_u2_mv,     8) \
+X(a, STATIC,   SINGULAR, UINT32,   voltage_u2_state,   9) \
+X(a, STATIC,   SINGULAR, UINT32,   power_state,      10)
 #define fsae_IvtTelemetry_CALLBACK NULL
 #define fsae_IvtTelemetry_DEFAULT NULL
 
 #define fsae_EnergyMeterTelemetry_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UINT32,   source,            1) \
-X(a, STATIC,   SINGULAR, SINT32,   current_ma,        2) \
-X(a, STATIC,   SINGULAR, SINT32,   voltage_mv,        3) \
-X(a, STATIC,   SINGULAR, SINT32,   energy_wh,         4) \
-X(a, STATIC,   SINGULAR, SINT32,   power_w,           5) \
+X(a, STATIC,   OPTIONAL, SINT32,   current_ma,        2) \
+X(a, STATIC,   OPTIONAL, SINT32,   voltage_mv,        3) \
+X(a, STATIC,   OPTIONAL, SINT32,   energy_wh,         4) \
+X(a, STATIC,   OPTIONAL, SINT32,   power_w,           5) \
 X(a, STATIC,   SINGULAR, UINT32,   status,            6) \
-X(a, STATIC,   SINGULAR, UINT32,   msg_counter,       7)
+X(a, STATIC,   SINGULAR, UINT32,   msg_counter,       7) \
+X(a, STATIC,   SINGULAR, UINT32,   current_state,     8) \
+X(a, STATIC,   SINGULAR, UINT32,   voltage_state,     9) \
+X(a, STATIC,   SINGULAR, UINT32,   power_state,      10) \
+X(a, STATIC,   SINGULAR, UINT32,   energy_state,     11)
 #define fsae_EnergyMeterTelemetry_CALLBACK NULL
 #define fsae_EnergyMeterTelemetry_DEFAULT NULL
 
@@ -564,6 +1194,255 @@ X(a, STATIC,   SINGULAR, SINT32,   t8,               37)
 #define fsae_BatteryModule_CALLBACK NULL
 #define fsae_BatteryModule_DEFAULT NULL
 
+#define fsae_BmsTelemetry_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   battery_state,     1) \
+X(a, STATIC,   OPTIONAL, UINT32,   battery_alarm_level,   2) \
+X(a, STATIC,   OPTIONAL, UINT32,   pos_relay_state,   3) \
+X(a, STATIC,   OPTIONAL, UINT32,   neg_relay_state,   4) \
+X(a, STATIC,   OPTIONAL, UINT32,   pre_relay_state,   5) \
+X(a, STATIC,   OPTIONAL, UINT32,   charge_state,      6) \
+X(a, STATIC,   OPTIONAL, UINT32,   charge_comm_state,   7) \
+X(a, STATIC,   OPTIONAL, UINT32,   last_precharge_result,   8) \
+X(a, STATIC,   OPTIONAL, UINT32,   last_precharge_success_ms,   9) \
+X(a, STATIC,   OPTIONAL, UINT32,   last_precharge_failure_ms,  10)
+#define fsae_BmsTelemetry_CALLBACK NULL
+#define fsae_BmsTelemetry_DEFAULT NULL
+
+#define fsae_ImdTelemetry_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   resistance_kohm,   1) \
+X(a, STATIC,   OPTIONAL, UINT32,   duty_pct_x10,      2) \
+X(a, STATIC,   OPTIONAL, UINT32,   frequency_hz_x100,   3) \
+X(a, STATIC,   OPTIONAL, UINT32,   frequency_class,   4) \
+X(a, STATIC,   OPTIONAL, UINT32,   status_code,       5) \
+X(a, STATIC,   OPTIONAL, UINT32,   flags,             6)
+#define fsae_ImdTelemetry_CALLBACK NULL
+#define fsae_ImdTelemetry_DEFAULT NULL
+
+#define fsae_SopLimits_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   discharge_current_limit_a_x10,   1) \
+X(a, STATIC,   OPTIONAL, UINT32,   charge_current_limit_a_x10,   2) \
+X(a, STATIC,   OPTIONAL, UINT32,   discharge_power_limit_kw_x10,   3) \
+X(a, STATIC,   OPTIONAL, UINT32,   charge_power_limit_kw_x10,   4) \
+X(a, STATIC,   OPTIONAL, UINT32,   sequence,          5) \
+X(a, STATIC,   OPTIONAL, UINT32,   protocol_version,   6) \
+X(a, STATIC,   OPTIONAL, UINT32,   bms_flags,         7) \
+X(a, STATIC,   OPTIONAL, UINT32,   ecu_flags,         8)
+#define fsae_SopLimits_CALLBACK NULL
+#define fsae_SopLimits_DEFAULT NULL
+
+#define fsae_ChargerTelemetry_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, FLOAT,    voltage_v,         1) \
+X(a, STATIC,   OPTIONAL, FLOAT,    current_a,         2) \
+X(a, STATIC,   OPTIONAL, UINT32,   protection,        3) \
+X(a, STATIC,   OPTIONAL, UINT32,   output_state,      4)
+#define fsae_ChargerTelemetry_CALLBACK NULL
+#define fsae_ChargerTelemetry_DEFAULT NULL
+
+#define fsae_PdmTelemetry_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, FLOAT,    bus_voltage_v,     1) \
+X(a, STATIC,   OPTIONAL, FLOAT,    bus_current_a,     2) \
+X(a, STATIC,   OPTIONAL, FLOAT,    bus_power_w,       3) \
+X(a, STATIC,   OPTIONAL, FLOAT,    bus_energy_wh,     4) \
+X(a, STATIC,   OPTIONAL, FLOAT,    battery_voltage_v,   5) \
+X(a, STATIC,   OPTIONAL, FLOAT,    battery_current_a,   6) \
+X(a, STATIC,   OPTIONAL, FLOAT,    battery_power_w,   7) \
+X(a, STATIC,   OPTIONAL, FLOAT,    battery_energy_wh,   8)
+#define fsae_PdmTelemetry_CALLBACK NULL
+#define fsae_PdmTelemetry_DEFAULT NULL
+
+#define fsae_FanTelemetry_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   fan1_rpm,          1) \
+X(a, STATIC,   OPTIONAL, UINT32,   fan2_rpm,          2) \
+X(a, STATIC,   OPTIONAL, UINT32,   fan3_rpm,          3) \
+X(a, STATIC,   OPTIONAL, UINT32,   pwm1_duty_pct,     4) \
+X(a, STATIC,   OPTIONAL, UINT32,   pwm2_duty_pct,     5) \
+X(a, STATIC,   OPTIONAL, UINT32,   pwm1_target_pct,   6) \
+X(a, STATIC,   OPTIONAL, UINT32,   pwm2_target_pct,   7) \
+X(a, STATIC,   OPTIONAL, UINT32,   ack_actual_pwm1_pct,   8) \
+X(a, STATIC,   OPTIONAL, UINT32,   ack_actual_pwm2_pct,   9) \
+X(a, STATIC,   OPTIONAL, UINT32,   faults,           10) \
+X(a, STATIC,   OPTIONAL, UINT32,   status_flags,     11) \
+X(a, STATIC,   OPTIONAL, SINT32,   max_motor_temp_dc,  12) \
+X(a, STATIC,   OPTIONAL, SINT32,   max_controller_temp_dc,  13) \
+X(a, STATIC,   OPTIONAL, UINT32,   ack_result,       14) \
+X(a, STATIC,   OPTIONAL, UINT32,   ack_mode,         15) \
+X(a, STATIC,   OPTIONAL, UINT32,   ack_failsafe,     16) \
+X(a, STATIC,   OPTIONAL, UINT32,   curve_temp_off,   17) \
+X(a, STATIC,   OPTIONAL, UINT32,   curve_temp_on,    18) \
+X(a, STATIC,   OPTIONAL, UINT32,   curve_temp_full,  19) \
+X(a, STATIC,   OPTIONAL, UINT32,   curve_min_duty_pct,  20) \
+X(a, STATIC,   OPTIONAL, UINT32,   curve_ramp_up_pct_per_s,  21) \
+X(a, STATIC,   OPTIONAL, UINT32,   failsafe_strategy,  22) \
+X(a, STATIC,   OPTIONAL, UINT32,   failsafe_fallback1_pct,  23) \
+X(a, STATIC,   OPTIONAL, UINT32,   failsafe_fallback2_pct,  24) \
+X(a, STATIC,   OPTIONAL, UINT32,   failsafe_stale_hold_s,  25) \
+X(a, STATIC,   OPTIONAL, UINT32,   failsafe_ramp_down_pct_per_s,  26) \
+X(a, STATIC,   OPTIONAL, UINT32,   control_mode,     27) \
+X(a, STATIC,   OPTIONAL, UINT32,   control_lease_remaining_s,  28)
+#define fsae_FanTelemetry_CALLBACK NULL
+#define fsae_FanTelemetry_DEFAULT NULL
+
+#define fsae_BatteryFanTelemetry_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   rpm,               1) \
+X(a, STATIC,   OPTIONAL, UINT32,   actual_duty_pct_x10,   2)
+#define fsae_BatteryFanTelemetry_CALLBACK NULL
+#define fsae_BatteryFanTelemetry_DEFAULT NULL
+
+#define fsae_CancFrameStatus_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   seen,              1) \
+X(a, STATIC,   OPTIONAL, UINT32,   fresh,             2) \
+X(a, STATIC,   OPTIONAL, UINT32,   received_ms,       3) \
+X(a, STATIC,   OPTIONAL, UINT32,   age_ms,            4) \
+X(a, STATIC,   OPTIONAL, UINT32,   interval_ms,       5) \
+X(a, STATIC,   OPTIONAL, UINT32,   rx_count,          6) \
+X(a, STATIC,   OPTIONAL, UINT32,   rejected_count,    7) \
+X(a, STATIC,   OPTIONAL, UINT32,   out_of_range_mask,   8) \
+X(a, STATIC,   OPTIONAL, UINT32,   unknown_enum_mask,   9) \
+X(a, STATIC,   SINGULAR, BYTES,    raw_payload,      10)
+#define fsae_CancFrameStatus_CALLBACK NULL
+#define fsae_CancFrameStatus_DEFAULT NULL
+
+#define fsae_CancCdcInfo_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_HeiFL,         1) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_Mod,           2) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_HeiFR,         3) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_OprlSts,       4) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_HeiRL,         5) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_HeiRR,         6) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  status,           20)
+#define fsae_CancCdcInfo_CALLBACK NULL
+#define fsae_CancCdcInfo_DEFAULT NULL
+#define fsae_CancCdcInfo_status_MSGTYPE fsae_CancFrameStatus
+
+#define fsae_CancCdcAcceleration_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_HeaveAccV,     1) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_HeaveAcc,      2) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_LatAccV,       3) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_LatAcc,        4) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_LgtAccV,       5) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_LgtAcc,        6) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  status,           20)
+#define fsae_CancCdcAcceleration_CALLBACK NULL
+#define fsae_CancCdcAcceleration_DEFAULT NULL
+#define fsae_CancCdcAcceleration_status_MSGTYPE fsae_CancFrameStatus
+
+#define fsae_CancCdcRotation_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_YawRate,       1) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_PitchRate,     2) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_RollRate,      3) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_YawRateV,      4) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_PitchRateV,    5) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_RollRateV,     6) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  status,           20)
+#define fsae_CancCdcRotation_CALLBACK NULL
+#define fsae_CancCdcRotation_DEFAULT NULL
+#define fsae_CancCdcRotation_status_MSGTYPE fsae_CancFrameStatus
+
+#define fsae_CancCdcCurrent_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_CurrCmprFL,    1) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_CurrCmprFR,    2) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_CurrCmprRL,    3) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_CurrCmprRR,    4) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_CurrRbndFL,    5) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_CurrRbndFR,    6) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_CurrRbndRL,    7) \
+X(a, STATIC,   OPTIONAL, UINT32,   CDC_CurrRbndRR,    8) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  status,           20)
+#define fsae_CancCdcCurrent_CALLBACK NULL
+#define fsae_CancCdcCurrent_DEFAULT NULL
+#define fsae_CancCdcCurrent_status_MSGTYPE fsae_CancFrameStatus
+
+#define fsae_CancAbsStatus_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   ABS_VehSpd,        1) \
+X(a, STATIC,   OPTIONAL, UINT32,   ABS_VehSpdV,       2) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  status,           20)
+#define fsae_CancAbsStatus_CALLBACK NULL
+#define fsae_CancAbsStatus_DEFAULT NULL
+#define fsae_CancAbsStatus_status_MSGTYPE fsae_CancFrameStatus
+
+#define fsae_CancEscStatus_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   ESC_MstCylPV,      1) \
+X(a, STATIC,   OPTIONAL, UINT32,   ESC_TcsCtrlActv,   2) \
+X(a, STATIC,   OPTIONAL, UINT32,   ESC_EscCtrlActv,   3) \
+X(a, STATIC,   OPTIONAL, UINT32,   ESC_MstCylP,       4) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  status,           20)
+#define fsae_CancEscStatus_CALLBACK NULL
+#define fsae_CancEscStatus_DEFAULT NULL
+#define fsae_CancEscStatus_status_MSGTYPE fsae_CancFrameStatus
+
+#define fsae_CancIbsInfo_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   AB_BrkPdlSwtStsV,   1) \
+X(a, STATIC,   OPTIONAL, UINT32,   AB_BrkPdlSwtSts,   2) \
+X(a, STATIC,   OPTIONAL, UINT32,   AB_BrkPdlPct,      3) \
+X(a, STATIC,   OPTIONAL, UINT32,   AB_BrkPdlTrvl,     4) \
+X(a, STATIC,   OPTIONAL, UINT32,   AB_AccPdlSwtSts,   5) \
+X(a, STATIC,   OPTIONAL, UINT32,   AB_AccPdlSwtStsV,   6) \
+X(a, STATIC,   OPTIONAL, UINT32,   AB_AccPdlPct,      7) \
+X(a, STATIC,   OPTIONAL, UINT32,   AB_AccPdlTrvl,     8) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  status,           20)
+#define fsae_CancIbsInfo_CALLBACK NULL
+#define fsae_CancIbsInfo_DEFAULT NULL
+#define fsae_CancIbsInfo_status_MSGTYPE fsae_CancFrameStatus
+
+#define fsae_CancSasSensor_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   SAS_SteerAgV,      1) \
+X(a, STATIC,   OPTIONAL, UINT32,   SAS_SASStsSnsr,    2) \
+X(a, STATIC,   OPTIONAL, UINT32,   SAS_SteerRotSpd,   3) \
+X(a, STATIC,   OPTIONAL, UINT32,   SAS_SteerRotSpdV,   4) \
+X(a, STATIC,   OPTIONAL, UINT32,   SAS_SteerAg,       5) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  status,           20)
+#define fsae_CancSasSensor_CALLBACK NULL
+#define fsae_CancSasSensor_DEFAULT NULL
+#define fsae_CancSasSensor_status_MSGTYPE fsae_CancFrameStatus
+
+#define fsae_CancVcuRequests_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   VCU_FMCU_TarTqReqV,   1) \
+X(a, STATIC,   OPTIONAL, UINT32,   VCU_RMCU_TarTqReqV,   2) \
+X(a, STATIC,   OPTIONAL, UINT32,   VCU_MCU_TarDrvgReqV,   3) \
+X(a, STATIC,   OPTIONAL, UINT32,   VCU_FMCU_TarTqReq,   4) \
+X(a, STATIC,   OPTIONAL, UINT32,   VCU_RMCU_TarTqReq,   5) \
+X(a, STATIC,   OPTIONAL, UINT32,   VCU_MCU_TarDrvgReq,   6) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  status,           20)
+#define fsae_CancVcuRequests_CALLBACK NULL
+#define fsae_CancVcuRequests_DEFAULT NULL
+#define fsae_CancVcuRequests_status_MSGTYPE fsae_CancFrameStatus
+
+#define fsae_CancVcuStatus_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   VCU_EOLoffsetOvrdSwt,   1) \
+X(a, STATIC,   OPTIONAL, UINT32,   VCU_DrvModSts,     2) \
+X(a, STATIC,   OPTIONAL, SINT32,   VCU_EOLoffsetFL,   3) \
+X(a, STATIC,   OPTIONAL, SINT32,   VCU_EOLoffsetFR,   4) \
+X(a, STATIC,   OPTIONAL, SINT32,   VCU_EOLoffsetRL,   5) \
+X(a, STATIC,   OPTIONAL, SINT32,   VCU_EOLoffsetRR,   6) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  status,           20)
+#define fsae_CancVcuStatus_CALLBACK NULL
+#define fsae_CancVcuStatus_DEFAULT NULL
+#define fsae_CancVcuStatus_status_MSGTYPE fsae_CancFrameStatus
+
+#define fsae_CancTelemetry_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  cdc_info,          1) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  cdc_acceleration,   2) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  cdc_rotation,      3) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  cdc_current,       4) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  abs_status,        5) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  esc_status,        6) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  ibs_info,          7) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  sas_sensor,        8) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  vcu_requests,      9) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  vcu_status,       10)
+#define fsae_CancTelemetry_CALLBACK NULL
+#define fsae_CancTelemetry_DEFAULT NULL
+#define fsae_CancTelemetry_cdc_info_MSGTYPE fsae_CancCdcInfo
+#define fsae_CancTelemetry_cdc_acceleration_MSGTYPE fsae_CancCdcAcceleration
+#define fsae_CancTelemetry_cdc_rotation_MSGTYPE fsae_CancCdcRotation
+#define fsae_CancTelemetry_cdc_current_MSGTYPE fsae_CancCdcCurrent
+#define fsae_CancTelemetry_abs_status_MSGTYPE fsae_CancAbsStatus
+#define fsae_CancTelemetry_esc_status_MSGTYPE fsae_CancEscStatus
+#define fsae_CancTelemetry_ibs_info_MSGTYPE fsae_CancIbsInfo
+#define fsae_CancTelemetry_sas_sensor_MSGTYPE fsae_CancSasSensor
+#define fsae_CancTelemetry_vcu_requests_MSGTYPE fsae_CancVcuRequests
+#define fsae_CancTelemetry_vcu_status_MSGTYPE fsae_CancVcuStatus
+
 #define fsae_TelemetryFrame_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UINT32,   timestamp_ms,      1) \
 X(a, STATIC,   SINGULAR, UINT32,   frame_id,          2) \
@@ -597,7 +1476,15 @@ X(a, STATIC,   OPTIONAL, MESSAGE,  thermal_summary,  29) \
 X(a, STATIC,   REPEATED, MESSAGE,  alarms,           30) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  ivt_telemetry,    31) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  energy_meter,     32) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  motion,           33)
+X(a, STATIC,   OPTIONAL, MESSAGE,  motion,           33) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  bms_telemetry,    34) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  imd_telemetry,    35) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  sop_limits,       36) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  charger_telemetry,  37) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  pdm_telemetry,    38) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  fan_telemetry,    39) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  battery_fan,      40) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  canc,             41)
 #define fsae_TelemetryFrame_CALLBACK NULL
 #define fsae_TelemetryFrame_DEFAULT NULL
 #define fsae_TelemetryFrame_modules_MSGTYPE fsae_BatteryModule
@@ -609,6 +1496,14 @@ X(a, STATIC,   OPTIONAL, MESSAGE,  motion,           33)
 #define fsae_TelemetryFrame_ivt_telemetry_MSGTYPE fsae_IvtTelemetry
 #define fsae_TelemetryFrame_energy_meter_MSGTYPE fsae_EnergyMeterTelemetry
 #define fsae_TelemetryFrame_motion_MSGTYPE fsae_MotionTelemetry
+#define fsae_TelemetryFrame_bms_telemetry_MSGTYPE fsae_BmsTelemetry
+#define fsae_TelemetryFrame_imd_telemetry_MSGTYPE fsae_ImdTelemetry
+#define fsae_TelemetryFrame_sop_limits_MSGTYPE fsae_SopLimits
+#define fsae_TelemetryFrame_charger_telemetry_MSGTYPE fsae_ChargerTelemetry
+#define fsae_TelemetryFrame_pdm_telemetry_MSGTYPE fsae_PdmTelemetry
+#define fsae_TelemetryFrame_fan_telemetry_MSGTYPE fsae_FanTelemetry
+#define fsae_TelemetryFrame_battery_fan_MSGTYPE fsae_BatteryFanTelemetry
+#define fsae_TelemetryFrame_canc_MSGTYPE fsae_CancTelemetry
 
 extern const pb_msgdesc_t fsae_PacketHeader_msg;
 extern const pb_msgdesc_t fsae_Alarm_msg;
@@ -622,6 +1517,25 @@ extern const pb_msgdesc_t fsae_ThermalSummary_msg;
 extern const pb_msgdesc_t fsae_MotorState_msg;
 extern const pb_msgdesc_t fsae_VehicleState_msg;
 extern const pb_msgdesc_t fsae_BatteryModule_msg;
+extern const pb_msgdesc_t fsae_BmsTelemetry_msg;
+extern const pb_msgdesc_t fsae_ImdTelemetry_msg;
+extern const pb_msgdesc_t fsae_SopLimits_msg;
+extern const pb_msgdesc_t fsae_ChargerTelemetry_msg;
+extern const pb_msgdesc_t fsae_PdmTelemetry_msg;
+extern const pb_msgdesc_t fsae_FanTelemetry_msg;
+extern const pb_msgdesc_t fsae_BatteryFanTelemetry_msg;
+extern const pb_msgdesc_t fsae_CancFrameStatus_msg;
+extern const pb_msgdesc_t fsae_CancCdcInfo_msg;
+extern const pb_msgdesc_t fsae_CancCdcAcceleration_msg;
+extern const pb_msgdesc_t fsae_CancCdcRotation_msg;
+extern const pb_msgdesc_t fsae_CancCdcCurrent_msg;
+extern const pb_msgdesc_t fsae_CancAbsStatus_msg;
+extern const pb_msgdesc_t fsae_CancEscStatus_msg;
+extern const pb_msgdesc_t fsae_CancIbsInfo_msg;
+extern const pb_msgdesc_t fsae_CancSasSensor_msg;
+extern const pb_msgdesc_t fsae_CancVcuRequests_msg;
+extern const pb_msgdesc_t fsae_CancVcuStatus_msg;
+extern const pb_msgdesc_t fsae_CancTelemetry_msg;
 extern const pb_msgdesc_t fsae_TelemetryFrame_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
@@ -637,19 +1551,57 @@ extern const pb_msgdesc_t fsae_TelemetryFrame_msg;
 #define fsae_MotorState_fields &fsae_MotorState_msg
 #define fsae_VehicleState_fields &fsae_VehicleState_msg
 #define fsae_BatteryModule_fields &fsae_BatteryModule_msg
+#define fsae_BmsTelemetry_fields &fsae_BmsTelemetry_msg
+#define fsae_ImdTelemetry_fields &fsae_ImdTelemetry_msg
+#define fsae_SopLimits_fields &fsae_SopLimits_msg
+#define fsae_ChargerTelemetry_fields &fsae_ChargerTelemetry_msg
+#define fsae_PdmTelemetry_fields &fsae_PdmTelemetry_msg
+#define fsae_FanTelemetry_fields &fsae_FanTelemetry_msg
+#define fsae_BatteryFanTelemetry_fields &fsae_BatteryFanTelemetry_msg
+#define fsae_CancFrameStatus_fields &fsae_CancFrameStatus_msg
+#define fsae_CancCdcInfo_fields &fsae_CancCdcInfo_msg
+#define fsae_CancCdcAcceleration_fields &fsae_CancCdcAcceleration_msg
+#define fsae_CancCdcRotation_fields &fsae_CancCdcRotation_msg
+#define fsae_CancCdcCurrent_fields &fsae_CancCdcCurrent_msg
+#define fsae_CancAbsStatus_fields &fsae_CancAbsStatus_msg
+#define fsae_CancEscStatus_fields &fsae_CancEscStatus_msg
+#define fsae_CancIbsInfo_fields &fsae_CancIbsInfo_msg
+#define fsae_CancSasSensor_fields &fsae_CancSasSensor_msg
+#define fsae_CancVcuRequests_fields &fsae_CancVcuRequests_msg
+#define fsae_CancVcuStatus_fields &fsae_CancVcuStatus_msg
+#define fsae_CancTelemetry_fields &fsae_CancTelemetry_msg
 #define fsae_TelemetryFrame_fields &fsae_TelemetryFrame_msg
 
 /* Maximum encoded size of messages (where known) */
 #define FSAE_FSAE_TELEMETRY_PB_H_MAX_SIZE        fsae_TelemetryFrame_size
 #define fsae_Alarm_size                          73
+#define fsae_BatteryFanTelemetry_size            12
 #define fsae_BatteryModule_size                  209
-#define fsae_EnergyMeterTelemetry_size           42
+#define fsae_BmsTelemetry_size                   60
+#define fsae_CancAbsStatus_size                  75
+#define fsae_CancCdcAcceleration_size            91
+#define fsae_CancCdcCurrent_size                 99
+#define fsae_CancCdcInfo_size                    91
+#define fsae_CancCdcRotation_size                91
+#define fsae_CancEscStatus_size                  83
+#define fsae_CancFrameStatus_size                64
+#define fsae_CancIbsInfo_size                    99
+#define fsae_CancSasSensor_size                  87
+#define fsae_CancTelemetry_size                  918
+#define fsae_CancVcuRequests_size                91
+#define fsae_CancVcuStatus_size                  91
+#define fsae_ChargerTelemetry_size               22
+#define fsae_EnergyMeterTelemetry_size           66
+#define fsae_FanTelemetry_size                   181
 #define fsae_FastTelemetry_size                  26
-#define fsae_IvtTelemetry_size                   42
+#define fsae_ImdTelemetry_size                   36
+#define fsae_IvtTelemetry_size                   60
 #define fsae_MotionTelemetry_size                31
 #define fsae_MotorState_size                     56
 #define fsae_PacketHeader_size                   18
-#define fsae_TelemetryFrame_size                 3007
+#define fsae_PdmTelemetry_size                   40
+#define fsae_SopLimits_size                      48
+#define fsae_TelemetryFrame_size                 6216
 #define fsae_ThermalRawChunk_size                26
 #define fsae_ThermalSensorSummary_size           132
 #define fsae_ThermalSummary_size                 540
