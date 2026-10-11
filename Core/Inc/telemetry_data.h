@@ -39,6 +39,10 @@ extern "C" {
 #define BATTERY_IVT_VALID_POWER   (1U << 5)
 #define BATTERY_IVT_VALID_AS      (1U << 6)
 #define BATTERY_IVT_VALID_ENERGY  (1U << 7)
+/* Measurements represented by the current IvtTelemetry message. */
+#define BATTERY_IVT_TELEMETRY_VALID_MASK (BATTERY_IVT_VALID_CURRENT | BATTERY_IVT_VALID_U1 | \
+                                          BATTERY_IVT_VALID_U2 | BATTERY_IVT_VALID_POWER | \
+                                          BATTERY_IVT_VALID_ENERGY)
 #define BATTERY_IVT_TIMEOUT_MS   360U
 #define BATTERY_SAMPLE_TIMEOUT_MS 350U
 #define BATTERY_STATUS_TIMEOUT_MS 2000U

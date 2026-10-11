@@ -57,6 +57,9 @@ void Publish4GTask(void *argument);
 void VehicleCanTxTask(void *argument);
 void InitTask_Boot(void *argument);
 
+/* Task-context, nonblocking USART3 log enqueue; drops logs when the queue is full. */
+void App_DebugLogString(const char *text);
+
 #ifdef __cplusplus
 }
 #endif

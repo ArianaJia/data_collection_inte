@@ -29,3 +29,6 @@ Thumbs.db
 *.swp
 *.swo
 .vscode/
+
+# Local MQTT broker credentials
+/Core/Inc/mqtt_credentials.h

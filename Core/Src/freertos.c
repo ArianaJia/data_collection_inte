@@ -51,7 +51,9 @@ typedef StaticQueue_t osStaticMessageQDef_t;
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define APP_DEBUG_LOG_ENABLED            0U
+#define APP_DEBUG_LOG_ENABLED            1U
+/* Set to 1 to restore the one-shot modem AT/MQTT bootstrap. */
+#define APP_4G_BOOTSTRAP_ENABLED         1U
 #define APP_4G_PUBLISH_LOG_ENABLED       0U
 #define APP_SPICANA_READY_CHECK_ENABLED  1U
 #define APP_SPICANA_POLL_ENABLED         1U
@@ -428,12 +430,17 @@ void StartDefaultTask(void *argument)
 
   for(;;)
   {
-	HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
+    static uint32_t led_tick;
+    if ((HAL_GetTick() - led_tick) >= 200U)
+    {
+      HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
+      led_tick = HAL_GetTick();
+    }
 #if (APP_DEBUG_LOG_ENABLED != 0U)
 	Usart3_ParseInput();
     Usart3_SendDebug();
 #endif
-    osDelay(200);
+    osDelay(1);
   }
   /* USER CODE END StartDefaultTask */
 }
@@ -826,13 +833,12 @@ void InitTask_Boot(void *argument)
   }
 #endif
 
-  /* Keep 4G bootstrap isolated while validating MCP2518FD-A/CANA bring-up.
-   * Y100M_BootstrapOnce currently faults in the USART1/4G path and can prevent
-   * queued boot logs from being flushed by defaultTask, making MCP failures look
-   * like missing logs.
-   */
+#if (APP_4G_BOOTSTRAP_ENABLED != 0U)
   App_DebugLogString("[BOOT] 4G bootstrap...\r\n");
   Y100M_BootstrapOnce();
+#else
+  App_DebugLogString("[BOOT] 4G bootstrap skipped; MQTT publish remains inactive\r\n");
+#endif
   g_bootInitDone = 1U;
   App_DebugLogString("=== Boot Init Complete ===\r\n");
   osThreadExit();
@@ -856,10 +862,16 @@ static osStatus_t App_QueueBytes(osMessageQueueId_t queue_handle, const uint8_t 
     length = APP_UART_TX_MAX_PAYLOAD;
   }
 
+  /* Protect the shared item; never wait for queue space while interrupts are masked. */
+  (void)timeout_ms;
+  taskENTER_CRITICAL();
   item->length = length;
   (void)memcpy(item->data, data, length);
 
-  return osMessageQueuePut(queue_handle, item, 0U, timeout_ms);
+  osStatus_t status = (xQueueSend((QueueHandle_t)queue_handle, item, 0U) == pdPASS)
+                      ? osOK : osErrorResource;
+  taskEXIT_CRITICAL();
+  return status;
 }
 
 static osStatus_t App_QueueText(osMessageQueueId_t queue_handle, const char *text, uint32_t timeout_ms)
@@ -877,8 +889,7 @@ void App_DebugLogString(const char *text)
 {
 #if (APP_DEBUG_LOG_ENABLED != 0U)
   /* All debug strings are funneled through the USART3 debug queue. */
-  uint32_t timeout_ms = (g_bootInitDone == 0U) ? 20U : 0U;
-  (void)App_QueueText(task01DebugQueueHandle, text, timeout_ms);
+  (void)App_QueueText(task01DebugQueueHandle, text, 0U);
 #else
   (void)text;
 #endif
@@ -909,6 +920,18 @@ static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart,
   if (status != HAL_OK)
   {
     return status;
+  }
+  /* DMA owns the debug buffer until transmission completes. */
+  start_tick = HAL_GetTick();
+  while ((HAL_UART_GetState(huart) == HAL_UART_STATE_BUSY_TX) ||
+         (HAL_UART_GetState(huart) == HAL_UART_STATE_BUSY_TX_RX))
+  {
+    if ((HAL_GetTick() - start_tick) >= 100U)
+    {
+      (void)HAL_UART_AbortTransmit(huart);
+      return HAL_TIMEOUT;
+    }
+    osDelay(1);
   }
   return HAL_OK;
 }
