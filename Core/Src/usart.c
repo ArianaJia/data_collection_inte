@@ -41,9 +41,9 @@
 #define Y100M_AT_PDP_TIMEOUT_MS         15000U
 #define Y100M_AT_MQTT_CONNACK_TIMEOUT_MS 15000U
 #define Y100M_UART3_LOG_TIMEOUT_MS      1000U
-#define Y100M_MQTT_BROKER               "82.157.204.124"
+#define Y100M_MQTT_BROKER               /*"82.157.204.124"*/ "bitfsae.com"//新网址
 #define Y100M_MQTT_PORT                 1883U
-#define Y100M_MQTT_CLIENT_ID            "STM32_DATA_COLLECTION"
+#define Y100M_MQTT_CLIENT_ID            /*"STM32_DATA_COLLECTION"*/ "vehicle_01" //新客户端ID
 /* MQTT TX must hold the MQTT fixed header, topic header/name, and one protobuf
  * payload. The thermal summary path has already reached 271 bytes on wire, so
  * keep this comfortably above the former 256-byte bring-up buffer while still
@@ -963,9 +963,18 @@ static HAL_StatusTypeDef Y100M_OpenTcpSession(void)
   HAL_StatusTypeDef status;
   uint32_t start_tick;
 
-  status = Y100M_SendAtExpect("AT+CIPSTART=\"TCP\",\"82.157.204.124\",1883",
-                              "OK",
-                              Y100M_AT_TCP_OPEN_TIMEOUT_MS);
+ char command[96];
+
+(void)snprintf(command,
+               sizeof(command),
+               "AT+CIPSTART=\"TCP\",\"%s\",%u",
+               Y100M_MQTT_BROKER,
+               (unsigned int)Y100M_MQTT_PORT);
+
+status = Y100M_SendAtExpect(command,
+                           "OK",
+                           Y100M_AT_TCP_OPEN_TIMEOUT_MS);
+                           
   if (status != HAL_OK)
   {
     return status;
