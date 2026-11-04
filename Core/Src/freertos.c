@@ -188,7 +188,7 @@ const osThreadAttr_t Publish4G_attributes = {
 };
 /* Definitions for CanBText */
 osThreadId_t CanBTextHandle;
-uint32_t CanBTextBuffer[ 128 ];
+uint32_t CanBTextBuffer[ 512 ];
 osStaticThreadDef_t CanBTextControlBlock;
 const osThreadAttr_t CanBText_attributes = {
   .name = "CanBText",
@@ -254,16 +254,16 @@ const osMessageQueueAttr_t PublishQueueItem_attributes = {
   .mq_mem = &PublishQueueItemBuffer,
   .mq_size = sizeof(PublishQueueItemBuffer)
 };
-/* Definitions for CAN_Tx_Queue */
-osMessageQueueId_t CAN_Tx_QueueHandle;
-uint8_t CAN_Tx_QueueBuffer[ 8 * sizeof( CAN_Tx_Queue_t ) ];
-osStaticMessageQDef_t CAN_Tx_QueueControlBlock;
-const osMessageQueueAttr_t CAN_Tx_Queue_attributes = {
-  .name = "CAN_Tx_Queue",
-  .cb_mem = &CAN_Tx_QueueControlBlock,
-  .cb_size = sizeof(CAN_Tx_QueueControlBlock),
-  .mq_mem = &CAN_Tx_QueueBuffer,
-  .mq_size = sizeof(CAN_Tx_QueueBuffer)
+/* Definitions for VehicleCanTxQueue */
+osMessageQueueId_t VehicleCanTxQueueHandle;
+uint8_t VehicleCanTxQueueBuffer[ 8 * sizeof( CAN_Tx_Queue_t ) ];
+osStaticMessageQDef_t VehicleCanTxQueueControlBlock;
+const osMessageQueueAttr_t VehicleCanTxQueue_attributes = {
+  .name = "VehicleCanTxQueue",
+  .cb_mem = &VehicleCanTxQueueControlBlock,
+  .cb_size = sizeof(VehicleCanTxQueueControlBlock),
+  .mq_mem = &VehicleCanTxQueueBuffer,
+  .mq_size = sizeof(VehicleCanTxQueueBuffer)
 };
 /* Definitions for task01DebugQueue */
 osMessageQueueId_t task01DebugQueueHandle;
@@ -362,8 +362,8 @@ void MX_FREERTOS_Init(void) {
   /* creation of PublishQueueItem */
   PublishQueueItemHandle = osMessageQueueNew (16, sizeof(PublishQueueItem_t), &PublishQueueItem_attributes);
 
-  /* creation of CAN_Tx_Queue */
-  CAN_Tx_QueueHandle = osMessageQueueNew (8, sizeof(CAN_Tx_Queue_t), &CAN_Tx_Queue_attributes);
+  /* creation of VehicleCanTxQueue */
+  VehicleCanTxQueueHandle = osMessageQueueNew (8, sizeof(CAN_Tx_Queue_t), &VehicleCanTxQueue_attributes);
 
   /* creation of task01DebugQueue */
   task01DebugQueueHandle = osMessageQueueNew (2, sizeof(App_Uart_Tx_Item_t), &task01DebugQueue_attributes);
@@ -779,9 +779,14 @@ void Publish4GTask(void *argument)
 void CanBTextTask(void *argument)
 {
   /* USER CODE BEGIN CanBTextTask */
-  /* Infinite loop */
+  CAN_Tx_Queue_t tx_data;
+  App_WaitForBootInit();
   for(;;)
   {
+    if (osMessageQueueGet(VehicleCanTxQueueHandle, &tx_data, NULL, osWaitForever) == osOK)
+    {
+      VehicleCan_Send(&tx_data);
+    }
     osDelay(1);
   }
   /* USER CODE END CanBTextTask */
