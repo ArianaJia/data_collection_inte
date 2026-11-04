@@ -18,6 +18,7 @@
 #include "pb_encode.h"
 #include "freertos_app.h"
 #include "usart.h"
+#include <stdio.h>
 
 #define PUBLISH_DEBUG_HEX_DUMP_ENABLED 0U
 

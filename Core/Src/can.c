@@ -18,8 +18,6 @@
 /* Includes ------------------------------------------------------------------*/
 #include "can.h"
 
-void app_can_debug_log_rx_context(const char *prefix, const CAN_ControllerContext_t *ctx);
-
 /* USER CODE BEGIN 0 */
 
 static const uint16_t g_can2_vehicle_filter_ids[] = {

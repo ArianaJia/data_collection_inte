@@ -52,10 +52,10 @@
  */
 #define Y100M_MQTT_TX_BUFFER_SIZE      1024U
 /* Text logs share the USART3 queue. Raw hex dumps are optional. */
-#define Y100M_DEBUG_LOG_ENABLED            1U
+#define Y100M_DEBUG_LOG_ENABLED            0U
 /* Restore the full startup sequence, including socket and PDP cleanup. */
 #define Y100M_CLOSE_OLD_SESSION_ENABLED    1U
-#define Y100M_DEBUG_RAW_HEX_ENABLED        0U
+#define Y100M_DEBUG_RAW_HEX_ENABLED        1U
 
 typedef struct
 {
@@ -711,7 +711,7 @@ static HAL_StatusTypeDef Y100M_SendAtExpect(const char *command, const char *exp
 {
   HAL_StatusTypeDef tx_status;
   HAL_StatusTypeDef rx_status;
-  uint16_t log_length;
+  /* uint16_t log_length; */
 
   if ((command == NULL) || (command[0] == '\0'))
   {
@@ -726,6 +726,7 @@ static HAL_StatusTypeDef Y100M_SendAtExpect(const char *command, const char *exp
 
   Y100M_Uart1DrainRx();
 
+  /* AT command logging disabled.
   log_length = (uint16_t)snprintf(g_y100mLogBuffer,
                                   sizeof(g_y100mLogBuffer),
                                   "[4G][TX] %s\r\n",
@@ -734,6 +735,7 @@ static HAL_StatusTypeDef Y100M_SendAtExpect(const char *command, const char *exp
   {
     Y100M_DebugLog(g_y100mLogBuffer);
   }
+  */
 
   tx_status = Y100M_Uart1DmaSend((const uint8_t *)command, (uint16_t)strlen(command), timeout_ms);
   if (tx_status != HAL_OK)
@@ -752,6 +754,7 @@ static HAL_StatusTypeDef Y100M_SendAtExpect(const char *command, const char *exp
                               g_y100mAtReplyBuffer,
                               (uint16_t)sizeof(g_y100mAtReplyBuffer));
 
+  /* AT command logging disabled.
   log_length = (uint16_t)snprintf(g_y100mLogBuffer,
                                   sizeof(g_y100mLogBuffer),
                                   "[4G][RX][%s] %s\r\n",
@@ -762,6 +765,7 @@ static HAL_StatusTypeDef Y100M_SendAtExpect(const char *command, const char *exp
   {
     Y100M_DebugLog(g_y100mLogBuffer);
   }
+  */
 
   return rx_status;
 }
@@ -1171,6 +1175,13 @@ void Y100M_BootstrapOnce(void)
                    (int)status);
     Y100M_DebugLog(g_y100mLogBuffer);
   }
+}
+
+/* Use only when startup configuration is deliberately bypassed. */
+void Y100M_AssumeReady(void)
+{
+  g_y100mBootstrapDone = 1U;
+  g_y100mBootstrapOk = 1U;
 }
 
 uint8_t Y100M_IsReady(void)

@@ -20,6 +20,9 @@ extern "C" {
 typedef void (*MLX90640_AppLogFn)(const char *text);
 
 void MLX90640_App_SetLogCallback(MLX90640_AppLogFn callback);
+/* Call Prepare once, then initialize/capture channels from one task. */
+void MLX90640_App_Prepare(void);
+int MLX90640_App_InitSensor(uint8_t sensor_id);
 int MLX90640_App_Init(void);
 int MLX90640_App_CaptureOnce(uint8_t sensor_id);
 int MLX90640_App_ServiceHealth(void);

@@ -102,6 +102,7 @@ I2C 转接板本身不做信号处理，只负责接口转换。板上同时放�
 ```
 之后的接线，请电气组同学完成，接不好赖他们（bushi）
 这里原理图沿用了 `SCK` 命名，实际对应 I<sup>2</sup>C 的 `SCL`。制作线束时要按功能确认，不要把它和 SPI 的 `SCK` 混在一起。由于 MLX90640 模块板上已有 4.7k 上拉，转接板保持无源连接即可。
+传感器的安装，写有四轮的标记，根据FOV的计算，已知，轮胎的长度l为190.5mm,而B型号的视场角为55°，求解得测量距离为0.5l*tan(0.5FOV),取不少于5cm即可。外壳的固定，使用魔术贴
 
 ### 4个拉力传感器RS485读取
 
@@ -660,3 +661,11 @@ TaskXX poll
 
 #对未来的希望
 在更新对接文件的时候能不能说一声，我什么都不知道，就发现通信协议天翻地覆了，我需要一个能自动推送的功能，不然真的会一直蒙在鼓里
+
+## 2026-11-04 isolation test snapshot
+
+- I2C1 clock: 50 kHz for MLX90640 communication testing.
+- 4G publish task isolated: APP_4G_PUBLISH_TASK_ENABLED = 0; the task suspends before modem initialization and publishing.
+- AT startup configuration bypassed: APP_4G_BOOTSTRAP_ENABLED = 0.
+- MLX90640 acquisition and CAN publishing remain enabled.
+- This snapshot is for hardware validation; long-term stability is not yet verified.

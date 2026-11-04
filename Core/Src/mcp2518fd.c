@@ -25,7 +25,7 @@ typedef struct
 } MCP2518FD_FilterConfig_t;
 
 #define MCP2518FD_SPI_TRANSFER_BUFFER_SIZE   (2U + MCP2518FD_OBJECT_SIZE)
-#define MCP2518FD_DEBUG_LOG_ENABLED          0U
+#define MCP2518FD_DEBUG_LOG_ENABLED          1U
 
 static HAL_StatusTypeDef MCP2518FD_Reset(MCP2518FD_Handle_t *handle);
 static HAL_StatusTypeDef MCP2518FD_Read(MCP2518FD_Handle_t *handle, uint16_t address, uint8_t *data, uint16_t length);

@@ -53,7 +53,9 @@ typedef StaticQueue_t osStaticMessageQDef_t;
 /* USER CODE BEGIN PD */
 #define APP_DEBUG_LOG_ENABLED            1U
 /* Set to 1 to restore the one-shot modem AT/MQTT bootstrap. */
-#define APP_4G_BOOTSTRAP_ENABLED         1U
+#define APP_4G_BOOTSTRAP_ENABLED         0U
+/* Set to 1 to resume modem publishing after isolation testing. */
+#define APP_4G_PUBLISH_TASK_ENABLED      0U
 #define APP_4G_PUBLISH_LOG_ENABLED       0U
 #define APP_SPICANA_READY_CHECK_ENABLED  1U
 #define APP_SPICANA_POLL_ENABLED         1U
@@ -126,7 +128,7 @@ const osThreadAttr_t CanForBMS_attributes = {
 };
 /* Definitions for MLX90640 */
 osThreadId_t MLX90640Handle;
-uint32_t MLX90640Buffer[ 1536 ];
+uint32_t MLX90640Buffer[ 384 ];
 osStaticThreadDef_t MLX90640ControlBlock;
 const osThreadAttr_t MLX90640_attributes = {
   .name = "MLX90640",
@@ -150,7 +152,7 @@ const osThreadAttr_t TensionSensor_attributes = {
 };
 /* Definitions for SPICanControl */
 osThreadId_t SPICanControlHandle;
-uint32_t SPICanControlBuffer[ 1024 ];
+uint32_t SPICanControlBuffer[ 128 ];
 osStaticThreadDef_t SPICanControlControlBlock;
 const osThreadAttr_t SPICanControl_attributes = {
   .name = "SPICanControl",
@@ -162,7 +164,7 @@ const osThreadAttr_t SPICanControl_attributes = {
 };
 /* Definitions for SPICanCDC */
 osThreadId_t SPICanCDCHandle;
-uint32_t SPICanCDCBuffer[ 1024 ];
+uint32_t SPICanCDCBuffer[ 128 ];
 osStaticThreadDef_t SPICanCDCControlBlock;
 const osThreadAttr_t SPICanCDC_attributes = {
   .name = "SPICanCDC",
@@ -174,7 +176,7 @@ const osThreadAttr_t SPICanCDC_attributes = {
 };
 /* Definitions for Publish4G */
 osThreadId_t Publish4GHandle;
-uint32_t Publish4GBuffer[ 1536 ];
+uint32_t Publish4GBuffer[ 192 ];
 osStaticThreadDef_t Publish4GControlBlock;
 const osThreadAttr_t Publish4G_attributes = {
   .name = "Publish4G",
@@ -184,21 +186,21 @@ const osThreadAttr_t Publish4G_attributes = {
   .stack_size = sizeof(Publish4GBuffer),
   .priority = (osPriority_t) osPriorityRealtime,
 };
-/* Definitions for VehicleCanTx */
-osThreadId_t VehicleCanTxHandle;
-uint32_t VehicleCanTxBuffer[ 128 ];
-osStaticThreadDef_t VehicleCanTxControlBlock;
-const osThreadAttr_t VehicleCanTx_attributes = {
-  .name = "VehicleCanTx",
-  .cb_mem = &VehicleCanTxControlBlock,
-  .cb_size = sizeof(VehicleCanTxControlBlock),
-  .stack_mem = &VehicleCanTxBuffer[0],
-  .stack_size = sizeof(VehicleCanTxBuffer),
+/* Definitions for CanBText */
+osThreadId_t CanBTextHandle;
+uint32_t CanBTextBuffer[ 128 ];
+osStaticThreadDef_t CanBTextControlBlock;
+const osThreadAttr_t CanBText_attributes = {
+  .name = "CanBText",
+  .cb_mem = &CanBTextControlBlock,
+  .cb_size = sizeof(CanBTextControlBlock),
+  .stack_mem = &CanBTextBuffer[0],
+  .stack_size = sizeof(CanBTextBuffer),
   .priority = (osPriority_t) osPriorityRealtime,
 };
 /* Definitions for initTaskBoot */
 osThreadId_t initTaskBootHandle;
-uint32_t initTaskBootBuffer[ 1536 ];
+uint32_t initTaskBootBuffer[ 384 ];
 osStaticThreadDef_t initTaskBootControlBlock;
 const osThreadAttr_t initTaskBoot_attributes = {
   .name = "initTaskBoot",
@@ -252,20 +254,20 @@ const osMessageQueueAttr_t PublishQueueItem_attributes = {
   .mq_mem = &PublishQueueItemBuffer,
   .mq_size = sizeof(PublishQueueItemBuffer)
 };
-/* Definitions for VehicleCan_Tx_Queue */
-osMessageQueueId_t VehicleCanTxQueueHandle;
-uint8_t VehicleCanTxQueueBuffer[ 8 * sizeof( CAN_Tx_Queue_t ) ];
-osStaticMessageQDef_t VehicleCanTxQueueControlBlock;
-const osMessageQueueAttr_t VehicleCanTxQueue_attributes = {
-  .name = "VehicleCan_Tx_Queue",
-  .cb_mem = &VehicleCanTxQueueControlBlock,
-  .cb_size = sizeof(VehicleCanTxQueueControlBlock),
-  .mq_mem = &VehicleCanTxQueueBuffer,
-  .mq_size = sizeof(VehicleCanTxQueueBuffer)
+/* Definitions for CAN_Tx_Queue */
+osMessageQueueId_t CAN_Tx_QueueHandle;
+uint8_t CAN_Tx_QueueBuffer[ 8 * sizeof( CAN_Tx_Queue_t ) ];
+osStaticMessageQDef_t CAN_Tx_QueueControlBlock;
+const osMessageQueueAttr_t CAN_Tx_Queue_attributes = {
+  .name = "CAN_Tx_Queue",
+  .cb_mem = &CAN_Tx_QueueControlBlock,
+  .cb_size = sizeof(CAN_Tx_QueueControlBlock),
+  .mq_mem = &CAN_Tx_QueueBuffer,
+  .mq_size = sizeof(CAN_Tx_QueueBuffer)
 };
 /* Definitions for task01DebugQueue */
 osMessageQueueId_t task01DebugQueueHandle;
-uint8_t task01DebugQueueBuffer[ DEBUG_QUEUE_DEPTH * sizeof( App_Uart_Tx_Item_t ) ];
+uint8_t task01DebugQueueBuffer[ 2 * sizeof( App_Uart_Tx_Item_t ) ];
 osStaticMessageQDef_t task01DebugQueueControlBlock;
 const osMessageQueueAttr_t task01DebugQueue_attributes = {
   .name = "task01DebugQueue",
@@ -289,6 +291,7 @@ static void VehicleCan_Send(const CAN_Tx_Queue_t *tx_data);
 static osStatus_t App_QueueBytes(osMessageQueueId_t queue_handle, const uint8_t *data, uint16_t length, uint32_t timeout_ms);
 static osStatus_t App_QueueText(osMessageQueueId_t queue_handle, const char *text, uint32_t timeout_ms);
 void App_DebugLogString(const char *text);
+void app_can_debug_log_rx_context(const char *prefix, const CAN_ControllerContext_t *ctx);
 static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart, uint8_t *data, uint16_t length);
 #if (APP_DEBUG_LOG_ENABLED != 0U)
 static void App_LogCanRxContext(const char *prefix, const CAN_ControllerContext_t *ctx);
@@ -316,7 +319,7 @@ void TensionSensorTask(void *argument);
 void SPICanControlTask(void *argument);
 void SPICanCDCTask(void *argument);
 void Publish4GTask(void *argument);
-void VehicleCanTxTask(void *argument);
+void CanBTextTask(void *argument);
 void InitTask_Boot(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
@@ -359,13 +362,11 @@ void MX_FREERTOS_Init(void) {
   /* creation of PublishQueueItem */
   PublishQueueItemHandle = osMessageQueueNew (16, sizeof(PublishQueueItem_t), &PublishQueueItem_attributes);
 
-  /* creation of VehicleCan_Tx_Queue */
-  VehicleCanTxQueueHandle = osMessageQueueNew (8, sizeof(CAN_Tx_Queue_t), &VehicleCanTxQueue_attributes);
+  /* creation of CAN_Tx_Queue */
+  CAN_Tx_QueueHandle = osMessageQueueNew (8, sizeof(CAN_Tx_Queue_t), &CAN_Tx_Queue_attributes);
 
   /* creation of task01DebugQueue */
-#if (APP_DEBUG_LOG_ENABLED != 0U)
-  task01DebugQueueHandle = osMessageQueueNew (DEBUG_QUEUE_DEPTH, sizeof(App_Uart_Tx_Item_t), &task01DebugQueue_attributes);
-#endif
+  task01DebugQueueHandle = osMessageQueueNew (2, sizeof(App_Uart_Tx_Item_t), &task01DebugQueue_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -385,23 +386,19 @@ void MX_FREERTOS_Init(void) {
   MLX90640Handle = osThreadNew(MLX90640Task, NULL, &MLX90640_attributes);
 
   /* creation of TensionSensor */
-#if (APP_TENSION_SENSOR_TASK_ENABLED != 0U)
   TensionSensorHandle = osThreadNew(TensionSensorTask, NULL, &TensionSensor_attributes);
-#endif
 
   /* creation of SPICanControl */
   SPICanControlHandle = osThreadNew(SPICanControlTask, NULL, &SPICanControl_attributes);
 
   /* creation of SPICanCDC */
-#if (APP_SPICDC_TASK_ENABLED != 0U)
   SPICanCDCHandle = osThreadNew(SPICanCDCTask, NULL, &SPICanCDC_attributes);
-#endif
 
   /* creation of Publish4G */
   Publish4GHandle = osThreadNew(Publish4GTask, NULL, &Publish4G_attributes);
 
-  /* creation of VehicleCanTx */
-  VehicleCanTxHandle = osThreadNew(VehicleCanTxTask, NULL, &VehicleCanTx_attributes);
+  /* creation of CanBText */
+  CanBTextHandle = osThreadNew(CanBTextTask, NULL, &CanBText_attributes);
 
   /* creation of initTaskBoot */
   initTaskBootHandle = osThreadNew(InitTask_Boot, NULL, &initTaskBoot_attributes);
@@ -463,6 +460,7 @@ void CanForViehcleTask(void *argument)
   {
     if(osMessageQueueGet(CAN_Msg_QueueHandle, &recv_data, NULL, pdMS_TO_TICKS(20U)) == osOK)
     {
+      app_can_debug_log_rx_context("CAN2 RX", &g_can2_ctx);
       CanVehicle_Dispatch(&recv_data);
     }
     CAN_DecodeVehicleService(HAL_GetTick());
@@ -488,6 +486,8 @@ void CanForBMSTask(void *argument)
   {
     if(osMessageQueueGet(CAN_Msg_Queue_2Handle, &recv_data, NULL, pdMS_TO_TICKS(20U)) == osOK)
     {
+      app_can_debug_log_rx_context("BAT RX",
+          recv_data.can_channel == CAN_CHANNEL_BATTERY_BOX ? &g_can1_ctx : &g_can2_ctx);
       CanBattery_Dispatch(&recv_data);
     }
     CAN_DecodeBatteryService(HAL_GetTick());
@@ -505,21 +505,33 @@ void CanForBMSTask(void *argument)
 void MLX90640Task(void *argument)
 {
   /* USER CODE BEGIN MLX90640Task */
-  uint32_t health_tick = HAL_GetTick();
+  uint32_t retry_tick[MLX90640_SENSOR_COUNT] = {0};
+  uint8_t attempted[MLX90640_SENSOR_COUNT] = {0};
 
   App_WaitForBootInit();
+  MLX90640_App_SetLogCallback(App_DebugLogString);
+  MLX90640_App_Prepare();
 
   for(;;)
   {
-    /* After boot, local acquisition and CAN output run even when MQTT is offline. */
+    /* One channel at a time: successful channels capture without waiting for
+     * the other channels to initialize. The shared I2C bus has one owner. */
+    if (!MLX90640_App_IsSensorReady(g_mlxCurrentSensor) &&
+        (!attempted[g_mlxCurrentSensor] ||
+         (HAL_GetTick() - retry_tick[g_mlxCurrentSensor]) >= 2000U))
+    {
+      (void)MLX90640_App_InitSensor(g_mlxCurrentSensor);
+      attempted[g_mlxCurrentSensor] = 1U;
+      retry_tick[g_mlxCurrentSensor] = HAL_GetTick();
+    }
     if (MLX90640_App_IsSensorReady(g_mlxCurrentSensor) != 0U)
     {
       int status = MLX90640_App_CaptureOnce(g_mlxCurrentSensor);
       if (status == MLX90640_NO_ERROR)
       {
-        // Mlx_SendSummary(g_mlxCurrentSensor);
+        Mlx_SendSummary(g_mlxCurrentSensor);
         Mlx_SendCanSummary(g_mlxCurrentSensor);
-//        Mlx_SendDebugMatrix(g_mlxCurrentSensor, MLX90640_App_GetTempMap());
+        /* Full temperature matrix logging is disabled. */
 #if (APP_MLX90640_PUBLISH_ENABLED != 0U)
         (void)Publish_QueueTopic(PUBLISH_TOPIC_THERMAL_SUMMARY);
 #endif
@@ -533,7 +545,7 @@ void MLX90640Task(void *argument)
         (void)snprintf(g_mlxLineBuffer, sizeof(g_mlxLineBuffer),
             "MLX90640 capture error, sensor=%u, status=%d\r\n",
             (unsigned int)g_mlxCurrentSensor, status);
-//        App_DebugLogString(g_mlxLineBuffer);
+        App_DebugLogString(g_mlxLineBuffer);
       }
     }
 
@@ -541,11 +553,7 @@ void MLX90640Task(void *argument)
     if (g_mlxCurrentSensor >= MLX90640_SENSOR_COUNT)
     {
       g_mlxCurrentSensor = 0U;
-      if ((HAL_GetTick() - health_tick) >= 2000U)
-      {
-        (void)MLX90640_App_ServiceHealth();
-        health_tick = HAL_GetTick();
-      }
+
     }
 
     // HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
@@ -669,12 +677,30 @@ void SPICanCDCTask(void *argument)
 void Publish4GTask(void *argument)
 {
   /* USER CODE BEGIN Publish4GTask */
+#if (APP_4G_PUBLISH_TASK_ENABLED == 0U)
+  /* Keep acquisition and CAN running without modem initialization or TX. */
+  for (;;)
+  {
+    (void)osThreadSuspend(osThreadGetId());
+    osDelay(1000U);
+  }
+#endif
   PublishQueueItem_t item;
   uint16_t frame_length = 0U;
   HAL_StatusTypeDef tx_status = HAL_OK;
   uint32_t wait_log_tick = 0U;
 
   App_WaitForBootInit();
+
+  /* Only the publishing task owns modem initialization. */
+#if (APP_4G_BOOTSTRAP_ENABLED != 0U)
+  // App_DebugLogString("[BOOT] 4G bootstrap...\r\n");
+  Y100M_BootstrapOnce();
+#else
+  Y100M_AssumeReady();
+  // App_DebugLogString("[BOOT] 4G bootstrap skipped; assuming MQTT ready, publish enabled\r\n");
+#endif
+
 
   for(;;)
   {
@@ -743,29 +769,22 @@ void Publish4GTask(void *argument)
   /* USER CODE END Publish4GTask */
 }
 
-/* USER CODE BEGIN Header_VehicleCanTxTask */
+/* USER CODE BEGIN Header_CanBTextTask */
 /**
-* @brief Function implementing the VehicleCanTx thread.
+* @brief Function implementing the CanBText thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_VehicleCanTxTask */
-void VehicleCanTxTask(void *argument)
+/* USER CODE END Header_CanBTextTask */
+void CanBTextTask(void *argument)
 {
-  /* USER CODE BEGIN VehicleCanTxTask */
-  CAN_Tx_Queue_t tx_data;
-
-  App_WaitForBootInit();
-
+  /* USER CODE BEGIN CanBTextTask */
+  /* Infinite loop */
   for(;;)
   {
-    if (osMessageQueueGet(VehicleCanTxQueueHandle, &tx_data, NULL, osWaitForever) == osOK)
-    {
-      VehicleCan_Send(&tx_data);
-    }
-    osDelay(200);
+    osDelay(1);
   }
-  /* USER CODE END VehicleCanTxTask */
+  /* USER CODE END CanBTextTask */
 }
 
 /* USER CODE BEGIN Header_InitTask_Boot */
@@ -778,7 +797,6 @@ void VehicleCanTxTask(void *argument)
 void InitTask_Boot(void *argument)
 {
   /* USER CODE BEGIN InitTask_Boot */
-  int status;
   int retry;
 
   App_DebugLogString("\r\n=== Boot Init Start ===\r\n");
@@ -787,18 +805,6 @@ void InitTask_Boot(void *argument)
   CAN_Start();
   App_DebugLogString("[BOOT] CAN start done\r\n");
 
-  App_DebugLogString("[BOOT] MLX90640 init begin\r\n");
-  status = MLX90640_App_Init();
-  if (status == MLX90640_NO_ERROR)
-  {
-    App_DebugLogString("[BOOT] MLX90640 init ok\r\n");
-  }
-  else
-  {
-    App_DebugLogString("[BOOT] MLX90640 init pending, will retry via health check\r\n");
-  }
-  App_DebugLogString("[BOOT] post-MLX delay\r\n");
-  HAL_Delay(10);//初始化就不要考虑CPU让渡问题了
   App_DebugLogString("[BOOT] MCP2518FD-A init...\r\n");
  for (retry = 0; retry < 3; retry++)
  {
@@ -833,14 +839,8 @@ void InitTask_Boot(void *argument)
   }
 #endif
 
-#if (APP_4G_BOOTSTRAP_ENABLED != 0U)
-  App_DebugLogString("[BOOT] 4G bootstrap...\r\n");
-  Y100M_BootstrapOnce();
-#else
-  App_DebugLogString("[BOOT] 4G bootstrap skipped; MQTT publish remains inactive\r\n");
-#endif
   g_bootInitDone = 1U;
-  App_DebugLogString("=== Boot Init Complete ===\r\n");
+  App_DebugLogString("=== Local Hardware Init Complete ===\r\n");
   osThreadExit();
   /* USER CODE END InitTask_Boot */
 }
@@ -1256,27 +1256,12 @@ static void Mlx_SendDebugMatrix(uint8_t sensor_id, const float *temp_map)
 
 static void Mlx_SendSummary(uint8_t sensor_id)
 {
-  char *line = g_mlxLineBuffer;
+  char line[96];
 
-  /*  *  *  *  *  *  *  *  *  *  *  *  *  *  *
-   *  摘要含义：
-   *  S：传感器编号。
-   *  Ta：环境温度，单位为 centi-Celsius。
-   *  Tr：反射温度，单位为 centi-Celsius。
-   *  R0~R3：四个区域平均温度，单位为 centi-Celsius。
-   *  C：该传感器成功完整帧计数。
-   *  *  *  *  *  *  *  *  *  *  *  *  *  *  */
-  (void)snprintf(line, APP_UART_TX_MAX_PAYLOAD,
-      "MLX90640,S=%u,Ta=%ld,Tr=%ld,R0=%ld,R1=%ld,R2=%ld,R3=%ld,C=%lu\r\n",
+  (void)snprintf(line, sizeof(line),
+      "MLX90640 capture ok, sensor=%u, frames=%lu\r\n",
       (unsigned int)sensor_id,
-      (long)g_MLX90640_Frame.Ta[sensor_id],
-      (long)g_MLX90640_Frame.Tr[sensor_id],
-      (long)g_MLX90640_Frame.RegionTemp[sensor_id][0],
-      (long)g_MLX90640_Frame.RegionTemp[sensor_id][1],
-      (long)g_MLX90640_Frame.RegionTemp[sensor_id][2],
-      (long)g_MLX90640_Frame.RegionTemp[sensor_id][3],
       (unsigned long)g_MLX90640_Frame.FrameCounter[sensor_id]);
-   
   App_DebugLogString(line);
 }
 
