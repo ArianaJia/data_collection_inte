@@ -11,23 +11,19 @@ extern "C" {
 #define MLX90640_ADDR            (0x33U << 1)
 #endif
 #define MLX90640_EMISSIVITY      0.95f
-#define MLX90640_FRAME_ATTEMPTS_MAX 4U
 #define MLX90640_FRAME_NOT_READY_ERROR 9U
 #define MLX90640_FRAME_INCOMPLETE_ERROR 10U
 #define MLX90640_LOG_BUFFER_SIZE    160U
-#define MLX90640_APP_LOCK_TIMEOUT_MS 50U
 
 typedef void (*MLX90640_AppLogFn)(const char *text);
 
 void MLX90640_App_SetLogCallback(MLX90640_AppLogFn callback);
-/* Call Prepare once, then initialize/capture channels from one task. */
+/* One task owns the shared I2C bus and scratch buffers. Prepare once, then
+ * initialize/capture each channel independently; no all-ready barrier. */
 void MLX90640_App_Prepare(void);
 int MLX90640_App_InitSensor(uint8_t sensor_id);
-int MLX90640_App_Init(void);
 int MLX90640_App_CaptureOnce(uint8_t sensor_id);
-int MLX90640_App_ServiceHealth(void);
 uint8_t MLX90640_App_IsSensorReady(uint8_t sensor_id);
-const float *MLX90640_App_GetTempMap(void);
 
 #ifdef __cplusplus
 }

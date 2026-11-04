@@ -2,6 +2,16 @@
 
 工程自有测试、编译验证与历史迁移工具统一归档在 [`test_and_fix/`](test_and_fix/README.md)，使用方式与执行条件见目录说明。
 
+## 2026-11-05 源码模块整理
+
+当前仅测试采集与 CAN：`Core/Inc/app_config.h` 中 `APP_UPLINK_ENABLED=0`。发布任务启动后退出，不执行 AT 初始化或串口上传；所有 `Publish_QueueTopic()` 调用直接返回 `osErrorResource`，不入队、不修改去重标记。保留现有 CAN 通道、MLX 逐路采集、CAN 温度摘要及调试日志配置。恢复上传时需同时确认通信后端和 AT 初始化配置。
+
+- `Core/Src/modem_at.c` 集中管理 AT 初始化、USART1 DMA 接收、TCP/MQTT 封装与发送。业务任务只使用 `Core/Inc/modem_transport.h` 的 `Modem_Init/IsReady/Send/OnRxEvent` 等接口；未来使用 DTU 时替换该实现，避免将 AT 命令重新放回 `usart.c` 或采集任务。`Modem_Send` 接收 protobuf 数据，返回前完成发送。
+- `Core/Src/app_log.c` 与 `Core/Inc/app_log.h` 管理日志格式化、非阻塞入队及 USART3 DMA 输出；默认任务调用 `App_LogProcess()`。日志队列满或格式化缓冲被其他任务占用时丢弃日志。MCP 启动诊断保留独立的阻塞输出入口，仅用于启动阶段。
+- MLX90640 仅保留 `Prepare`、逐通道 `InitSensor` 和 `CaptureOnce`；各路就绪状态、失败和重试独立，已就绪通道不等待其他通道初始化成功。共用 I2C 总线和计算缓冲，仍由单一任务顺序访问，单次访问可能受到总线超时影响。
+- 删除温度矩阵串口输出及无调用的矩阵导出接口，保留温度计算、区域摘要、CAN 报文与状态/错误日志。删除失效的拉力任务开关、旧日志队列深度及旧 MLX 配置。
+- 当前 4G 发布与 AT 启动隔离开关仍保持关闭。CubeIDE 的 `Core` 源目录会纳入新模块；重新生成构建文件后编译，或使用 `test_and_fix/build/verify_firmware.py` 验证。
+
 有 CDC 的加入，很多信号不再需要全部集中在同一块板子上，因此蔬菜盒子 v2 的硬件按功能重新拆分。当前设计同时承担两件事：一是完成胎温、CAN、485、4G 等数据采集与转发；二是保留 24V、5V、3.3V 的电源转换和分配能力，为后续把它扩展成小型电源转换平台留余量。
 
 本版硬件工程主要由以下几块组成：

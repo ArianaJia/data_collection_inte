@@ -17,7 +17,8 @@
 #include "pb_common.h"
 #include "pb_encode.h"
 #include "freertos_app.h"
-#include "usart.h"
+#include "app_log.h"
+#include "app_config.h"
 #include <stdio.h>
 
 #define PUBLISH_DEBUG_HEX_DUMP_ENABLED 0U
@@ -69,6 +70,11 @@ void Publish_Process(void)
 
 osStatus_t Publish_QueueTopic(PublishTopic_t topic)
 {
+#if (APP_UPLINK_ENABLED == 0U)
+    /* A disabled uplink must not accumulate requests or deduplication bits. */
+    (void)topic;
+    return osErrorResource;
+#else
     /* Coalesce duplicate requests so one topic is queued at most once. */
     PublishQueueItem_t item;
     uint32_t topic_mask;
@@ -100,6 +106,7 @@ osStatus_t Publish_QueueTopic(PublishTopic_t topic)
     }
 
     return status;
+#endif
 }
 
 void Publish_OnTopicDequeued(PublishTopic_t topic)
@@ -477,7 +484,7 @@ static void Publish_LogHexDump(const char *prefix, const uint8_t *data, size_t l
         line[offset] = '\0';
     }
 
-    Y100M_DebugLog(line);
+    App_LogModem(line);
 #else
     (void)prefix;
     (void)data;

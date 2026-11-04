@@ -35,8 +35,10 @@
 #include "publish.h"
 #include "spi.h"
 #include "usart.h"
+#include "modem_transport.h"
+#include "app_log.h"
+#include "app_config.h"
 #include "queue.h"
-#include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
 #include "freertos_app.h"
@@ -51,18 +53,14 @@ typedef StaticQueue_t osStaticMessageQDef_t;
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define APP_DEBUG_LOG_ENABLED            1U
 /* Set to 1 to restore the one-shot modem AT/MQTT bootstrap. */
 #define APP_4G_BOOTSTRAP_ENABLED         0U
-/* Set to 1 to resume modem publishing after isolation testing. */
-#define APP_4G_PUBLISH_TASK_ENABLED      0U
 #define APP_4G_PUBLISH_LOG_ENABLED       0U
 #define APP_SPICANA_READY_CHECK_ENABLED  1U
 #define APP_SPICANA_POLL_ENABLED         1U
 #define APP_SPICANA_DECODE_ENABLED       1U
 #define APP_SPICANA_PUBLISH_ENABLED      1U
 #define APP_MLX90640_PUBLISH_ENABLED     1U
-#define APP_TENSION_SENSOR_TASK_ENABLED  0U
 #define APP_SPICDC_TASK_ENABLED          0U
 
 /* USER CODE END PD */
@@ -74,21 +72,20 @@ typedef StaticQueue_t osStaticMessageQDef_t;
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-static App_Uart_Tx_Item_t g_debugTxItem;
-static App_Uart_Tx_Item_t g_uartQueueWorkItem;
 static volatile uint8_t g_bootInitDone = 0U;
 static uint8_t g_mlxCurrentSensor = 0U;
-static char g_mlxLineBuffer[APP_UART_TX_MAX_PAYLOAD];
 static uint8_t g_rs485DmaBuffer[RS485_DMA_BUFFER_SIZE];
 static volatile uint16_t g_rs485DmaLastEventPos = 0U;
 static volatile uint16_t g_rs485DmaPendingBytes = 0U;
 static volatile uint8_t g_rs485DmaOverflow = 0U;
 static uint16_t g_rs485DmaReadPos = 0U;
+#if APP_UPLINK_ENABLED
 static uint8_t g_publishFrameBuffer[PUBLISH_MAX_PAYLOAD_SIZE];
 static volatile uint16_t g_diagPublishPayloadLen = 0U;
 static volatile int g_diagPublishStatus = 0;
 static volatile uint32_t g_diagPublishOkCount = 0U;
 static volatile uint32_t g_diagPublishFailCount = 0U;
+#endif
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -279,8 +276,6 @@ const osMessageQueueAttr_t task01DebugQueue_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-static void Usart3_ParseInput(void);
-static void Usart3_SendDebug(void);
 static void App_WaitForBootInit(void);
 static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data);
 static void CanBattery_Dispatch(const CAN_Msg_Queue_t *recv_data);
@@ -288,16 +283,7 @@ static void Rs485_Dispatch(const Peripheral_Rx_Frame_t *recv_data);
 static void SpiCana_Dispatch(const Peripheral_Rx_Frame_t *recv_data);
 static void SpiCdc_Dispatch(const Peripheral_Rx_Frame_t *recv_data);
 static void VehicleCan_Send(const CAN_Tx_Queue_t *tx_data);
-static osStatus_t App_QueueBytes(osMessageQueueId_t queue_handle, const uint8_t *data, uint16_t length, uint32_t timeout_ms);
-static osStatus_t App_QueueText(osMessageQueueId_t queue_handle, const char *text, uint32_t timeout_ms);
-void App_DebugLogString(const char *text);
-void app_can_debug_log_rx_context(const char *prefix, const CAN_ControllerContext_t *ctx);
-static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart, uint8_t *data, uint16_t length);
-#if (APP_DEBUG_LOG_ENABLED != 0U)
-static void App_LogCanRxContext(const char *prefix, const CAN_ControllerContext_t *ctx);
-#endif
-static uint16_t App_AppendTemperature(char *buffer, uint16_t offset, uint16_t size, float temperature);
-static void Mlx_SendDebugMatrix(uint8_t sensor_id, const float *temp_map);
+
 static void Mlx_SendSummary(uint8_t sensor_id);
 static void Mlx_SendCanSummary(uint8_t sensor_id);
 static uint32_t Mlx_GetCanSummaryId(uint8_t sensor_id);
@@ -423,7 +409,6 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-//  MLX90640_App_SetLogCallback(App_DebugLogString);
 
   for(;;)
   {
@@ -433,10 +418,7 @@ void StartDefaultTask(void *argument)
       HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
       led_tick = HAL_GetTick();
     }
-#if (APP_DEBUG_LOG_ENABLED != 0U)
-	Usart3_ParseInput();
-    Usart3_SendDebug();
-#endif
+    App_LogProcess();
     osDelay(1);
   }
   /* USER CODE END StartDefaultTask */
@@ -531,7 +513,6 @@ void MLX90640Task(void *argument)
       {
         Mlx_SendSummary(g_mlxCurrentSensor);
         Mlx_SendCanSummary(g_mlxCurrentSensor);
-        /* Full temperature matrix logging is disabled. */
 #if (APP_MLX90640_PUBLISH_ENABLED != 0U)
         (void)Publish_QueueTopic(PUBLISH_TOPIC_THERMAL_SUMMARY);
 #endif
@@ -542,10 +523,9 @@ void MLX90640Task(void *argument)
       }
       else
       {
-        (void)snprintf(g_mlxLineBuffer, sizeof(g_mlxLineBuffer),
+        App_LogPrintf(
             "MLX90640 capture error, sensor=%u, status=%d\r\n",
             (unsigned int)g_mlxCurrentSensor, status);
-        App_DebugLogString(g_mlxLineBuffer);
       }
     }
 
@@ -677,14 +657,11 @@ void SPICanCDCTask(void *argument)
 void Publish4GTask(void *argument)
 {
   /* USER CODE BEGIN Publish4GTask */
-#if (APP_4G_PUBLISH_TASK_ENABLED == 0U)
-  /* Keep acquisition and CAN running without modem initialization or TX. */
-  for (;;)
-  {
-    (void)osThreadSuspend(osThreadGetId());
-    osDelay(1000U);
-  }
-#endif
+#if (APP_UPLINK_ENABLED == 0U)
+  /* Keep this guard inside USER CODE so CubeMX regeneration stays safe. */
+  (void)argument;
+  osThreadExit();
+#else
   PublishQueueItem_t item;
   uint16_t frame_length = 0U;
   HAL_StatusTypeDef tx_status = HAL_OK;
@@ -694,17 +671,14 @@ void Publish4GTask(void *argument)
 
   /* Only the publishing task owns modem initialization. */
 #if (APP_4G_BOOTSTRAP_ENABLED != 0U)
-  // App_DebugLogString("[BOOT] 4G bootstrap...\r\n");
-  Y100M_BootstrapOnce();
+  Modem_Init();
 #else
-  Y100M_AssumeReady();
-  // App_DebugLogString("[BOOT] 4G bootstrap skipped; assuming MQTT ready, publish enabled\r\n");
+  Modem_AssumeReady();
 #endif
-
 
   for(;;)
   {
-    if (Y100M_IsReady() == 0U)
+    if (Modem_IsReady() == 0U)
     {
       uint32_t now = HAL_GetTick();
       if ((APP_4G_PUBLISH_LOG_ENABLED != 0U) && ((now - wait_log_tick) >= 1000U))
@@ -724,7 +698,7 @@ void Publish4GTask(void *argument)
                              (uint16_t)sizeof(g_publishFrameBuffer), &frame_length))
       {
         g_diagPublishPayloadLen = frame_length;
-        tx_status = Y100M_MqttPublish(g_publishFrameBuffer, frame_length);
+        tx_status = Modem_Send(g_publishFrameBuffer, frame_length);
         g_diagPublishStatus = (int)tx_status;
 
         if (tx_status == HAL_OK)
@@ -735,15 +709,14 @@ void Publish4GTask(void *argument)
         else
         {
           g_diagPublishFailCount++;
-          (void)snprintf(g_mlxLineBuffer, sizeof(g_mlxLineBuffer),
+          if (APP_4G_PUBLISH_LOG_ENABLED != 0U)
+          {
+            App_LogPrintf(
                          "[PUB-DIAG] send fail len=%u status=%d ok=%lu fail=%lu\r\n",
                          (unsigned int)g_diagPublishPayloadLen,
                          g_diagPublishStatus,
                          (unsigned long)g_diagPublishOkCount,
                          (unsigned long)g_diagPublishFailCount);
-          if (APP_4G_PUBLISH_LOG_ENABLED != 0U)
-          {
-            App_DebugLogString(g_mlxLineBuffer);
           }
           osDelay(1000U);
           (void)Publish_QueueTopic(item.topic);
@@ -752,13 +725,12 @@ void Publish4GTask(void *argument)
       else
       {
         g_diagPublishFailCount++;
-        (void)snprintf(g_mlxLineBuffer, sizeof(g_mlxLineBuffer),
+        if (APP_4G_PUBLISH_LOG_ENABLED != 0U)
+        {
+          App_LogPrintf(
                        "[PUB-DIAG] build frame failed topic=%u fail=%lu\r\n",
                        (unsigned int)item.topic,
                        (unsigned long)g_diagPublishFailCount);
-        if (APP_4G_PUBLISH_LOG_ENABLED != 0U)
-        {
-          App_DebugLogString(g_mlxLineBuffer);
         }
         osDelay(1000U);
         (void)Publish_QueueTopic(item.topic);
@@ -766,6 +738,7 @@ void Publish4GTask(void *argument)
       osDelay(200);
     }
   }
+#endif
   /* USER CODE END Publish4GTask */
 }
 
@@ -852,122 +825,6 @@ void InitTask_Boot(void *argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
-static osStatus_t App_QueueBytes(osMessageQueueId_t queue_handle, const uint8_t *data, uint16_t length, uint32_t timeout_ms)
-{
-  /* Copy bytes into the shared UART queue item before posting to a mailbox. */
-  App_Uart_Tx_Item_t *item = &g_uartQueueWorkItem;
-
-  if ((queue_handle == NULL) || (data == NULL) || (length == 0U))
-  {
-    return osErrorParameter;
-  }
-
-  if (length > APP_UART_TX_MAX_PAYLOAD)
-  {
-    length = APP_UART_TX_MAX_PAYLOAD;
-  }
-
-  /* Protect the shared item; never wait for queue space while interrupts are masked. */
-  (void)timeout_ms;
-  taskENTER_CRITICAL();
-  item->length = length;
-  (void)memcpy(item->data, data, length);
-
-  osStatus_t status = (xQueueSend((QueueHandle_t)queue_handle, item, 0U) == pdPASS)
-                      ? osOK : osErrorResource;
-  taskEXIT_CRITICAL();
-  return status;
-}
-
-static osStatus_t App_QueueText(osMessageQueueId_t queue_handle, const char *text, uint32_t timeout_ms)
-{
-  /* Text is just a byte buffer with a known length. */
-  if (text == NULL)
-  {
-    return osErrorParameter;
-  }
-
-  return App_QueueBytes(queue_handle, (const uint8_t *)text, (uint16_t)strlen(text), timeout_ms);
-}
-
-void App_DebugLogString(const char *text)
-{
-#if (APP_DEBUG_LOG_ENABLED != 0U)
-  /* All debug strings are funneled through the USART3 debug queue. */
-  (void)App_QueueText(task01DebugQueueHandle, text, 0U);
-#else
-  (void)text;
-#endif
-}
-
-static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart, uint8_t *data, uint16_t length)
-{
-  uint32_t start_tick;
-
-  if ((huart == NULL) || (data == NULL) || (length == 0U))
-  {
-    return HAL_ERROR;
-  }
-
-  start_tick = HAL_GetTick();
-  while ((HAL_UART_GetState(huart) == HAL_UART_STATE_BUSY_TX) ||
-         (HAL_UART_GetState(huart) == HAL_UART_STATE_BUSY_TX_RX))
-  {
-    if ((HAL_GetTick() - start_tick) >= 20U)
-    {
-      (void)HAL_UART_AbortTransmit(huart);
-      return HAL_TIMEOUT;
-    }
-    osDelay(1);
-  }
-
-  HAL_StatusTypeDef status = HAL_UART_Transmit_DMA(huart, data, length);
-  if (status != HAL_OK)
-  {
-    return status;
-  }
-  /* DMA owns the debug buffer until transmission completes. */
-  start_tick = HAL_GetTick();
-  while ((HAL_UART_GetState(huart) == HAL_UART_STATE_BUSY_TX) ||
-         (HAL_UART_GetState(huart) == HAL_UART_STATE_BUSY_TX_RX))
-  {
-    if ((HAL_GetTick() - start_tick) >= 100U)
-    {
-      (void)HAL_UART_AbortTransmit(huart);
-      return HAL_TIMEOUT;
-    }
-    osDelay(1);
-  }
-  return HAL_OK;
-}
-
-#if (APP_DEBUG_LOG_ENABLED != 0U)
-static void App_LogCanRxContext(const char *prefix, const CAN_ControllerContext_t *ctx)
-{
-  if ((prefix == NULL) || (ctx == NULL))
-  {
-    return;
-  }
-
-  (void)snprintf(g_mlxLineBuffer, sizeof(g_mlxLineBuffer),
-      "%s ide=%lu std=0x%03lX ext=0x%08lX dlc=%lu fifo=%lu data=%02X %02X %02X %02X %02X %02X %02X %02X\r\n",
-      prefix,
-      (unsigned long)ctx->last_rx_ide,
-      (unsigned long)((ctx->last_rx_ide == CAN_ID_EXT) ? 0UL : ctx->last_rx_id),
-      (unsigned long)((ctx->last_rx_ide == CAN_ID_EXT) ? ctx->last_rx_id : 0UL),
-      (unsigned long)ctx->last_rx_dlc,
-      (unsigned long)ctx->last_rx_fifo_fill,
-      ctx->last_rx_data[0],
-      ctx->last_rx_data[1],
-      ctx->last_rx_data[2],
-      ctx->last_rx_data[3],
-      ctx->last_rx_data[4],
-      ctx->last_rx_data[5],
-      ctx->last_rx_data[6],
-      ctx->last_rx_data[7]);
-  App_DebugLogString(g_mlxLineBuffer);
-}
-#endif
 
 static void App_WaitForBootInit(void)
 {
@@ -975,16 +832,6 @@ static void App_WaitForBootInit(void)
   {
     osDelay(100U);
   }
-}
-
-void app_can_debug_log_rx_context(const char *prefix, const CAN_ControllerContext_t *ctx)
-{
-#if (APP_DEBUG_LOG_ENABLED != 0U)
-  App_LogCanRxContext(prefix, ctx);
-#else
-  (void)prefix;
-  (void)ctx;
-#endif
 }
 
 static HAL_StatusTypeDef Rs485_StartDma(void)
@@ -1146,7 +993,9 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 
   if ((huart != NULL) && (huart->Instance == USART1))
   {
-    Y100M_OnUsart1RxIdle(Size);
+#if APP_UPLINK_ENABLED
+    Modem_OnRxEvent(Size);
+#endif
   }
 }
 
@@ -1161,113 +1010,12 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
   }
 }
 
-static void Usart3_SendDebug(void)
-{
-  if (osMessageQueueGet(task01DebugQueueHandle, &g_debugTxItem, NULL, 0U) == osOK)
-  {
-    (void)App_UART_TransmitDmaBlocking(&huart3, g_debugTxItem.data, g_debugTxItem.length);
-  }
-}
-
-static uint16_t App_AppendTemperature(char *buffer, uint16_t offset, uint16_t size, float temperature)
-{
-  int32_t centiDegrees;
-  int32_t absValue;
-  uint32_t integerPart;
-  uint32_t fractionPart;
-  char temp[16];
-  uint32_t index = 0U;
-
-  if (offset >= size)
-  {
-    return offset;
-  }
-
-  if (temperature >= 0.0f)
-  {
-    centiDegrees = (int32_t)(temperature * 100.0f + 0.5f);
-  }
-  else
-  {
-    centiDegrees = (int32_t)(temperature * 100.0f - 0.5f);
-  }
-
-  absValue = (centiDegrees < 0) ? -centiDegrees : centiDegrees;
-  integerPart = (uint32_t)(absValue / 100);
-  fractionPart = (uint32_t)(absValue % 100);
-
-  if (centiDegrees < 0)
-  {
-    temp[index++] = '-';
-  }
-
-  if (integerPart >= 100U)
-  {
-    temp[index++] = (char)('0' + (integerPart / 100U) % 10U);
-  }
-  if (integerPart >= 10U)
-  {
-    temp[index++] = (char)('0' + (integerPart / 10U) % 10U);
-  }
-  temp[index++] = (char)('0' + (integerPart % 10U));
-  temp[index++] = '.';
-  temp[index++] = (char)('0' + (fractionPart / 10U));
-  temp[index++] = (char)('0' + (fractionPart % 10U));
-  temp[index++] = ' ';
-
-  for (uint32_t copyIndex = 0U; (copyIndex < index) && (offset < (size - 1U)); copyIndex++)
-  {
-    buffer[offset++] = temp[copyIndex];
-  }
-
-  buffer[offset] = '\0';
-  return offset;
-}
-
-static void Mlx_SendDebugMatrix(uint8_t sensor_id, const float *temp_map)
-{
-  char *line = g_mlxLineBuffer;
-
-  if (temp_map == NULL)
-  {
-    return;
-  }
-
-  (void)snprintf(line, MLX_LINE_BUFFER_SIZE, "----- Sensor %u Temperature Matrix -----\r\n", (unsigned int)sensor_id);
-  App_DebugLogString(line);
-
-  for (uint16_t row = 0U; row < MLX90640_LINE_NUM; row++)
-  {
-    uint16_t lineOffset = 0U;
-
-    for (uint16_t col = 0U; col < MLX90640_COLUMN_NUM; col++)
-    {
-      uint16_t pixelIndex = (uint16_t)(row * MLX90640_COLUMN_NUM + col);
-      lineOffset = App_AppendTemperature(line, lineOffset, MLX_LINE_BUFFER_SIZE, temp_map[pixelIndex]);
-    }
-
-    if (lineOffset < (MLX_LINE_BUFFER_SIZE - 2U))
-    {
-      line[lineOffset++] = '\r';
-      line[lineOffset++] = '\n';
-    }
-    line[lineOffset] = '\0';
-    App_DebugLogString(line);
-  }
-
-  (void)snprintf(line, MLX_LINE_BUFFER_SIZE, "----- Sensor %u Temperature Matrix End -----\r\n", (unsigned int)sensor_id);
-  App_DebugLogString(line);
-}
-
 static void Mlx_SendSummary(uint8_t sensor_id)
 {
-  char line[96];
-
-  (void)snprintf(line, sizeof(line),
+  App_LogPrintf(
       "MLX90640 capture ok, sensor=%u, frames=%lu\r\n",
       (unsigned int)sensor_id,
       (unsigned long)g_MLX90640_Frame.FrameCounter[sensor_id]);
-  App_DebugLogString(line);
 }
 
 static void Mlx_SendCanSummary(uint8_t sensor_id)
@@ -1292,12 +1040,12 @@ static void Mlx_SendCanSummary(uint8_t sensor_id)
   queue_status = freertos_vehicle_can_tx_queue_put(&tx_data, 0U);
   if (queue_status != osOK)
   {
-    (void)snprintf(g_mlxLineBuffer, sizeof(g_mlxLineBuffer),
+    App_LogPrintf(
         "MLX CAN queue drop, sensor=%u, id=0x%03lX, status=%ld\r\n",
         (unsigned int)sensor_id,
         (unsigned long)tx_data.std_id,
         (long)queue_status);
-    App_DebugLogString(g_mlxLineBuffer);
+
   }
 }
 
@@ -1491,11 +1239,6 @@ static void SpiCdc_Poll(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus)
   } while (received != 0U);
 }
 
-static void Usart3_ParseInput(void)
-{
-  /* USART3 parser entry. */
-}
-
 static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data)
 {
   if (recv_data == NULL)
@@ -1555,7 +1298,7 @@ static void VehicleCan_Send(const CAN_Tx_Queue_t *tx_data)
   CAN_Send_Msg(&hcan2, tx_data->std_id, (uint8_t *)tx_data->data);
   if (g_can2_ctx.last_tx_status != HAL_OK)
   {
-    (void)snprintf(g_mlxLineBuffer, sizeof(g_mlxLineBuffer),
+    App_LogPrintf(
         "CAN2 tx fail, id=0x%03lX, free=%lu, err=0x%08lX, req=%lu, drop=%lu, abort=%lu, ast=%lu, afree=%lu, aerr=0x%08lX\r\n",
         (unsigned long)tx_data->std_id,
         (unsigned long)g_can2_ctx.last_tx_free_level,
@@ -1566,7 +1309,7 @@ static void VehicleCan_Send(const CAN_Tx_Queue_t *tx_data)
         (unsigned long)g_can2_ctx.last_tx_abort_status,
         (unsigned long)g_can2_ctx.last_tx_free_after_abort,
         (unsigned long)g_can2_ctx.last_tx_error_after_abort);
-    App_DebugLogString(g_mlxLineBuffer);
+
   }
   // HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
 }

@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "freertos_app.h"
-#include "usart.h"
+#include "app_log.h"
 
 typedef struct
 {
@@ -39,7 +39,7 @@ static HAL_StatusTypeDef MCP2518FD_InitRam(MCP2518FD_Handle_t *handle, uint8_t f
 static HAL_StatusTypeDef MCP2518FD_ConfigRamAndFilters(MCP2518FD_Handle_t *handle, const uint16_t *std_filter_ids, uint8_t std_filter_count);
 #if (MCP2518FD_DEBUG_LOG_ENABLED != 0U)
 static void MCP2518FD_LogFilterRegisters(MCP2518FD_Handle_t *handle, uint8_t std_filter_count);
-static void MCP2518FD_LogImmediate(const char *text);
+
 #endif
 static void MCP2518FD_Select(MCP2518FD_Handle_t *handle);
 static void MCP2518FD_Deselect(MCP2518FD_Handle_t *handle);
@@ -273,7 +273,6 @@ HAL_StatusTypeDef MCP2518FD_PollReceive(MCP2518FD_Handle_t *handle, MCP2518FD_St
     return HAL_ERROR;
   }
   user_address = MCP2518FD_RAM_START_ADDR + (user_address & 0x0FFFU);
-
 
   if (((user_address & 0x3U) != 0U) ||
       (user_address < MCP2518FD_RAM_START_ADDR) ||
@@ -681,13 +680,13 @@ static void MCP2518FD_LogFilterRegisters(MCP2518FD_Handle_t *handle, uint8_t std
   if (MCP2518FD_ReadRegister(handle, MCP2518FD_REG_C1FLTCON0, &value) == HAL_OK)
   {
     (void)snprintf(log_line, sizeof(log_line), "[MCP-FLT] FLTCON0=0x%08lX\r\n", (unsigned long)value);
-    MCP2518FD_LogImmediate(log_line);
+    App_LogBootImmediate(log_line);
   }
 
   if (MCP2518FD_ReadRegister(handle, MCP2518FD_REG_C1MASK0, &value) == HAL_OK)
   {
     (void)snprintf(log_line, sizeof(log_line), "[MCP-FLT] MASK0=0x%08lX\r\n", (unsigned long)value);
-    MCP2518FD_LogImmediate(log_line);
+    App_LogBootImmediate(log_line);
   }
 
   if (std_filter_count > 0U)
@@ -698,20 +697,11 @@ static void MCP2518FD_LogFilterRegisters(MCP2518FD_Handle_t *handle, uint8_t std
                      sizeof(log_line),
                      "[MCP-FLT] FLTOBJ0=0x%08lX\r\n",
                      (unsigned long)value);
-      MCP2518FD_LogImmediate(log_line);
+      App_LogBootImmediate(log_line);
     }
   }
 }
 
-static void MCP2518FD_LogImmediate(const char *text)
-{
-  if ((text == NULL) || (huart3.Instance == NULL))
-  {
-    return;
-  }
-
-  (void)HAL_UART_Transmit(&huart3, (uint8_t *)text, (uint16_t)strlen(text), 100U);
-}
 #endif
 
 static void MCP2518FD_Select(MCP2518FD_Handle_t *handle)

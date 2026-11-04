@@ -9,8 +9,6 @@ extern "C" {
 #include "cmsis_os2.h"
 
 #define APP_UART_TX_MAX_PAYLOAD        288U
-#define DEBUG_QUEUE_DEPTH       32U
-#define MLX_LINE_BUFFER_SIZE    APP_UART_TX_MAX_PAYLOAD
 #define RS485_DMA_BUFFER_SIZE    256U
 #define RS485_FLAG_RX_READY      (1UL << 0)
 #define RS485_FLAG_RX_RESTART    (1UL << 1)
@@ -57,8 +55,7 @@ void Publish4GTask(void *argument);
 void CanBTextTask(void *argument);
 void InitTask_Boot(void *argument);
 
-/* Task-context, nonblocking USART3 log enqueue; drops logs when the queue is full. */
-void App_DebugLogString(const char *text);
+
 
 #ifdef __cplusplus
 }

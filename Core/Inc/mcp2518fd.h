@@ -118,8 +118,6 @@ typedef struct
   uint8_t data[64];
 } MCP2518FD_StdFrame_t;
 
-/* Diagnostic log callback – supplied by the application (freertos.c) before Init. */
-extern void App_DebugLogString(const char *text);
 
 void MCP2518FD_SetStdFilters(MCP2518FD_Handle_t *handle, const uint16_t *std_filter_ids, uint8_t std_filter_count);
 HAL_StatusTypeDef MCP2518FD_Init(MCP2518FD_Handle_t *handle, SPI_HandleTypeDef *hspi, GPIO_TypeDef *cs_port, uint16_t cs_pin);

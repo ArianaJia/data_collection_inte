@@ -1,4 +1,4 @@
-exec(open('test_and_fix/update_can_protocol.py', encoding='utf-8').read().split("p='Core/Inc/can.h'")[0])
+exec(open('test_and_fix/migrations/update_can_protocol.py', encoding='utf-8').read().split("p='Core/Inc/can.h'")[0])
 p='Core/Src/can_decode.c'
 s=read(p)
 a=s.index('static void CAN_DecodeRecalculateMotorPower(void);'); b=s.index('static void CAN_DecodeBatteryBoxStdMessage',a)

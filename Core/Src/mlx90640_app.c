@@ -184,43 +184,6 @@ int MLX90640_App_InitSensor(uint8_t sensorIndex)
   return status;
 }
 
-int MLX90640_App_Init(void)
-{
-  uint8_t initializedCount = 0U;
-
-  MLX90640_SetExtractScratch(mlx90640ExtractScratch);
-  MLX90640_I2CInit();
-
-  for (uint8_t sensorIndex = 0U; sensorIndex < MLX90640_SENSOR_COUNT; sensorIndex++)
-  {
-    int status = MLX90640_InitSensorOnChannel(sensorIndex);
-    if (status != MLX90640_NO_ERROR)
-    {
-      mlx90640SensorReady[sensorIndex] = 0U;
-      g_MLX90640_Frame.LastError[sensorIndex] = status;
-      g_MLX90640_Frame.ValidMask &= (uint8_t)(~(1U << sensorIndex));
-      continue;
-    }
-
-    mlx90640SensorReady[sensorIndex] = 1U;
-    g_MLX90640_Frame.LastError[sensorIndex] = 0;
-    initializedCount++;
-
-    (void)snprintf(mlx90640LineBuffer, sizeof(mlx90640LineBuffer),
-        "MLX90640 init ok, sensor=%u, channel=0x%02X\r\n",
-        (unsigned int)sensorIndex,
-        (unsigned int)MLX90640_GetSensorChannel(sensorIndex));
-    MLX90640_App_Log(mlx90640LineBuffer);
-  }
-
-  if (initializedCount == 0U)
-  {
-    return -MLX90640_I2C_WRITE_ERROR;
-  }
-
-  return MLX90640_NO_ERROR;
-}
-
 int MLX90640_App_CaptureOnce(uint8_t sensorIndex)
 {
   float ta = 0.0f;
@@ -234,7 +197,7 @@ int MLX90640_App_CaptureOnce(uint8_t sensorIndex)
 
   if (mlx90640SensorReady[sensorIndex] == 0U)
   {
-    return g_MLX90640_Frame.LastError[sensorIndex];
+    return -MLX90640_I2C_WRITE_ERROR;
   }
 
   status = MLX90640_SelectReadySensor(sensorIndex);
@@ -254,6 +217,9 @@ int MLX90640_App_CaptureOnce(uint8_t sensorIndex)
       return status;
     }
 
+    mlx90640SensorReady[sensorIndex] = 0U;
+    mlx90640SubPageMask[sensorIndex] = 0U;
+    g_MLX90640_Frame.ValidMask &= (uint8_t)~(1U << sensorIndex);
     g_MLX90640_Frame.LastError[sensorIndex] = status;
     return status;
   }
@@ -273,6 +239,9 @@ int MLX90640_App_CaptureOnce(uint8_t sensorIndex)
         (int)MLX90640_GetLastHalStatus(),
         (unsigned long)MLX90640_GetLastErrorCode());
     MLX90640_App_Log(mlx90640LineBuffer);
+    mlx90640SensorReady[sensorIndex] = 0U;
+    mlx90640SubPageMask[sensorIndex] = 0U;
+    g_MLX90640_Frame.ValidMask &= (uint8_t)~(1U << sensorIndex);
     g_MLX90640_Frame.LastError[sensorIndex] = status;
     return status;
   }
@@ -316,30 +285,6 @@ int MLX90640_App_CaptureOnce(uint8_t sensorIndex)
   return MLX90640_NO_ERROR;
 }
 
-int MLX90640_App_ServiceHealth(void)
-{
-  for (uint8_t sensorIndex = 0U; sensorIndex < MLX90640_SENSOR_COUNT; sensorIndex++)
-  {
-    if (mlx90640SensorReady[sensorIndex] != 0U)
-    {
-      continue;
-    }
-
-    int status = MLX90640_InitSensorOnChannel(sensorIndex);
-    if (status != MLX90640_NO_ERROR)
-    {
-      g_MLX90640_Frame.LastError[sensorIndex] = status;
-      g_MLX90640_Frame.ValidMask &= (uint8_t)(~(1U << sensorIndex));
-      continue;
-    }
-
-    mlx90640SensorReady[sensorIndex] = 1U;
-    g_MLX90640_Frame.LastError[sensorIndex] = 0;
-  }
-
-  return MLX90640_NO_ERROR;
-}
-
 uint8_t MLX90640_App_IsSensorReady(uint8_t sensorIndex)
 {
   if (sensorIndex >= MLX90640_SENSOR_COUNT)
@@ -348,11 +293,6 @@ uint8_t MLX90640_App_IsSensorReady(uint8_t sensorIndex)
   }
 
   return mlx90640SensorReady[sensorIndex];
-}
-
-const float *MLX90640_App_GetTempMap(void)
-{
-  return mlx90640Runtime.TempMap[g_MLX90640_Frame.ActiveSensorId];
 }
 
 static int32_t MLX90640_TempToCentiC(float tempC)
