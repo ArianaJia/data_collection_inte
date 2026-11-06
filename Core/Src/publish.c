@@ -1,10 +1,4 @@
-/* Publish converts the shared telemetry caches into protobuf payloads and
- * hands topic requests to the Publish4G task.
-/* Publish converts telemetry state into protobuf payloads. The current Route-A
- * debug path intentionally emits one minimal TelemetryFrame carrying only a
- * fixed motion.gps_speed_kmh value so the 4G uplink can be validated without
- * depending on any other subsystem state.
- */
+/* Encode telemetry as protobuf; modem_dtu.c adds transport framing. */
 #include "publish.h"
 
 #include "FreeRTOS.h"
@@ -126,9 +120,9 @@ bool Publish_BuildFrame(PublishTopic_t topic, uint8_t *frame_buffer, uint16_t fr
 {
     size_t payload_size = 0U;
 
-    /* Route A uplink publishes raw protobuf to one MQTT topic and does not use
-     * the legacy FS wrapper. The selected topic decides which protobuf message
-     * is encoded from the live telemetry caches.
+    /* Return protobuf only. The transport adds AA55/length/sequence/CRC.
+     * The selected topic chooses fields from live telemetry caches; all
+     * frames use the MQTT publish topic configured on the DTU.
      */
     if ((frame_buffer == NULL) || (frame_size == NULL))
     {

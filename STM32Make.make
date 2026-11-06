@@ -75,6 +75,15 @@ endif
 ######################################
 # C sources
 C_SOURCES =  \
+Core/Src/app_log.c \
+Core/Src/fdcan.c \
+Core/Src/fsae_telemetry.pb.c \
+Core/Src/mcp2518fd.c \
+Core/Src/modem_dtu.c \
+Core/Src/pb_common.c \
+Core/Src/pb_decode.c \
+Core/Src/pb_encode.c \
+Core/Src/publish.c \
 Core/Src/MLX90640_API.c \
 Core/Src/MLX90640_I2C_Driver.c \
 Core/Src/can.c \

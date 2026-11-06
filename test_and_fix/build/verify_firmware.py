@@ -1,7 +1,7 @@
 """Compile and link firmware with ARM GCC, without generated IDE makefiles.
 
 Run from any directory. Outputs go to build/refactor_verify; never flashes hardware.
-Requires ARM GCC 11+; MQTT credentials are needed only with uplink enabled.
+Requires ARM GCC 11+; DTU firmware requires no MCU-side MQTT credentials.
 """
 from pathlib import Path
 import argparse
@@ -16,6 +16,7 @@ OUT = ROOT / "build" / "refactor_verify"
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cc", default="arm-none-eabi-gcc", help="ARM GCC executable (GCC 11 or newer)")
+    parser.add_argument("--uplink", choices=["0", "1"], help="Override APP_UPLINK_ENABLED")
     args = parser.parse_args()
     cc = shutil.which(args.cc)
     if not cc:
@@ -39,6 +40,8 @@ def main():
                    "-O0", "-g3", "-ffunction-sections", "-fdata-sections", "-Wall",
                    "-Werror=implicit-function-declaration", "-fstack-usage",
                    "--specs=nano.specs"] + ["-I" + p for p in includes]
+    if args.uplink is not None:
+        flags.append("-DAPP_UPLINK_ENABLED=" + args.uplink)
     objects = []
     for source in sources:
         obj = OUT / Path(source).with_suffix(".o")

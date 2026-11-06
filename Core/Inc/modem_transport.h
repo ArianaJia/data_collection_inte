@@ -4,12 +4,11 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Single task owns Init/Send. Send consumes a protobuf payload synchronously.
- * modem_at.c supplies AT/TCP/MQTT framing. A future DTU backend must implement
- * these same functions and replace modem_at.c in the build (not coexist).
- * OnRxEvent is called from the UART1 DMA/IDLE ISR callback. */
+/* Single publishing task owns Init/Send and the static DMA buffer.
+ * Send adds AA55/length/sequence/CRC and waits for UART completion.
+ * IsReady reports local UART readiness, not MQTT connectivity or delivery.
+ * DTU owns MQTT; downlink commands are currently ignored. */
 void Modem_Init(void);
-void Modem_AssumeReady(void);
 uint8_t Modem_IsReady(void);
 HAL_StatusTypeDef Modem_Send(const uint8_t *payload, uint16_t length);
 void Modem_OnRxEvent(uint16_t size);

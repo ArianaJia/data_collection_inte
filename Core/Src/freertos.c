@@ -53,8 +53,6 @@ typedef StaticQueue_t osStaticMessageQDef_t;
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-/* Set to 1 to restore the one-shot modem AT/MQTT bootstrap. */
-#define APP_4G_BOOTSTRAP_ENABLED         0U
 #define APP_4G_PUBLISH_LOG_ENABLED       0U
 #define APP_SPICANA_READY_CHECK_ENABLED  1U
 #define APP_SPICANA_POLL_ENABLED         1U
@@ -670,11 +668,7 @@ void Publish4GTask(void *argument)
   App_WaitForBootInit();
 
   /* Only the publishing task owns modem initialization. */
-#if (APP_4G_BOOTSTRAP_ENABLED != 0U)
   Modem_Init();
-#else
-  Modem_AssumeReady();
-#endif
 
   for(;;)
   {
@@ -683,7 +677,7 @@ void Publish4GTask(void *argument)
       uint32_t now = HAL_GetTick();
       if ((APP_4G_PUBLISH_LOG_ENABLED != 0U) && ((now - wait_log_tick) >= 1000U))
       {
-        App_DebugLogString("[4G-PUB] waiting for MQTT ready\r\n");
+        App_DebugLogString("[4G-PUB] waiting for DTU UART ready\r\n");
         wait_log_tick = now;
       }
       osDelay(100);

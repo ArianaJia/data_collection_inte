@@ -8,13 +8,13 @@ STM32F407ZET6 数据采集工程：MLX90640 胎温采集、原生 CAN1/CAN2、MC
 
 ## 当前运行模式
 
-当前仅测试采集与 CAN：`Core/Inc/app_config.h` 中 `APP_UPLINK_ENABLED=0`。发布任务启动后退出，不执行 AT 初始化或串口上传；所有 `Publish_QueueTopic()` 调用直接返回 `osErrorResource`，不入队、不修改去重标记。保留现有 CAN 通道、MLX 逐路采集、CAN 温度摘要及调试日志配置。恢复上传时需同时确认通信后端和 AT 初始化配置。
+当前默认启用 DTU 上传：`Core/Inc/app_config.h` 中 `APP_UPLINK_ENABLED=1`。MCU 通过 USART1（115200 8N1）向已配置为 MQTT 模式的 DTU 发送封包；DTU 管理服务器连接、认证和重连。设为 0 可恢复仅本地采集模式。
 
-- `Core/Src/modem_at.c` 集中管理 AT 初始化、USART1 DMA 接收、TCP/MQTT 封装与发送。业务任务只使用 `Core/Inc/modem_transport.h` 的 `Modem_Init/IsReady/Send/OnRxEvent` 等接口；未来使用 DTU 时替换该实现，避免将 AT 命令重新放回 `usart.c` 或采集任务。`Modem_Send` 接收 protobuf 数据，返回前完成发送。
+- `Core/Src/modem_dtu.c` 替换原 AT 后端，`Modem_Send` 接收 Protobuf，添加 `AA 55 | payload_len(u16 LE) | seq(u8) | payload | CRC16(u16 LE)`，通过 DMA 发送并等待完成。CRC 使用 MODBUS CRC16，初值 0xFFFF，覆盖长度、序号和 payload。MCU 不再保存 MQTT 凭据，也不发送 AT 或 MQTT 协议包。
 - `Core/Src/app_log.c` 与 `Core/Inc/app_log.h` 管理日志格式化、非阻塞入队及 USART3 DMA 输出；默认任务调用 `App_LogProcess()`。日志队列满或格式化缓冲被其他任务占用时丢弃日志。MCP 启动诊断保留独立的阻塞输出入口，仅用于启动阶段。
 - MLX90640 仅保留 `Prepare`、逐通道 `InitSensor` 和 `CaptureOnce`；各路就绪状态、失败和重试独立，已就绪通道不等待其他通道初始化成功。共用 I2C 总线和计算缓冲，仍由单一任务顺序访问，单次访问可能受到总线超时影响。
 - 删除温度矩阵串口输出及无调用的矩阵导出接口，保留温度计算、区域摘要、CAN 报文与状态/错误日志。删除失效的拉力任务开关、旧日志队列深度及旧 MLX 配置。
-- 当前 4G 发布与 AT 启动隔离开关仍保持关闭。CubeIDE 的 `Core` 源目录会纳入新模块；重新生成构建文件后编译，或使用 `test_and_fix/build/verify_firmware.py` 验证。
+- 当前启用 DTU 发布。CubeIDE 的 `Core` 源目录会纳入新模块；重新生成构建文件后编译，或使用 `test_and_fix/build/verify_firmware.py` 验证。
 
 | 链路 | 当前状态 | 主要入口 |
 |---|---|---|
@@ -25,11 +25,11 @@ STM32F407ZET6 数据采集工程：MLX90640 胎温采集、原生 CAN1/CAN2、MC
 | SPI3 / MCP2518FD-B / CDC | 初始化关闭；任务已创建，但未就绪时不读取 | `SPICanCDCTask` |
 | USART2 / RS485 | 接收任务已创建，业务解析仍为预留入口 | `TensionSensorTask` |
 | USART3 / 日志 | 启用，队列输出；不输出温度矩阵 | `App_LogProcess` |
-| USART1 / 4G | 上传关闭，AT 实现被编译开关隔离，无需 MQTT 凭据 | `APP_UPLINK_ENABLED=0` |
+| USART1 / 4G | DTU 串口封包上传，无需 MCU 端 MQTT 凭据 | `APP_UPLINK_ENABLED=1` |
 
 ## Core 文件关系
 
-下图表示主要调用及数据流，不是全部 `#include` 关系。实线表示当前采集路径，虚线表示可选上传、诊断调用或共享配置；标注“关闭”的链路当前不会执行上传。
+下图表示主要调用及数据流，不是全部 `#include` 关系。实线表示当前采集路径，虚线表示可选上传、诊断调用或共享配置。
 
 ```mermaid
 flowchart TD
@@ -63,9 +63,9 @@ flowchart TD
     log --> uart3["usart.c/.h<br/>USART3 日志输出"]
 
     data -.-> pub["publish.c/.h<br/>缓存映射、protobuf 编码"]
-    rt -.->|"上传关闭"| pub
+    rt -.->|"DTU 上传"| pub
     pub --> pb["fsae_telemetry.pb.c/.h<br/>pb_encode / pb_common / pb.h"]
-    rt -.->|"Modem 接口，当前关闭"| modem["modem_transport.h → modem_at.c<br/>AT、TCP、MQTT"]
+    rt -.->|"Modem 接口"| modem["modem_transport.h → modem_dtu.c<br/>DTU 二进制封包"]
     cfg -.-> pub
     cfg -.-> modem
     modem -.-> log
@@ -81,7 +81,7 @@ flowchart TD
 | MCP2518FD 寄存器或 SPI 通道映射 | `mcp2518fd.c/.h`、`fdcan.c/.h`、`spi.c/.h` |
 | MLX 通道重试、采样和摘要 | `mlx90640_app.c/.h`、`freertos.c`；总线选路和恢复在 `MLX90640_I2C_Driver.c/.h`，算法在 `MLX90640_API.c/.h` |
 | 日志输出方式或开关 | `app_log.c/.h`；USART3 硬件配置在 `usart.c/.h` |
-| 从 AT 模块切换 DTU | 实现 `modem_transport.h` 的接口并替换 `modem_at.c`；保留 `publish.c` 的 protobuf 编码边界 |
+| 从 AT 模块切换 DTU | 已由 `modem_dtu.c` 实现串口封包；保留 `publish.c` 的 protobuf 编码边界 |
 | 遥测协议 | 修改 `test_and_fix/communication/fsae_telemetry.proto` 与 `.options`，重新生成 `Core/Inc/fsae_telemetry.pb.h` 和 `Core/Src/fsae_telemetry.pb.c`，再调整 `publish.c` |
 | 启动、中断和 HAL 支撑 | `Core/Startup`、`system_stm32f4xx.c`、`stm32f4xx_it.c/.h`、`stm32f4xx_hal_msp.c`、`stm32f4xx_hal_timebase_tim.c`、`stm32f4xx_hal_conf.h` |
 | C 运行库支撑与兼容接口 | `syscalls.c`、`sysmem.c`；`battery.h` 仅转引 `telemetry_data.h`，新代码直接包含后者 |
@@ -90,13 +90,27 @@ flowchart TD
 
 ### 构建与验证
 
-在 STM32CubeIDE 中重新生成构建文件后编译，确保新增的 `app_log.c`、`modem_at.c` 被纳入。也可从工程根目录执行：
+在 STM32CubeIDE 中重新生成构建文件后编译，确保新增的 `app_log.c`、`modem_dtu.c` 被纳入。也可从工程根目录执行：
 
 ```powershell
 python test_and_fix/build/verify_firmware.py --cc "ARM GCC 11 或更新版本的 arm-none-eabi-gcc 路径"
 ```
 
-验证工具自动补齐 `Core/Src` 中的源码，产物位于 `build/refactor_verify/`，不烧录硬件。`APP_UPLINK_ENABLED=0` 时不需要 MQTT 凭据；恢复上传前需配置本地 `mqtt_credentials.h` 并核对 AT 启动开关。编译通过不代表实机通信已验证。
+验证工具自动补齐 `Core/Src` 中的源码，产物位于 `build/refactor_verify/`，不烧录硬件。DTU 后端不依赖 `mqtt_credentials.h`；服务器账号与密码仅在 DTU 配置。编译通过不代表实机通信已验证。
+
+## DTU 固件适配（2026-11-06）
+
+此次改动针对 DTU MQTT 固件，不兼容原标准 AT 固件。现有 Protobuf 定义、字段映射及采集通道保持不变。使用现有 USART1 电气接口接入模块，未将参考 G473 的 USART2/RS485 引脚配置移植到 F407；如使用外置 RS485 DTU，需另行匹配收发器及方向控制。
+
+DTU 参数：MQTT 3.1.1，`bitfsae.com:1883`，账号 `vehicle_gateway`，独立 Client ID，发布 `fsae/telemetry`，订阅 `fsae/command`，QoS 0，Clean Session 开启，串口 115200 8N1。密码在设备中填写。保持二进制透传，禁用自定义头尾、HEX/JSON 转换。服务器使用 `telemetry_bridge` 重组和校验后发布至 `fsae/telemetry/v1`。
+
+- `Modem_IsReady` 仅表示本地 UART/DMA 可发送；发送成功计数仅表示串口发送完成，不表示 DTU 在线或服务器收到。网络启动、掉线重连和缓存由 DTU 处理，启动期间的帧可能丢失。
+- 单一发布任务持有静态发送缓冲。DMA 超时按最大帧串口耗时加 200 ms 计算，超时中止发送，下一帧由服务器重新同步。序号在 DMA 成功启动后递增并在 255 后回绕。
+- 保留当前发布调度及其 200 ms 末尾延迟；本次没有提高上传频率。
+- 下行命令未实现：DTU 可订阅命令，但本固件不解析或执行车辆控制命令。
+- 上板验收：抓取 USART1，确认首字节 AA 55、长度及 CRC；确认服务器 `frames_ok/framed_ok` 增长、CRC 错误不增长，并核对解码值。断网恢复需实测 DTU 行为。本次不烧录、不发送车辆控制指令。
+
+共享协议：[transport.md](https://github.com/BITFSAE/vehicle-interfaces/blob/main/telemetry/docs/transport.md)。
 
 ## 硬件制作
 
@@ -442,11 +456,11 @@ Suspension_InfoDef
 
 1. 从 `telemetry_data` 中取出已经解码好的业务数据；
 2. 通过 nanopb（`pb_encode.c/pb_common.c` 及生成的 `fsae_telemetry.pb.c/.h`）序列化为 protobuf；
-3. `modem_at.c` 负责 AT 建连、MQTT CONNECT/PUBLISH 封装与响应处理，通过 USART1 交给模块的 TCP 连接发送。
+3. `modem_dtu.c` 负责 AT 建连、MQTT CONNECT/PUBLISH 封装与响应处理，通过 USART1 交给模块的 TCP 连接发送。
 
 `publish.c` 负责遥测内容，不直接管理 USART 或 AT 命令：
 
-- 发布请求去重与入队（上传关闭时直接返回）
+- 发布请求去重与入队（DTU 上传时直接返回）
 - 将内部缓存映射到 protobuf 结构体
 - 调用 `pb_encode()` 完成编码
 - 将编码结果交给上传任务，由任务调用通信后端
@@ -469,7 +483,7 @@ Suspension_InfoDef
   -> PublishQueueItem stores PublishQueueItem_t
   -> Publish4GTask dequeues one topic
   -> Publish_BuildFrame() fills protobuf payload
-  -> Modem_Send() in modem_at.c
+  -> Modem_Send() in modem_dtu.c
   -> AT+CIPSEND over USART1
   -> 4G module
 ```
@@ -568,7 +582,7 @@ ISR / poll
 2. 对就绪通道采样，收齐两个 subpage 后形成完整温度帧；
 3. 输出成功/失败状态日志，不再输出温度矩阵；
 4. 每路完整帧生成 CANB 温度摘要；
-5. 每路成功采集后请求 `thermal_summary` 发布；当前上传关闭，这些请求直接返回，不入队。
+5. 每路成功采集后请求 `thermal_summary` 发布；当前DTU 上传，这些请求直接返回，不入队。
 
 各通道状态独立，但共用 I2C 总线及计算缓冲，由单一任务顺序访问。
 
