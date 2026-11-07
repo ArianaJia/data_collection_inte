@@ -8,7 +8,6 @@
 #include <string.h>
 
 static uint8_t ready;
-static uint8_t sequence;
 static uint8_t tx[PUBLISH_MAX_PAYLOAD_SIZE + 7U];
 
 void Modem_Init(void)
@@ -20,7 +19,7 @@ uint8_t Modem_IsReady(void) { return ready; }
 /* Downlink control is not implemented in this acquisition firmware. */
 void Modem_OnRxEvent(uint16_t size) { (void)size; }
 
-HAL_StatusTypeDef Modem_Send(const uint8_t *payload, uint16_t length)
+HAL_StatusTypeDef Modem_Send(const uint8_t *payload, uint16_t length, uint8_t sequence)
 {
   uint16_t crc = 0xFFFFU;
   HAL_StatusTypeDef status;
@@ -44,8 +43,6 @@ HAL_StatusTypeDef Modem_Send(const uint8_t *payload, uint16_t length)
   tx[length + 6U] = (uint8_t)(crc >> 8);
   status = HAL_UART_Transmit_DMA(&huart1, tx, (uint16_t)(length + 7U));
   if (status != HAL_OK) return status;
-  /* Once DMA starts, consume the sequence even if the frame is truncated. */
-  ++sequence;
   start = HAL_GetTick();
   while (huart1.gState != HAL_UART_STATE_READY)
   {
@@ -63,10 +60,11 @@ HAL_StatusTypeDef Modem_Send(const uint8_t *payload, uint16_t length)
 void Modem_Init(void) {}
 uint8_t Modem_IsReady(void) { return 0U; }
 void Modem_OnRxEvent(uint16_t size) { (void)size; }
-HAL_StatusTypeDef Modem_Send(const uint8_t *payload, uint16_t length)
+HAL_StatusTypeDef Modem_Send(const uint8_t *payload, uint16_t length, uint8_t sequence)
 {
   (void)payload;
   (void)length;
+  (void)sequence;
   return HAL_ERROR;
 }
 #endif

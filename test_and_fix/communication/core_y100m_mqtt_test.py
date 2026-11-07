@@ -5,7 +5,7 @@ DTU 须预先设置 MQTT bitfsae.com:1883，发布 fsae/telemetry，订阅
 fsae/command，串口 115200 8N1，保持原始二进制透传。认证在 DTU 配置。
 脚本不发送 AT、不建立 MQTT 连接、不自动切换服务器、不添加 CRLF。
 PC 通过匹配电平的 USB-UART 接入模块 UART；测试时断开 MCU TX，避免争用。
-默认 10 帧GPS 速度及待行驶状态（ready_to_drive=1）；不会自动消耗测试套餐。--count 0 持续发送。
+默认 10 帧GPS 速度，ready_to_drive=0（无 ECU 源）；不会自动消耗测试套餐。--count 0 持续发送。
 依赖：pip install pyserial protobuf；另需 protoc（可用 --protoc 指定）。
 """
 import argparse
@@ -58,14 +58,17 @@ def build_wire_frame(payload, sequence):
     return b"\xaa\x55" + body + struct.pack("<H", crc16_modbus(body))
 
 
-def gps_payload(frame_class, timestamp_ms, speed):
-    """直接编码 GPS 速度和已准备好行驶状态，不附加其他遥测字段。"""
+def gps_payload(frame_class, speed, seq):
     frame = frame_class()
-    frame.timestamp_ms = timestamp_ms & 0xFFFFFFFF
+    frame.timestamp_ms = int(time.time() * 1000) & 0xFFFFFFFF
+    frame.frame_id = seq
     frame.header.timestamp_ms = frame.timestamp_ms
+    frame.header.seq = seq          # 与 frame_id 一致，和固件同源
+    frame.header.source_id = 1      # 固件硬编码 1
     frame.motion.gps_speed_kmh = speed
-    frame.ready_to_drive = 1
+    # frame.ready_to_drive = 0      # 见下面第 4 点
     return frame.SerializeToString()
+
 
 
 def show_rx(port):
@@ -84,7 +87,7 @@ def main(argv=None):
     parser.add_argument("--interval", type=float, default=0.21,
                         help="串口预计发送完成后的间隔秒数；默认模拟 MCU 的 10+200ms 延迟")
     parser.add_argument("--speed", type=int, default=None, help="固定车速 km/h；不指定则每帧随机 1..120，连续帧不重复")
-    parser.add_argument("--sequence", type=int, default=0, help="外层起始序号 0..255")
+    parser.add_argument("--sequence", type=int, default=0, help="起始序号 0..255，实际 frame_id/序号从该值+1 起（对齐固件）")
     parser.add_argument("--payload-file", type=Path, help="已有的裸 TelemetryFrame Protobuf 二进制；不可带 AA55 或 MQTT 头")
     parser.add_argument("--protoc", default="protoc")
     parser.add_argument("--dry-run", action="store_true", help="仅编码和打印，不打开串口")
@@ -102,7 +105,6 @@ def main(argv=None):
     port = None
     sent = total = 0
     previous_speed = None
-    start = time.monotonic()
     try:
         frame_class = None if args.listen_only else load_frame_class(args.protoc)
         payload = None
@@ -120,7 +122,7 @@ def main(argv=None):
         print("DTU MQTT 模式：bitfsae.com:1883，发布 fsae/telemetry，订阅 fsae/command")
         print("串口写入成功不代表 MQTT 发布成功；请在服务器确认接收。")
         if not args.payload_file and not args.listen_only:
-            print("直接发送 motion.gps_speed_kmh 和 ready_to_drive=1；frame_id/header.seq/source_id 保持当前 MCU 默认值 0。")
+            print("直接发送 motion.gps_speed_kmh；frame_id/header.seq 与帧号一致，header.source_id=1，ready_to_drive=0。")
         while args.listen_only or args.count == 0 or sent < args.count:
             if args.listen_only:
                 show_rx(port)
@@ -130,11 +132,12 @@ def main(argv=None):
             if payload is None and speed is None:
                 speed = random.choice([value for value in range(1, 121) if value != previous_speed])
                 previous_speed = speed
+            counter = args.sequence + sent + 1  # 帧号从 1 起，对齐固件 ++g_frame_counter
+            sequence = counter & 0xFF           # 外层线帧序号字节（0..255 回绕）
             data = payload if payload is not None else gps_payload(
-                frame_class, int((time.monotonic() - start) * 1000), speed)
+                frame_class, speed, counter)
             if payload is None:
-                print(f"motion.gps_speed_kmh={speed} km/h，ready_to_drive=1", flush=True)
-            sequence = (args.sequence + sent) & 0xFF
+                print(f"motion.gps_speed_kmh={speed} km/h，ready_to_drive=0", flush=True)
             wire = build_wire_frame(data, sequence)
             tx_start = time.monotonic()
             if port is not None:

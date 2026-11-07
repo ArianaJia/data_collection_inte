@@ -10,7 +10,7 @@ STM32F407ZET6 数据采集工程：MLX90640 胎温采集、原生 CAN1/CAN2、MC
 
 当前默认启用 DTU 上传：`Core/Inc/app_config.h` 中 `APP_UPLINK_ENABLED=1`。MCU 通过 USART1（115200 8N1）向已配置为 MQTT 模式的 DTU 发送封包；DTU 管理服务器连接、认证和重连。设为 0 可恢复仅本地采集模式。
 
-- `Core/Src/modem_dtu.c` 替换原 AT 后端，`Modem_Send` 接收 Protobuf，添加 `AA 55 | payload_len(u16 LE) | seq(u8) | payload | CRC16(u16 LE)`，通过 DMA 发送并等待完成。CRC 使用 MODBUS CRC16，初值 0xFFFF，覆盖长度、序号和 payload。MCU 不再保存 MQTT 凭据，也不发送 AT 或 MQTT 协议包。
+- `Core/Src/modem_dtu.c` 替换原 AT 后端，`Modem_Send` 接收 Protobuf，添加 `AA 55 | payload_len(u16 LE) | seq(u8) | payload | CRC16(u16 LE)`，通过 DMA 发送并等待完成。CRC 使用 MODBUS CRC16，初值 0xFFFF，覆盖长度、序号和 payload。所有主题共用从 1 起的帧号，`frame_id=header.seq`、`header.source_id=1`，外层 seq 取帧号低 8 位。UART 发送完成后间隔 10+200 ms；发送失败后的新尝试使用新帧号。MCU 不再保存 MQTT 凭据，也不发送 AT 或 MQTT 协议包。
 - `Core/Src/app_log.c` 与 `Core/Inc/app_log.h` 管理日志格式化、非阻塞入队及 USART3 DMA 输出；默认任务调用 `App_LogProcess()`。日志队列满或格式化缓冲被其他任务占用时丢弃日志。MCP 启动诊断保留独立的阻塞输出入口，仅用于启动阶段。
 - MLX90640 仅保留 `Prepare`、逐通道 `InitSensor` 和 `CaptureOnce`；各路就绪状态、失败和重试独立，已就绪通道不等待其他通道初始化成功。共用 I2C 总线和计算缓冲，仍由单一任务顺序访问，单次访问可能受到总线超时影响。
 - 删除温度矩阵串口输出及无调用的矩阵导出接口，保留温度计算、区域摘要、CAN 报文与状态/错误日志。删除失效的拉力任务开关、旧日志队列深度及旧 MLX 配置。
@@ -105,12 +105,42 @@ python test_and_fix/build/verify_firmware.py --cc "ARM GCC 11 或更新版本的
 DTU 参数：MQTT 3.1.1，`bitfsae.com:1883`，账号 `vehicle_gateway`，独立 Client ID，发布 `fsae/telemetry`，订阅 `fsae/command`，QoS 0，Clean Session 开启，串口 115200 8N1。密码在设备中填写。保持二进制透传，禁用自定义头尾、HEX/JSON 转换。服务器使用 `telemetry_bridge` 重组和校验后发布至 `fsae/telemetry/v1`。
 
 - `Modem_IsReady` 仅表示本地 UART/DMA 可发送；发送成功计数仅表示串口发送完成，不表示 DTU 在线或服务器收到。网络启动、掉线重连和缓存由 DTU 处理，启动期间的帧可能丢失。
-- 单一发布任务持有静态发送缓冲。DMA 超时按最大帧串口耗时加 200 ms 计算，超时中止发送，下一帧由服务器重新同步。序号在 DMA 成功启动后递增并在 255 后回绕。
+- 单一发布任务持有静态发送缓冲。DMA 超时按最大帧串口耗时加 200 ms 计算，超时中止发送，下一帧由服务器重新同步。发布任务在每次构建尝试前分配新帧号，内层 frame_id/header.seq 使用完整 uint32，外层序号使用低 8 位并在 255 后回绕；构建失败或发送失败后不复用编号。
 - 保留当前发布调度及其 200 ms 末尾延迟；本次没有提高上传频率。
 - 下行命令未实现：DTU 可订阅命令，但本固件不解析或执行车辆控制命令。
 - 上板验收：抓取 USART1，确认首字节 AA 55、长度及 CRC；确认服务器 `frames_ok/framed_ok` 增长、CRC 错误不增长，并核对解码值。断网恢复需实测 DTU 行为。本次不烧录、不发送车辆控制指令。
 
 共享协议：[transport.md](https://github.com/BITFSAE/vehicle-interfaces/blob/main/telemetry/docs/transport.md)。
+
+## 实验发送模式对齐（2026-11-07）
+
+用户已通过 `test_and_fix/communication/core_y100m_mqtt_test.py` 验证 PC 经 DTU 正确上云。本次将该脚本作为发送模式参考，修正固件缺失的帧号/来源字段及内外层序号不同源的问题。
+
+| 项目 | 工程当前行为 |
+| --- | --- |
+| 帧号 | 所有主题共享 uint32 计数器，首次尝试为 1；每次构建尝试递增，失败后重试用新编号 |
+| Protobuf 帧头 | `frame_id=header.seq`，`header.source_id=1`，顶层与 header 时间戳一致 |
+| UART 外层序号 | `frame_id & 0xFF`；内层 255、256、257 对应外层 255、0、1 |
+| 线帧 | `AA 55 \| payload_len(u16 LE) \| seq(u8) \| payload \| CRC16(u16 LE)` |
+| CRC | MODBUS，初值 `0xFFFF`，覆盖长度、序号、payload，不含 AA55 |
+| 发送间隔 | 等待 UART 完成后，成功路径延迟 10+200 ms；失败路径保留退避与重新入队 |
+| 数据来源 | 固件保留真实 CAN/BMS/胎温缓存映射；PC 随机车速仅用于实验；当前 `ready_to_drive=0` |
+| 时间基准 | 固件使用 HAL 启动毫秒；PC 使用 Unix 毫秒截断为 uint32，二者时间基准不同 |
+
+发送接口现为 `Publish_BuildFrame(topic, frame_id, buffer, capacity, size)` 和 `Modem_Send(payload, length, sequence)`，调用者须将同一帧号传给编码与传输层。每次重启计数器重置，帧号不作为跨设备、跨重启的全局唯一标识。
+
+离线验证（不打开串口）：
+
+```powershell
+python -m unittest discover -s test_and_fix/communication -p test_dtu_transport.py
+python test_and_fix/communication/core_y100m_mqtt_test.py --dry-run --count 3 --sequence 254 --speed 42
+python test_and_fix/build/verify_firmware.py --uplink 1
+python test_and_fix/build/verify_firmware.py --uplink 0
+```
+
+构建需 ARM GCC 11 或更新版本，可用 `--cc` 指定路径。两种构建配置使用相同输出目录；准备上板时须最后按 `--uplink 1` 构建。本轮 ARM GCC 13.3 在 `-O0` 下完成上传开启/关闭配置各 61 个源码的编译和链接，3 项 Python 离线测试及序号回绕 dry-run 通过。已有未使用函数警告仍存在。
+
+固件回归 `test_and_fix/firmware/publish_presence_test.c` 补充所有主题的帧头、uint8/uint32 回绕和缓存 GPS 速度检查，已单独编译，尚未上板执行。PC 实验成功是本轮适配依据；修改后的 MCU 尚未烧录，端到端接收、断网恢复和长期稳定性需继续实测。完整记录见 [更新日志](蔬菜盒子v2更新日志.md)。
 
 ## 硬件制作
 
@@ -128,7 +158,7 @@ DTU 参数：MQTT 3.1.1，`bitfsae.com:1883`，账号 `vehicle_gateway`，独立
 
 ### 4G远程发送模块
 
-目前的选型最终确定为银尔达公司的合宙 Core-Y100M-B 套餐，AT 组件，也就意味着上电后需要依赖 MCU 通过 AT 指令完成模块配置。
+目前选用银尔达公司的合宙 Core-Y100M-B 模块。早期使用标准 AT 固件，当前工程已适配 DTU MQTT 固件：服务器、认证和 topic 预先保存在 DTU，模块负责联网与重连，MCU 只发送串口二进制封包。
 
 Core-Y100m 资料链接：
 https://yinerda.yuque.com/yt1fh6/4gdtu/hpv7ne23txp3lu21
@@ -136,7 +166,7 @@ https://yinerda.yuque.com/yt1fh6/4gdtu/hpv7ne23txp3lu21
 银尔达DTU/RTU产品技术售后处理：
 https://yinerda.yuque.com/yt1fh6/4gdtu/iov6crmokc8ywu4n
 
-这些资料已经涵盖该模块的硬件和软件调试说明。当前固件中 4G 模块使用 `USART1` 走标准 AT 指令、TCP 和 MQTT PUBLISH 路径，MCU 直接通过 `AT+CIPSEND` 发送 protobuf payload，不再使用额外的自定义外包头。硬件上 4G 模块通过母板接口接入，关键连接以嘉立创工程文件 `hardware/data_collection_inte_v2.eprj2` 为准：`USART1_TX/USART1_RX` 已按 MCU 与模块交叉收发关系修正，`RTS/CTS` 接线已修正但当前固件 `USART1` 配置为 `UART_HWCONTROL_NONE`，因此硬件流控暂不启用；`PF7` 用作 `RST_4G` 控制脚。
+这些资料已经涵盖该模块的硬件和软件调试说明。当前固件中 4G 模块使用 `USART1` 接收 `AA55 + 长度 + 序号 + Protobuf + CRC16` 封包，由 DTU 作为 MQTT payload 上传；MCU 不发送 AT 命令。硬件上 4G 模块通过母板接口接入，关键连接以嘉立创工程文件 `hardware/data_collection_inte_v2.eprj2` 为准：`USART1_TX/USART1_RX` 已按 MCU 与模块交叉收发关系修正，`RTS/CTS` 接线已修正但当前固件 `USART1` 配置为 `UART_HWCONTROL_NONE`，因此硬件流控暂不启用；`PF7` 用作 `RST_4G` 控制脚。
 
 为了方便外部模块和调试线束取电，当前硬件工程还新增了一路 `VOUT_5V` 输出及对应地线引出。制作线束时应区分 `VIN_5V` 模块输入、系统内部 5V 电源网和对外 `VOUT_5V` 输出，不要把 4G 串口地和电源地断开。
 
@@ -450,17 +480,17 @@ Suspension_InfoDef
 
 ## 4G传输——基于protobuf的MQTT订阅
 
-本节描述上传启用后的路径；当前 `APP_UPLINK_ENABLED=0`，不会执行 AT、MQTT 或上传入队。
+当前默认 `APP_UPLINK_ENABLED=1`，采集任务更新缓存后向发布队列提交请求。设为 0 时上传任务退出，发布请求直接返回 `osErrorResource`，本地采集继续运行。
 
 也就是说，MCU 当前承担的职责只有三层：
 
 1. 从 `telemetry_data` 中取出已经解码好的业务数据；
 2. 通过 nanopb（`pb_encode.c/pb_common.c` 及生成的 `fsae_telemetry.pb.c/.h`）序列化为 protobuf；
-3. `modem_dtu.c` 负责 AT 建连、MQTT CONNECT/PUBLISH 封装与响应处理，通过 USART1 交给模块的 TCP 连接发送。
+3. `modem_dtu.c` 添加 AA55、长度、序号和 CRC16，通过 USART1 DMA 交给 DTU，DTU 负责 MQTT 连接与发布。
 
-`publish.c` 负责遥测内容，不直接管理 USART 或 AT 命令：
+`publish.c` 负责遥测内容，USART 发送由通信后端处理：
 
-- 发布请求去重与入队（DTU 上传时直接返回）
+- 发布请求去重与非阻塞入队；仅在上传关闭时直接返回
 - 将内部缓存映射到 protobuf 结构体
 - 调用 `pb_encode()` 完成编码
 - 将编码结果交给上传任务，由任务调用通信后端
@@ -482,15 +512,17 @@ Suspension_InfoDef
   -> producer task calls Publish_QueueTopic()
   -> PublishQueueItem stores PublishQueueItem_t
   -> Publish4GTask dequeues one topic
-  -> Publish_BuildFrame() fills protobuf payload
-  -> Modem_Send() in modem_dtu.c
-  -> AT+CIPSEND over USART1
-  -> 4G module
+  -> Publish4GTask allocates frame_id (first attempt = 1)
+  -> Publish_BuildFrame(topic, frame_id, ...) fills TelemetryFrame
+  -> Modem_Send(payload, length, (uint8_t)frame_id) adds UART framing
+  -> USART1 DMA (115200 8N1)
+  -> DTU publishes fsae/telemetry
+  -> server reassembles, checks CRC, decodes Protobuf
 ```
 
-这里还需要强调一个已经落地的设计点：当前 `publish` 路径不再依赖额外的 485 使能脚控制，发送就是直接走 `USART1`。因此以后更换 4G 模块时，只要模块仍然接受 UART 数据，就优先保持 `publish.c` 不动，把 AT 配置、联网、MQTT 上线等控制逻辑留在模块初始化或外部网关侧。
+这里还需要强调一个已经落地的设计点：当前 `publish` 路径不再依赖额外的 485 使能脚控制，发送就是直接走 `USART1`。因此以后更换 4G 模块时，只要模块仍然接受 UART 数据，就优先保持 `publish.c` 不动，由模块自身或外部网关负责配置、联网和 MQTT 连接。
 
-`Publish_BuildFrame()` 将各内容类型统一包装为 `TelemetryFrame` protobuf；`Modem_Send()` 再构造 MQTT PUBLISH 包，经 `AT+CIPSEND` 发到固定 MQTT topic `fsae/telemetry`。订阅端根据 `TelemetryFrame` 中实际存在的字段识别内容，不解析旧的自定义 UART 外包头。
+`Publish_BuildFrame()` 将各内容类型统一包装为 `TelemetryFrame` protobuf；`Modem_Send()` 只添加串口封包。DTU 将原始封包发布到固定 MQTT topic `fsae/telemetry`。接收端需先按长度重组、检查 AA55 和 CRC，再将内部 payload 解码为 `TelemetryFrame`；不能直接把带 AA55 的数据当作裸 Protobuf。五类内部发布内容由实际存在的子消息区分。
 
 在 protobuf 映射策略上，当前工程遵循“业务缓存优先、发布视图后映射”的思路。例如：
 
@@ -582,7 +614,7 @@ ISR / poll
 2. 对就绪通道采样，收齐两个 subpage 后形成完整温度帧；
 3. 输出成功/失败状态日志，不再输出温度矩阵；
 4. 每路完整帧生成 CANB 温度摘要；
-5. 每路成功采集后请求 `thermal_summary` 发布；当前DTU 上传，这些请求直接返回，不入队。
+5. 每路成功采集后请求 `thermal_summary` 发布；当前 DTU 上传已启用，请求按主题去重后入队，上传关闭时才直接返回。
 
 各通道状态独立，但共用 I2C 总线及计算缓冲，由单一任务顺序访问。
 

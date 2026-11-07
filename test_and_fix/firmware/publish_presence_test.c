@@ -11,11 +11,11 @@
 static uint8_t payload[PUBLISH_MAX_PAYLOAD_SIZE];
 static fsae_TelemetryFrame decoded;
 
-static bool round_trip(void)
+static bool round_trip(PublishTopic_t topic, uint32_t frame_id)
 {
     uint16_t size;
     pb_istream_t stream;
-    if (!Publish_BuildFrame(PUBLISH_TOPIC_BMS_SUMMARY, payload,
+    if (!Publish_BuildFrame(topic, frame_id, payload,
                            sizeof(payload), &size)) return false;
     decoded = (fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
     stream = pb_istream_from_buffer(payload, size);
@@ -28,6 +28,31 @@ int Publish_PresenceRegressionTest(void)
 {
     static const int32_t values[] = {12345, 0, -12345};
     memset(&g_BatteryInfo, 0, sizeof(g_BatteryInfo));
+    memset(&g_CANB_LoopData, 0, sizeof(g_CANB_LoopData));
+
+    /* All topic paths must preserve the caller's ID, including byte rollover.
+     * GPS speed comes from the live cache rather than a test constant.
+     */
+    static const uint32_t ids[] = {1U, 255U, 256U, 257U, UINT32_MAX, 0U};
+    g_CANB_LoopData.IMU.ValidFlags = CANB_MOTION_VALID_GPS;
+    g_CANB_LoopData.IMU.GpsSpeedKmh = 42U;
+    for (unsigned t = 0; t < PUBLISH_TOPIC_COUNT; ++t)
+    {
+        for (unsigned i = 0; i < sizeof(ids) / sizeof(ids[0]); ++i)
+        {
+            CHECK(round_trip((PublishTopic_t)t, ids[i]));
+            CHECK(decoded.frame_id == ids[i]);
+            CHECK(decoded.has_header && decoded.header.seq == ids[i]);
+            CHECK(decoded.header.source_id == 1U);
+            CHECK(decoded.header.timestamp_ms == decoded.timestamp_ms);
+            CHECK(decoded.ready_to_drive == 0U);
+            if (t == PUBLISH_TOPIC_BMS_SUMMARY || t == PUBLISH_TOPIC_VEHICLE_STATE ||
+                t == PUBLISH_TOPIC_BMS_DETAIL)
+            {
+                CHECK(decoded.has_motion && decoded.motion.gps_speed_kmh == 42U);
+            }
+        }
+    }
     memset(&g_CANB_LoopData, 0, sizeof(g_CANB_LoopData));
 
     for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
@@ -48,7 +73,7 @@ int Publish_PresenceRegressionTest(void)
         g_CANB_LoopData.EnergyMeter.VoltageMv = value;
         g_CANB_LoopData.EnergyMeter.PowerW = value;
         g_CANB_LoopData.EnergyMeter.EnergyWh = value;
-        CHECK(round_trip());
+        CHECK(round_trip(PUBLISH_TOPIC_BMS_SUMMARY, 1U));
         CHECK(decoded.has_ivt_telemetry && decoded.has_energy_meter);
 #define CHECK_IVT(field) CHECK(decoded.ivt_telemetry.has_##field && decoded.ivt_telemetry.field == value)
         CHECK_IVT(current_ma);
@@ -69,13 +94,13 @@ int Publish_PresenceRegressionTest(void)
         g_CANB_LoopData.EnergyMeter.AutoSource = CANB_ENERGY_METER_SOURCE_FS;
         g_CANB_LoopData.EnergyMeter.ValidFlags = CANB_ENERGY_VALID_STATUS;
         g_CANB_LoopData.EnergyMeter.Status = 7U;
-        CHECK(round_trip());
+        CHECK(round_trip(PUBLISH_TOPIC_BMS_SUMMARY, 1U));
         CHECK(!decoded.has_ivt_telemetry);
         CHECK(decoded.has_energy_meter && decoded.energy_meter.status == 7U);
         CHECK(!decoded.energy_meter.has_current_ma && !decoded.energy_meter.has_voltage_mv);
         CHECK(!decoded.energy_meter.has_power_w && !decoded.energy_meter.has_energy_wh);
         g_CANB_LoopData.EnergyMeter.ValidFlags = 0U;
-        CHECK(round_trip());
+        CHECK(round_trip(PUBLISH_TOPIC_BMS_SUMMARY, 1U));
         CHECK(!decoded.has_energy_meter);
     }
     return 0;

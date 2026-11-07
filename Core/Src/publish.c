@@ -48,7 +48,7 @@ static void Publish_MapBmsSummaryFrame(fsae_TelemetryFrame *frame);
 static void Publish_MapBmsDetailFrame(fsae_TelemetryFrame *frame);
 static void Publish_MapBatteryModule(fsae_BatteryModule *module, uint8_t module_index);
 static void Publish_MapThermalSummary(fsae_ThermalSummary *thermal_summary);
-static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_buffer, size_t payload_capacity, size_t *payload_size);
+static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint32_t frame_id, uint8_t *payload_buffer, size_t payload_capacity, size_t *payload_size);
 static const char *Publish_GetTopicName(PublishTopic_t topic);
 static bool Publish_IsTopicValid(PublishTopic_t topic);
 static void Publish_LogHexDump(const char *prefix, const uint8_t *data, size_t length);
@@ -119,7 +119,7 @@ void Publish_OnTopicDequeued(PublishTopic_t topic)
     taskEXIT_CRITICAL();
 }
 
-bool Publish_BuildFrame(PublishTopic_t topic, uint8_t *frame_buffer, uint16_t frame_capacity, uint16_t *frame_size)
+bool Publish_BuildFrame(PublishTopic_t topic, uint32_t frame_id, uint8_t *frame_buffer, uint16_t frame_capacity, uint16_t *frame_size)
 {
     size_t payload_size = 0U;
 
@@ -133,6 +133,7 @@ bool Publish_BuildFrame(PublishTopic_t topic, uint8_t *frame_buffer, uint16_t fr
     }
 
     if (!Publish_EncodeTopicPayload(topic,
+                                    frame_id,
                                     frame_buffer,
                                     frame_capacity,
                                     &payload_size))
@@ -782,7 +783,7 @@ static void Publish_MapThermalSummary(fsae_ThermalSummary *thermal_summary)
     }
 }
 
-static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_buffer, size_t payload_capacity, size_t *payload_size)
+static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint32_t frame_id, uint8_t *payload_buffer, size_t payload_capacity, size_t *payload_size)
 {
     /* Every MQTT payload uses TelemetryFrame, including compact updates. */
     pb_ostream_t stream;
@@ -805,7 +806,6 @@ static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_bu
             g_publishTelemetryFrame.header.timestamp_ms = g_publishTelemetryFrame.timestamp_ms;
             g_publishTelemetryFrame.has_fast_telemetry = true;
             Publish_MapFastTelemetry(&g_publishTelemetryFrame.fast_telemetry);
-            encode_status = pb_encode(&stream, fsae_TelemetryFrame_fields, &g_publishTelemetryFrame);
             break;
         }
 
@@ -813,7 +813,6 @@ static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_bu
         {
             g_publishTelemetryFrame = (fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
             Publish_MapBmsSummaryFrame(&g_publishTelemetryFrame);
-            encode_status = pb_encode(&stream, fsae_TelemetryFrame_fields, &g_publishTelemetryFrame);
             break;
         }
 
@@ -821,7 +820,6 @@ static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_bu
         {
             g_publishTelemetryFrame = (fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
             Publish_MapCommonTelemetryFrame(&g_publishTelemetryFrame);
-            encode_status = pb_encode(&stream, fsae_TelemetryFrame_fields, &g_publishTelemetryFrame);
             break;
         }
 
@@ -829,7 +827,6 @@ static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_bu
         {
             g_publishTelemetryFrame = (fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
             Publish_MapBmsDetailFrame(&g_publishTelemetryFrame);
-            encode_status = pb_encode(&stream, fsae_TelemetryFrame_fields, &g_publishTelemetryFrame);
             break;
         }
 
@@ -841,14 +838,23 @@ static bool Publish_EncodeTopicPayload(PublishTopic_t topic, uint8_t *payload_bu
             g_publishTelemetryFrame.header.timestamp_ms = g_publishTelemetryFrame.timestamp_ms;
             g_publishTelemetryFrame.has_thermal_summary = true;
             Publish_MapThermalSummary(&g_publishTelemetryFrame.thermal_summary);
-            encode_status = pb_encode(&stream, fsae_TelemetryFrame_fields, &g_publishTelemetryFrame);
             break;
         }
 
         default:
-            encode_status = false;
-            break;
+            return false;
     }
+
+    /* Apply to every topic after mapping (common mapping clears the frame).
+     * Match the proven PC sender: IDs share one counter and source_id is 1.
+     * HAL tick remains the MCU timestamp; no wall clock is available here.
+     */
+    g_publishTelemetryFrame.frame_id = frame_id;
+    g_publishTelemetryFrame.has_header = true;
+    g_publishTelemetryFrame.header.timestamp_ms = g_publishTelemetryFrame.timestamp_ms;
+    g_publishTelemetryFrame.header.seq = frame_id;
+    g_publishTelemetryFrame.header.source_id = 1U;
+    encode_status = pb_encode(&stream, fsae_TelemetryFrame_fields, &g_publishTelemetryFrame);
 
     if (!encode_status)
     {

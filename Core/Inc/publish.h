@@ -82,7 +82,8 @@ void Publish_Process(void);
 /* Returns osErrorResource without queueing when APP_UPLINK_ENABLED is 0. */
 osStatus_t Publish_QueueTopic(PublishTopic_t topic);
 void Publish_OnTopicDequeued(PublishTopic_t topic);
-bool Publish_BuildFrame(PublishTopic_t topic, uint8_t *frame_buffer, uint16_t frame_capacity, uint16_t *frame_size);
+/* The publishing task supplies one frame_id for protobuf and UART framing. */
+bool Publish_BuildFrame(PublishTopic_t topic, uint32_t frame_id, uint8_t *frame_buffer, uint16_t frame_capacity, uint16_t *frame_size);
 
 void Publish_MapCanbVehicleState(fsae_VehicleState *vehicle_state);
 

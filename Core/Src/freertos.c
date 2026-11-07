@@ -665,6 +665,7 @@ void Publish4GTask(void *argument)
   uint16_t frame_length = 0U;
   HAL_StatusTypeDef tx_status = HAL_OK;
   uint32_t wait_log_tick = 0U;
+  uint32_t frame_counter = 0U;
 
   App_WaitForBootInit();
 
@@ -689,11 +690,15 @@ void Publish4GTask(void *argument)
     {
       Publish_OnTopicDequeued(item.topic);
 
-      if (Publish_BuildFrame(item.topic, g_publishFrameBuffer,
+      /* One counter for all topics, starting at 1 as in the PC experiment.
+       * Failed attempts may leave gaps; never reuse an ID after a partial TX.
+       */
+      ++frame_counter;
+      if (Publish_BuildFrame(item.topic, frame_counter, g_publishFrameBuffer,
                              (uint16_t)sizeof(g_publishFrameBuffer), &frame_length))
       {
         g_diagPublishPayloadLen = frame_length;
-        tx_status = Modem_Send(g_publishFrameBuffer, frame_length);
+        tx_status = Modem_Send(g_publishFrameBuffer, frame_length, (uint8_t)frame_counter);
         g_diagPublishStatus = (int)tx_status;
 
         if (tx_status == HAL_OK)

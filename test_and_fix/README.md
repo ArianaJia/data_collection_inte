@@ -15,7 +15,7 @@ test_and_fix/
 
 ## 通信与回归测试
 
-- `communication/core_y100m_mqtt_test.py`：Core-Y100M DTU 固件串口封包测试；不发 AT 或 MQTT 报文，默认 COM16 / 115200 8N1，发送 10 帧GPS 速度和待行驶状态。
+- `communication/core_y100m_mqtt_test.py`：Core-Y100M DTU 固件串口封包测试；不发 AT 或 MQTT 报文，默认 COM16 / 115200 8N1，发送 10 帧测试 GPS 速度，ready_to_drive=0。
 - `communication/pc_y100m_gps_publish_test.py`：Y100M + TelemetryFrame GPS 发布链路测试。
 - `firmware/publish_presence_test.c`：使用真实发布编码与 nanopb 解码检查字段存在性。它不属于正常固件；需要在 HAL tick 初始化后、采集及 RTOS 任务启动前调用 `Publish_PresenceRegressionTest()`，返回 0 表示成功，否则返回失败行号。测试会覆盖遥测缓存，不可在运行中的车辆上调用。
 - `build/4g_verify.mk`：基于 CubeIDE Debug makefile 验证串口、DTU 通信及日志模块，兼容新模块尚未加入生成列表的情况。
@@ -67,6 +67,10 @@ python test_and_fix/communication/core_y100m_mqtt_test.py --payload-file capture
 python -m unittest discover -s test_and_fix/communication -p test_dtu_transport.py
 ```
 
-`capture.pb` 必须是裸 TelemetryFrame 二进制；脚本校验可解码后原样加封包，不能传 HEX 文本、已封包数据或 MQTT 报文。默认每帧将 1..120 km/h 随机数直接写入 motion.gps_speed_kmh，连续帧不重复，并设置顶层 ready_to_drive=1（待行驶按已准备好行驶理解）。不填充 fast_telemetry、vehicle_state、电压、电流或温度。速度是指定的测试数值，并非从 GPS 硬件采集。--speed 可指定固定车速；--payload-file 仍原样发送文件，不改速度或状态。内部 frame_id/header.seq/source_id 按当前 MCU 保持 0；外层序号从 0 递增并回绕。默认发送后间隔 0.21 秒，另计预计 UART 线速耗时；PC/USB 调度不保证与 MCU 精确同步。
+`capture.pb` 必须是裸 TelemetryFrame 二进制；脚本校验可解码后原样加封包，不能传 HEX 文本、已封包数据或 MQTT 报文。默认每帧将 1..120 km/h 随机数直接写入 motion.gps_speed_kmh，连续帧不重复；ready_to_drive=0（没有 ECU 状态源）。不填充 fast_telemetry、vehicle_state、电压、电流或温度。速度是指定的测试数值，并非从 GPS 硬件采集。--speed 可指定固定车速；--payload-file 仍原样发送文件，不改内部字段。
+
+固件与脚本统一使用 frame_id=header.seq、header.source_id=1，外层序号取帧号低 8 位（255 后回绕到 0），默认首帧编号为 1。固件的所有发布主题共用一个计数器；构建或发送失败也消耗编号，重试时重新采集缓存并使用新编号。固件 timestamp_ms/header.timestamp_ms 使用 HAL 启动毫秒数，PC 使用 Unix 毫秒数截断为 uint32；两者不代表相同时间基准。固件保留真实 CAN/BMS/温度映射，不使用脚本中的随机测试车速。
+
+默认发送后间隔 0.21 秒，另计预计 UART 线速耗时；固件等待 UART 完成后延迟 10+200 ms，PC/USB 调度不保证与 MCU 精确同步。离线 Python 回归覆盖 CRC、长度边界及内外序号回绕。firmware/publish_presence_test.c 另覆盖所有主题的帧头字段及真实缓存车速；需按上述条件在测试固件中运行。
 
 DTU 的 MQTT 配置在设备端保存：bitfsae.com:1883，发布 fsae/telemetry、订阅 fsae/command。脚本不保存密码，不联网验证、不更改模块设置。RX 显示原始字节分片，不视为服务器确认。串口写入成功只证明 PC 已交给串口驱动；端到端须在服务器检查 framed_ok、CRC 和解码值。测试时 PC 与 MCU 不可同时驱动模块 RX。Ctrl+C 关闭串口退出。
