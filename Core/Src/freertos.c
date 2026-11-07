@@ -59,7 +59,7 @@ typedef StaticQueue_t osStaticMessageQDef_t;
 #define APP_SPICANA_DECODE_ENABLED       1U
 #define APP_SPICANA_PUBLISH_ENABLED      1U
 #define APP_MLX90640_PUBLISH_ENABLED     1U
-#define APP_SPICDC_TASK_ENABLED          0U
+#define APP_SPICDC_TASK_ENABLED          1U
 
 /* USER CODE END PD */
 
@@ -640,7 +640,8 @@ void SPICanCDCTask(void *argument)
     {
       SpiCdc_Dispatch(&recv_data);
     }
-    osDelay(200);
+    (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
+    osDelay(2);
   }
   /* USER CODE END SPICanCDCTask */
 }
@@ -1211,6 +1212,7 @@ static void SpiCdc_Poll(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus)
     return;
   }
 
+  uint8_t budget = 32U;
   do
   {
     if (FDCAN_Poll(bus, &rx_frame, &received) != HAL_OK || (received == 0U))
@@ -1230,7 +1232,7 @@ static void SpiCdc_Poll(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus)
     (void)memset(frame_data.msg_data, 0, sizeof(frame_data.msg_data));
     (void)memcpy(frame_data.msg_data, rx_frame.data, rx_frame.length);
     CAN_DecodeCdcMonitorMessage(&frame_data);
-  } while (received != 0U);
+  } while ((received != 0U) && (--budget != 0U));
 }
 
 static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data)

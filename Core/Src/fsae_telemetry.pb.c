@@ -99,6 +99,9 @@ PB_BIND(fsae_CancVcuStatus, fsae_CancVcuStatus, AUTO)
 PB_BIND(fsae_CancTelemetry, fsae_CancTelemetry, 2)
 
 
+PB_BIND(fsae_RegenTelemetry, fsae_RegenTelemetry, AUTO)
+
+
 PB_BIND(fsae_TelemetryFrame, fsae_TelemetryFrame, 2)
 
 

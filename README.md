@@ -22,7 +22,7 @@ STM32F407ZET6 数据采集工程：MLX90640 胎温采集、原生 CAN1/CAN2、MC
 | CAN1 / 电池箱 | 启用，中断收包后交任务解码 | `CanForBMSTask` |
 | CAN2 / 整车 CANB | 启用，收包解码与温度摘要发送 | `CanForViehcleTask`、`CanBTextTask` |
 | SPI1 / MCP2518FD-A / CANA | 启用，初始化后每 200 ms 轮询并解码控制器报文 | `SPICanControlTask` |
-| SPI3 / MCP2518FD-B / CDC | 初始化关闭；任务已创建，但未就绪时不读取 | `SPICanCDCTask` |
+| SPI3 / MCP2518FD-B / CDC | 启用；2 ms 有界轮询，解析 CANC 10 条报文 | `SPICanCDCTask` |
 | USART2 / RS485 | 接收任务已创建，业务解析仍为预留入口 | `TensionSensorTask` |
 | USART3 / 日志 | 启用，队列输出；不输出温度矩阵 | `App_LogProcess` |
 | USART1 / 4G | DTU 串口封包上传，无需 MCU 端 MQTT 凭据 | `APP_UPLINK_ENABLED=1` |
@@ -178,13 +178,13 @@ Base 板承担整个系统的连接分配职责，本身尽量少做复杂信号
 
 ### CAN信号扩展——MCP2518FD
 
-CAN 控制器扩展使用 MCP2518FDTE/SL。它本质上是 SPI 到 CAN FD 控制器的转换芯片，适合在 MCU 原生 CAN 数量不够时扩展更多可控 CAN 通道。当前设计放置两片 MCP2518FD：A 用于控制器 CANA，初始化和轮询已启用；B 用于 CDC，任务已创建但初始化关闭：
+CAN 控制器扩展使用 MCP2518FDTE/SL。它本质上是 SPI 到 CAN FD 控制器的转换芯片，适合在 MCU 原生 CAN 数量不够时扩展更多可控 CAN 通道。当前设计放置两片 MCP2518FD：A 用于控制器 CANA，初始化和轮询已启用；B 用于 CANC/CDC，初始化和轮询已启用：
 
 - 每片 MCP2518FD 使用 40MHz 晶振。
 - 与 MCU 之间通过 SPI 通信，信号包括 `SCK`、`MOSI`、`MISO`、`CS` 和 `INT`。
 - 芯片供电范围支持 2.7V 到 5.5V。当前原理图标注为了缓解 3.3V 供电压力，MCP2518FD 供电使用 5V，但 SPI 侧仍需注意与 MCU 3.3V 逻辑电平兼容。
 - CANA 作为控制器相关 CAN，对应固件中的 `FDCAN_BUS_A`，使用 `SPI1 + CS_A`。
-- CANB/CDC 作为 CDC 报文监视预留，对应固件中的 `FDCAN_BUS_B`，使用 `SPI3 + CS_B`，当前默认未启用。
+- CANC/CDC 作为 CDC 报文监视总线，对应固件中的 `FDCAN_BUS_B`，使用 `SPI3 + CS_B`，当前启用。
 - `MCP2518_CS_A/B` 为低有效片选，GPIO 初始化阶段必须保持空闲高电平。若读寄存器出现 `0xFFFFFFFF`，优先检查芯片供电、CS、MISO 是否悬空以及 SPI/片选映射，而不是先怀疑 CAN 总线。
 
 MCP2518FD 后级接 SN65HVD233DR CAN 收发器。系统里共预留四路 CAN 收发：CANA、CANB、CANC 和 CAN1，其中 CANC 面向整车 CAN，CAN1 面向电箱 CAN。每路 CAN 收发器都带 100nF 去耦，RS 脚附近预留电阻用于斜率或模式设置，CANH/CANL 出口前加入共模电感 DLW43SH510XK2L、PESD1CAN ESD 防护和 47pF 到地电容，以提升线束环境下的抗干扰和静电防护能力。
@@ -332,7 +332,7 @@ MLX90640 的 32 × 24 阵列一共 768 个像素，但官方库计算温度时�
 - `CAN1`：电池箱 CAN，对应电池包扩展帧、单体电压、温度、状态量等报文。
 - `CAN2`：整车 `CANB`，对应整车状态、轮边电机状态、IMU、IVT/FS 能量计等报文，并承担当前整车 CAN 发送链路。
 - `SPI1 + MCP2518FD-A`：控制器 `CANA`，启动时初始化；运行期 `SPICanControl` 任务已创建，每 200 ms 轮询并解码。
-- `SPI3 + MCP2518FD-B`：CDC（半主动电磁阻尼悬架）监视总线；`SPICanCDC` 任务已创建，初始化受 `APP_SPICDC_TASK_ENABLED=0` 关闭，因此当前不读取未就绪控制器。
+- `SPI3 + MCP2518FD-B`：CDC（半主动电磁阻尼悬架）监视总线；`SPICanCDC` 任务已创建，由 `APP_SPICDC_TASK_ENABLED=1` 启用初始化，就绪后开始解析。
 
 代码层面的分层非常明确，建议后续也保持这种边界：
 
@@ -527,7 +527,7 @@ Suspension_InfoDef
 - `MLX90640`：热成像采集、CAN 摘要生成和 `thermal_summary` publish 请求任务。
 - `TensionSensor`：已创建的 USART2/RS485 DMA 接收任务，`Rs485_Dispatch()` 仍是业务解析预留入口。
 - `SPICanControl`：已启用的 `SPI1 + MCP2518FD-A` 轮询与 `CANA` 解码任务。
-- `SPICanCDC`：任务已创建，但 MCP2518FD-B 初始化关闭，当前不采集。
+- `SPICanCDC`：MCP2518FD-B 初始化启用，按 CANC DBC 采集 10 条报文。
 - `Publish4G`：上传启用时负责出队、protobuf 编码和 `Modem_Send()`；当前启动后直接退出。
 - `CanBText`：整车 CAN 发送任务，消费 `VehicleCanTxQueue`，最终调用 `CAN_Send_Msg(&hcan2, ...)`。
 - `initTaskBoot`：启动原生 CAN、初始化 MCP2518FD-A，按开关决定是否初始化 B；MLX 初始化在自身任务中逐通道执行，AT 初始化只属于上传任务。
@@ -789,3 +789,25 @@ TaskXX poll
 - AT startup configuration bypassed: APP_4G_BOOTSTRAP_ENABLED = 0.
 - MLX90640 acquisition and CAN publishing remain enabled.
 - This snapshot is for hardware validation; long-term stability is not yet verified.
+
+## 接口同步（2026-11-07）
+
+接口版本固定为 `vehicle-interfaces@27a5f677970dd9729e445b077fd8169809b34113`。
+本机 Nanopb 0.4.9.1 从同步的 proto/options 生成 C/H。
+
+- CANA 电机控制器仍走 MCP2518FD-A/SPI1；CANC CDC 走 MCP2518FD-B/SPI3，启用初始化，10 个标准 ID 精确过滤，每 2 ms 最多处理 32 帧。
+- `canc_telemetry.c` 保存 10 帧、57 个原始信号、独立接收时间/间隔/计数、DLC 拒绝计数、范围和枚举掩码。超过 100 ms 仅发布状态和最后负载。
+- `telemetry_extra.c` 接入 PDM、风扇、Chroma 浮点反馈、SOP V3 CRC/版本校验，以及 BMS 继电器、预充和 IMD；各来源独立计龄。电池风扇 CAN1 优先、CANB 备用。
+- 更新诊断码、左右油压、驾驶模式、SOC 小数、GPS、回收与踏板，停用旧 CANB IMU 解码；BMS 模组保留断线原值，完整新鲜模组才上报。
+- CANC 信号由 DBC 生成：`python test_and_fix/migrations/generate_canc.py --interfaces <参考仓库目录>`。主机回归：`python test_and_fix/firmware/test_protocol_host.py --cc <本机gcc路径>`。
+
+本次只更新和验证固件，不涉及服务器部署、车辆控制报文发送或烧录。
+
+### 解析方式与协议来源
+
+CAN 解析以 [BITFSAE/vehicle-interfaces](https://github.com/BITFSAE/vehicle-interfaces/tree/27a5f677970dd9729e445b077fd8169809b34113) 为依据，固定提交 `27a5f677970dd9729e445b077fd8169809b34113`：
+
+- `can/Vehicle_Can1.dbc`、`Vehicle_CanA.dbc`、`Vehicle_CanB.dbc`、`Vehicle_CanC.dbc` 定义报文 ID、位布局、字节序、符号和比例。
+- `docs/CANC接口.md`、`docs/CAN与遥测对照.md`、`telemetry/docs/interface-notes.md` 和 `telemetry/docs/protocol.md` 补充来源优先级、有效性、超时与发布规则；更新时同时阅读 `CHANGELOG.md`，不可仅替换生成文件。
+- SPI/MCP2518FD 驱动只收帧；对应 CANA/CDC 任务调用专用解析函数更新缓存，通过发布请求队列通知 `Publish4GTask`。发布任务负责字段映射、Protobuf 编码和串口发送，DTU 完成 MQTT 网络封装。
+- 本工程保留构建所需的 proto/options、Nanopb 生成文件及自身解析代码。参考仓库完整副本与下载压缩包已清除；重新生成 CANC 解析时，将单独获取的上述版本仓库路径传给 `generate_canc.py --interfaces`。

@@ -1,5 +1,7 @@
 /* Encode telemetry as protobuf; modem_dtu.c adds transport framing. */
 #include "publish.h"
+#include "canc_telemetry.h"
+#include "telemetry_extra.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -499,6 +501,8 @@ static void Publish_MapCommonTelemetryFrame(fsae_TelemetryFrame *frame)
     *frame = (fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
     now = HAL_GetTick();
 
+    Canc_Map(frame, now);
+    Extra_Map(frame, now);
     frame->timestamp_ms = now;
     frame->apps_position = (float)g_CANB_LoopData.ECU.ThrottlePositionDeciPct / 10.0f;
     frame->brake_pressure = (float)g_CANB_LoopData.ECU.OilPressureMilliKpa / 1000.0f;
@@ -513,6 +517,25 @@ static void Publish_MapCommonTelemetryFrame(fsae_TelemetryFrame *frame)
     frame->ready_to_drive = 0U;
     frame->vcu_status = 0U;
     frame->battery_soc = (uint32_t)g_BatteryInfo.SOC;
+    frame->has_battery_soc_pct_x10 = (g_BatteryInfo.PackValidFlags & BATTERY_SOC_VALID) && (uint32_t)(now - g_BatteryInfo.PackLastUpdateMs) < BATTERY_STATUS_TIMEOUT_MS;
+    frame->battery_soc_pct_x10 = g_BatteryInfo.SocDeciPct;
+    if (g_CANB_LoopData.ECU.RegenSeen && (uint32_t)(now-g_CANB_LoopData.ECU.RegenTick) <= 2000U) {
+        frame->has_regen_telemetry = true;
+        frame->regen_telemetry.has_recycle_rate = g_CANB_LoopData.ECU.RegenRate <= 120U;
+        frame->regen_telemetry.recycle_rate = g_CANB_LoopData.ECU.RegenRate;
+        frame->regen_telemetry.has_power_limit_reason_fl = true;
+        frame->regen_telemetry.power_limit_reason_fl = g_CANB_LoopData.ECU.RegenReasons[0];
+        frame->regen_telemetry.has_power_limit_reason_fr = true;
+        frame->regen_telemetry.power_limit_reason_fr = g_CANB_LoopData.ECU.RegenReasons[1];
+        frame->regen_telemetry.has_power_limit_reason_rl = true;
+        frame->regen_telemetry.power_limit_reason_rl = g_CANB_LoopData.ECU.RegenReasons[2];
+        frame->regen_telemetry.has_power_limit_reason_rr = true;
+        frame->regen_telemetry.power_limit_reason_rr = g_CANB_LoopData.ECU.RegenReasons[3];
+
+    }
+    frame->has_brake_pedal_encoder_angle_deg = g_CANB_LoopData.ECU.PedalSeen && (uint32_t)(now-g_CANB_LoopData.ECU.PedalTick) <= 100U;
+    frame->brake_pedal_encoder_angle_deg = g_CANB_LoopData.ECU.PedalCount * (360.0f/4096.0f);
+
     frame->max_cell_voltage = (uint32_t)g_BatteryInfo.MaxCellVolt;
     frame->min_cell_voltage = (uint32_t)g_BatteryInfo.MinCellVolt;
     frame->max_cell_voltage_no = (uint32_t)g_BatteryInfo.MaxCellVoltNo;
@@ -522,10 +545,44 @@ static void Publish_MapCommonTelemetryFrame(fsae_TelemetryFrame *frame)
     frame->max_temp_no = (uint32_t)g_BatteryInfo.MaxTempNo;
     frame->min_temp_no = (uint32_t)g_BatteryInfo.MinTempNo;
     frame->battery_fault_code = g_BatteryInfo.BatteryFaultCode;
+    if(g_BatteryInfo.PackReceived && (uint32_t)(now-g_BatteryInfo.PackLastUpdateMs)<=2000U){
+        frame->has_bms_telemetry=true;
+        frame->bms_telemetry.has_battery_state=true;frame->bms_telemetry.battery_state=g_BatteryInfo.Battery_State;
+        frame->bms_telemetry.has_battery_alarm_level=true;frame->bms_telemetry.battery_alarm_level=g_BatteryInfo.Battery_AlarmLevel;
+    }
+    if(g_BatteryInfo.FaultValid && (uint32_t)(now-g_BatteryInfo.FaultTick)<=2000U){
+        for(unsigned bit=0;bit<32;bit++)if(g_BatteryInfo.BatteryFaultCode & (1UL<<bit)){
+            fsae_Alarm *a=&frame->alarms[frame->alarms_count++];a->alarm_id=bit;
+            uint8_t level=g_BatteryInfo.AlarmLevelsValid && (uint32_t)(now-g_BatteryInfo.AlarmLevelsTick)<3000U?g_BatteryInfo.AlarmLevels[bit]:0;
+            a->severity=level==1?fsae_AlarmSeverity_ALARM_SEVERITY_FATAL:level==2?fsae_AlarmSeverity_ALARM_SEVERITY_WARNING:fsae_AlarmSeverity_ALARM_SEVERITY_UNSPECIFIED;
+        }
+    }
+    if((g_BatteryInfo.IVT.ValidFlags & BATTERY_IVT_VALID_U1) && (uint32_t)(now-g_BatteryInfo.IVT.LastUpdateMs[1])<BATTERY_IVT_TIMEOUT_MS)
+        frame->hv_voltage=g_BatteryInfo.IVT.VoltageU1Mv/1000.0f;
+    else if(!(g_BatteryInfo.PackValidFlags & BATTERY_PACK_VOLT_VALID) || (uint32_t)(now-g_BatteryInfo.PackLastUpdateMs)>=2000U){
+        uint32_t sum=0;bool complete=true;
+        for(unsigned m=0;m<6;m++)for(unsigned c=0;c<23;c++){
+            unsigned n=m*6+(c<3?0:1+(c-3)/4);
+            if(!(g_BatteryInfo.CellValidMask[m]&(1UL<<c)) || (uint32_t)(now-g_BatteryInfo.CellFrameTick[n])>=2000U)complete=false;
+            sum+=g_BatteryInfo.CellVolt[m][c];
+        }
+        frame->hv_voltage=complete?sum/1000.0f:0.0f;
+        if(g_BatteryInfo.CellSumValid && (uint32_t)(now-g_BatteryInfo.CellSumTick)<2000U && (g_BatteryInfo.PackValidFlags & 8U))frame->hv_voltage=g_BatteryInfo.CellVoltSum/10.0f;
+    }
+    if((g_BatteryInfo.IVT.ValidFlags & BATTERY_IVT_VALID_CURRENT) && (uint32_t)(now-g_BatteryInfo.IVT.LastUpdateMs[0])<BATTERY_IVT_TIMEOUT_MS)
+        frame->hv_current=g_BatteryInfo.IVT.CurrentMa/1000.0f;
+    else if(!(g_BatteryInfo.PackValidFlags & BATTERY_PACK_CURR_VALID) || (uint32_t)(now-g_BatteryInfo.PackLastUpdateMs)>=2000U)frame->hv_current=0;
+    frame->max_cell_voltage_no=g_BatteryInfo.CellExtremaValid?g_BatteryInfo.MaxCellVoltNo+1U:0U;
+    frame->min_cell_voltage_no=g_BatteryInfo.CellExtremaValid?g_BatteryInfo.MinCellVoltNo+1U:0U;
+    frame->max_temp_no=g_BatteryInfo.TempExtremaValid?g_BatteryInfo.MaxTempNo+1U:0U;
+    frame->min_temp_no=g_BatteryInfo.TempExtremaValid?g_BatteryInfo.MinTempNo+1U:0U;
+    frame->max_temp*=10;frame->min_temp*=10;
     frame->has_header = true;
     frame->header.timestamp_ms = now;
     frame->has_fast_telemetry = true;
     Publish_MapFastTelemetry(&frame->fast_telemetry);
+    frame->fast_telemetry.hv_voltage_dv=(uint32_t)(frame->hv_voltage*10.0f);
+    frame->fast_telemetry.hv_current_ma=(int32_t)(frame->hv_current*1000.0f);
     frame->has_vehicle_state = true;
     Publish_MapCanbVehicleState(&frame->vehicle_state);
 
@@ -546,6 +603,18 @@ static void Publish_MapCommonTelemetryFrame(fsae_TelemetryFrame *frame)
     {
         frame->has_motion = true;
     }
+    if (g_CANB_LoopData.ECU.PositionSeen || g_CANB_LoopData.ECU.PositionStatusSeen) {
+        const CANB_ECU_VehicleTypeDef *e = &g_CANB_LoopData.ECU;
+        bool valid = e->PositionSeen && e->PositionStatusSeen && (uint32_t)(now-e->PositionTick)<=500U && (uint32_t)(now-e->PositionStatusTick)<=500U && (e->PositionFlags & 9U)==9U && e->LatitudeE7>=-900000000 && e->LatitudeE7<=900000000 && e->LongitudeE7>=-1800000000 && e->LongitudeE7<=1800000000;
+        frame->has_motion = true;
+        frame->motion.has_gps_position_valid = true;
+        frame->motion.gps_position_valid = valid;
+        frame->motion.has_gps_latitude_e7 = valid;
+        frame->motion.has_gps_longitude_e7 = valid;
+        frame->motion.gps_latitude_e7 = e->LatitudeE7;
+        frame->motion.gps_longitude_e7 = e->LongitudeE7;
+    }
+
 }
 
 static void Publish_MapBmsSummaryFrame(fsae_TelemetryFrame *frame)
@@ -567,11 +636,15 @@ static void Publish_MapBmsDetailFrame(fsae_TelemetryFrame *frame)
     }
 
     Publish_MapBmsSummaryFrame(frame);
-    frame->modules_count = 6U;
-
-    for (uint8_t module_index = 0U; module_index < frame->modules_count; module_index++)
-    {
-        Publish_MapBatteryModule(&frame->modules[module_index], module_index);
+    frame->modules_count = 0U;
+    uint32_t now = HAL_GetTick();
+    for (uint8_t m=0;m<6;m++) {
+        bool fresh = g_BatteryInfo.TempValidMask[m] == 0xFFU && (uint32_t)(now-g_BatteryInfo.TempFrameTick[m]) < 2000U;
+        for (uint8_t j=0;j<6;j++) {
+            uint8_t n=m*6+j;
+            fresh = fresh && ((g_BatteryInfo.CellFramesReceived>>n)&1U) && (uint32_t)(now-g_BatteryInfo.CellFrameTick[n])<2000U;
+        }
+        if(fresh) Publish_MapBatteryModule(&frame->modules[frame->modules_count++],m);
     }
 }
 
@@ -629,7 +702,7 @@ static void Publish_MapBatteryModule(fsae_BatteryModule *module, uint8_t module_
 
     for (uint8_t temp_index = 0U; temp_index < 8U; temp_index++)
     {
-        *temp_fields[temp_index] = (int32_t)g_BatteryInfo.ModTemp[module_index][temp_index];
+        *temp_fields[temp_index] = (int32_t)g_BatteryInfo.ModTemp[module_index][temp_index] * 10;
     }
 }
 

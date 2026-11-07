@@ -32,3 +32,8 @@ Thumbs.db
 
 # Local MQTT broker credentials
 /Core/Inc/mqtt_credentials.h
+
+# Local verification outputs and Python caches
+/build/
+__pycache__/
+*.pyc

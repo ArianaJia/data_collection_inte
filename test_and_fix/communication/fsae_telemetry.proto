@@ -88,6 +88,9 @@ message MotionTelemetry { // CANB GPS/IMU 运动状态
     float accel_z_g = 4; // IMU Z 轴加速度，单位 g
     float yaw_rate_dps = 5; // IMU Z 轴角速度，单位 deg/s
     float yaw_deg = 6; // IMU 横摆角，单位 deg
+    optional sint32 gps_latitude_e7 = 7; // CANB 0x067，纬度乘 10^7；定位有效时存在
+    optional sint32 gps_longitude_e7 = 8; // CANB 0x067，经度乘 10^7；定位有效时存在
+    optional uint32 gps_position_valid = 9; // 0/1；两帧均在 500 ms 内、坐标范围正确且 PositionValid/RMCValid 均为 1
 }
 
 message ThermalRawChunk { // 热成像原始数据分片
@@ -114,7 +117,7 @@ message MotorState { // 单个电机状态
     reserved 8; // 曾用于 actual_torque_0p1pct，已废弃，避免复用造成兼容歧义
     MotorPosition position = 1; // 电机位置
     sint32 rpm = 2; // 电机转速
-    sint32 torque_nm = 3; // AMK 实际扭矩原始值，单位 0.1%Mn；显示 Nm 时乘 9.8 / 1000
+    sint32 torque_nm = 3; // AMK 实际扭矩，单位 Nm；CANB 0x502 原始值直接上报，不换算
     sint32 power_w = 4; // 电机功率，单位 W；CANA ActualValue4 AMK_PowerValue 接入前保持缺失
     sint32 motor_temp_dc = 5; // 电机温度，单位 0.1 摄氏度
     sint32 inverter_temp_dc = 6; // 电机控制器温度，单位 0.1 摄氏度
@@ -385,6 +388,14 @@ message CancTelemetry { // 全部 10 条 CANC 重点报文，独立于 CANB GPS/
     CancVcuStatus vcu_status = 10;
 }
 
+message RegenTelemetry { // CANB 0x726 RecycleInfo
+    optional uint32 recycle_rate = 1; // 能量回收力度，原始值 0..120
+    optional uint32 power_limit_reason_fl = 2; // 左前，原始码 0..15
+    optional uint32 power_limit_reason_fr = 3; // 右前，原始码 0..15
+    optional uint32 power_limit_reason_rl = 4; // 左后，原始码 0..15
+    optional uint32 power_limit_reason_rr = 5; // 右后，原始码 0..15
+}
+
 message TelemetryFrame {
     // --- 0. STM32 legacy fields, kept for CAN2RS485 firmware compatibility ---
     uint32 timestamp_ms = 1;
@@ -406,7 +417,7 @@ message TelemetryFrame {
     repeated BatteryModule modules = 15;
 
     // --- 2. 电池包摘要（保持现网结构） ---
-    uint32 battery_soc = 16;
+    uint32 battery_soc = 16; // 旧整数百分比，保持 0..100。
     uint32 max_cell_voltage = 17;
     uint32 min_cell_voltage = 18;
     uint32 max_cell_voltage_no = 19;
@@ -436,4 +447,7 @@ message TelemetryFrame {
     FanTelemetry fan_telemetry = 39; // 风扇控制器
     BatteryFanTelemetry battery_fan = 40; // BMS 电池箱风扇
     CancTelemetry canc = 41; // CANC 10 帧/57 信号及逐帧诊断；旧消费者忽略新增字段
+    optional uint32 battery_soc_pct_x10 = 42; // 0..1000，单位 0.1%；无效或超时省略。
+    RegenTelemetry regen_telemetry = 43; // CANB 0x726，未收到或超时省略整组
+    optional float brake_pedal_encoder_angle_deg = 44; // CANB 0x001，制动踏板编码器单圈轴角，单位 deg
 }
