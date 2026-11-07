@@ -107,6 +107,12 @@ typedef struct _fsae_MotionTelemetry { /* CANB GPS/IMU 运动状态 */
     float accel_z_g; /* IMU Z 轴加速度，单位 g */
     float yaw_rate_dps; /* IMU Z 轴角速度，单位 deg/s */
     float yaw_deg; /* IMU 横摆角，单位 deg */
+    bool has_gps_latitude_e7;
+    int32_t gps_latitude_e7; /* CANB 0x067，纬度乘 10^7；定位有效时存在 */
+    bool has_gps_longitude_e7;
+    int32_t gps_longitude_e7; /* CANB 0x067，经度乘 10^7；定位有效时存在 */
+    bool has_gps_position_valid;
+    uint32_t gps_position_valid; /* 0/1；两帧均在 500 ms 内、坐标范围正确且 PositionValid/RMCValid 均为 1 */
 } fsae_MotionTelemetry;
 
 typedef struct _fsae_ThermalRawChunk { /* 热成像原始数据分片 */
@@ -134,7 +140,7 @@ typedef struct _fsae_ThermalSummary { /* 热成像摘要 */
 typedef struct _fsae_MotorState { /* 单个电机状态 */
     fsae_MotorPosition position; /* 电机位置 */
     int32_t rpm; /* 电机转速 */
-    int32_t torque_nm; /* AMK 实际扭矩原始值，单位 0.1%Mn；显示 Nm 时乘 9.8 / 1000 */
+    int32_t torque_nm; /* AMK 实际扭矩，单位 Nm；CANB 0x502 原始值直接上报，不换算 */
     int32_t power_w; /* 电机功率，单位 W；CANA ActualValue4 AMK_PowerValue 接入前保持缺失 */
     int32_t motor_temp_dc; /* 电机温度，单位 0.1 摄氏度 */
     int32_t inverter_temp_dc; /* 电机控制器温度，单位 0.1 摄氏度 */
@@ -558,6 +564,19 @@ typedef struct _fsae_CancTelemetry { /* 全部 10 条 CANC 重点报文，独立
     fsae_CancVcuStatus vcu_status;
 } fsae_CancTelemetry;
 
+typedef struct _fsae_RegenTelemetry { /* CANB 0x726 RecycleInfo */
+    bool has_recycle_rate;
+    uint32_t recycle_rate; /* 能量回收力度，原始值 0..120 */
+    bool has_power_limit_reason_fl;
+    uint32_t power_limit_reason_fl; /* 左前，原始码 0..15 */
+    bool has_power_limit_reason_fr;
+    uint32_t power_limit_reason_fr; /* 右前，原始码 0..15 */
+    bool has_power_limit_reason_rl;
+    uint32_t power_limit_reason_rl; /* 左后，原始码 0..15 */
+    bool has_power_limit_reason_rr;
+    uint32_t power_limit_reason_rr; /* 右后，原始码 0..15 */
+} fsae_RegenTelemetry;
+
 typedef struct _fsae_TelemetryFrame {
     /* --- 0. STM32 legacy fields, kept for CAN2RS485 firmware compatibility --- */
     uint32_t timestamp_ms;
@@ -578,7 +597,7 @@ typedef struct _fsae_TelemetryFrame {
     pb_size_t modules_count;
     fsae_BatteryModule modules[6];
     /* --- 2. 电池包摘要（保持现网结构） --- */
-    uint32_t battery_soc;
+    uint32_t battery_soc; /* 旧整数百分比，保持 0..100。 */
     uint32_t max_cell_voltage;
     uint32_t min_cell_voltage;
     uint32_t max_cell_voltage_no;
@@ -622,6 +641,12 @@ typedef struct _fsae_TelemetryFrame {
     fsae_BatteryFanTelemetry battery_fan; /* BMS 电池箱风扇 */
     bool has_canc;
     fsae_CancTelemetry canc; /* CANC 10 帧/57 信号及逐帧诊断；旧消费者忽略新增字段 */
+    bool has_battery_soc_pct_x10;
+    uint32_t battery_soc_pct_x10; /* 0..1000，单位 0.1%；无效或超时省略。 */
+    bool has_regen_telemetry;
+    fsae_RegenTelemetry regen_telemetry; /* CANB 0x726，未收到或超时省略整组 */
+    bool has_brake_pedal_encoder_angle_deg;
+    float brake_pedal_encoder_angle_deg; /* CANB 0x001，制动踏板编码器单圈轴角，单位 deg */
 } fsae_TelemetryFrame;
 
 
@@ -686,13 +711,14 @@ extern "C" {
 
 
 
+
 /* Initializer values for message structs */
 #define fsae_PacketHeader_init_default           {0, 0, 0}
 #define fsae_Alarm_init_default                  {0, _fsae_AlarmSeverity_MIN, ""}
 #define fsae_FastTelemetry_init_default          {0, 0, 0, _fsae_DrivingMode_MIN, 0}
 #define fsae_IvtTelemetry_init_default           {false, 0, false, 0, false, 0, 0, 0, 0, false, 0, false, 0, 0, 0}
 #define fsae_EnergyMeterTelemetry_init_default   {0, false, 0, false, 0, false, 0, false, 0, 0, 0, 0, 0, 0, 0}
-#define fsae_MotionTelemetry_init_default        {0, 0, 0, 0, 0, 0}
+#define fsae_MotionTelemetry_init_default        {0, 0, 0, 0, 0, 0, false, 0, false, 0, false, 0}
 #define fsae_ThermalRawChunk_init_default        {_fsae_MotorPosition_MIN, 0, 0, 0, 0}
 #define fsae_ThermalSensorSummary_init_default   {_fsae_MotorPosition_MIN, 0, 0, 0, 0, {fsae_ThermalRawChunk_init_default, fsae_ThermalRawChunk_init_default, fsae_ThermalRawChunk_init_default, fsae_ThermalRawChunk_init_default}}
 #define fsae_ThermalSummary_init_default         {0, {fsae_ThermalSensorSummary_init_default, fsae_ThermalSensorSummary_init_default, fsae_ThermalSensorSummary_init_default, fsae_ThermalSensorSummary_init_default}}
@@ -718,13 +744,14 @@ extern "C" {
 #define fsae_CancVcuRequests_init_default        {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_default}
 #define fsae_CancVcuStatus_init_default          {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_default}
 #define fsae_CancTelemetry_init_default          {false, fsae_CancCdcInfo_init_default, false, fsae_CancCdcAcceleration_init_default, false, fsae_CancCdcRotation_init_default, false, fsae_CancCdcCurrent_init_default, false, fsae_CancAbsStatus_init_default, false, fsae_CancEscStatus_init_default, false, fsae_CancIbsInfo_init_default, false, fsae_CancSasSensor_init_default, false, fsae_CancVcuRequests_init_default, false, fsae_CancVcuStatus_init_default}
-#define fsae_TelemetryFrame_init_default         {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, fsae_PacketHeader_init_default, false, fsae_FastTelemetry_init_default, false, fsae_VehicleState_init_default, false, fsae_ThermalSummary_init_default, 0, {fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default}, false, fsae_IvtTelemetry_init_default, false, fsae_EnergyMeterTelemetry_init_default, false, fsae_MotionTelemetry_init_default, false, fsae_BmsTelemetry_init_default, false, fsae_ImdTelemetry_init_default, false, fsae_SopLimits_init_default, false, fsae_ChargerTelemetry_init_default, false, fsae_PdmTelemetry_init_default, false, fsae_FanTelemetry_init_default, false, fsae_BatteryFanTelemetry_init_default, false, fsae_CancTelemetry_init_default}
+#define fsae_RegenTelemetry_init_default         {false, 0, false, 0, false, 0, false, 0, false, 0}
+#define fsae_TelemetryFrame_init_default         {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default, fsae_BatteryModule_init_default}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, fsae_PacketHeader_init_default, false, fsae_FastTelemetry_init_default, false, fsae_VehicleState_init_default, false, fsae_ThermalSummary_init_default, 0, {fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default, fsae_Alarm_init_default}, false, fsae_IvtTelemetry_init_default, false, fsae_EnergyMeterTelemetry_init_default, false, fsae_MotionTelemetry_init_default, false, fsae_BmsTelemetry_init_default, false, fsae_ImdTelemetry_init_default, false, fsae_SopLimits_init_default, false, fsae_ChargerTelemetry_init_default, false, fsae_PdmTelemetry_init_default, false, fsae_FanTelemetry_init_default, false, fsae_BatteryFanTelemetry_init_default, false, fsae_CancTelemetry_init_default, false, 0, false, fsae_RegenTelemetry_init_default, false, 0}
 #define fsae_PacketHeader_init_zero              {0, 0, 0}
 #define fsae_Alarm_init_zero                     {0, _fsae_AlarmSeverity_MIN, ""}
 #define fsae_FastTelemetry_init_zero             {0, 0, 0, _fsae_DrivingMode_MIN, 0}
 #define fsae_IvtTelemetry_init_zero              {false, 0, false, 0, false, 0, 0, 0, 0, false, 0, false, 0, 0, 0}
 #define fsae_EnergyMeterTelemetry_init_zero      {0, false, 0, false, 0, false, 0, false, 0, 0, 0, 0, 0, 0, 0}
-#define fsae_MotionTelemetry_init_zero           {0, 0, 0, 0, 0, 0}
+#define fsae_MotionTelemetry_init_zero           {0, 0, 0, 0, 0, 0, false, 0, false, 0, false, 0}
 #define fsae_ThermalRawChunk_init_zero           {_fsae_MotorPosition_MIN, 0, 0, 0, 0}
 #define fsae_ThermalSensorSummary_init_zero      {_fsae_MotorPosition_MIN, 0, 0, 0, 0, {fsae_ThermalRawChunk_init_zero, fsae_ThermalRawChunk_init_zero, fsae_ThermalRawChunk_init_zero, fsae_ThermalRawChunk_init_zero}}
 #define fsae_ThermalSummary_init_zero            {0, {fsae_ThermalSensorSummary_init_zero, fsae_ThermalSensorSummary_init_zero, fsae_ThermalSensorSummary_init_zero, fsae_ThermalSensorSummary_init_zero}}
@@ -750,7 +777,8 @@ extern "C" {
 #define fsae_CancVcuRequests_init_zero           {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_zero}
 #define fsae_CancVcuStatus_init_zero             {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, fsae_CancFrameStatus_init_zero}
 #define fsae_CancTelemetry_init_zero             {false, fsae_CancCdcInfo_init_zero, false, fsae_CancCdcAcceleration_init_zero, false, fsae_CancCdcRotation_init_zero, false, fsae_CancCdcCurrent_init_zero, false, fsae_CancAbsStatus_init_zero, false, fsae_CancEscStatus_init_zero, false, fsae_CancIbsInfo_init_zero, false, fsae_CancSasSensor_init_zero, false, fsae_CancVcuRequests_init_zero, false, fsae_CancVcuStatus_init_zero}
-#define fsae_TelemetryFrame_init_zero            {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, fsae_PacketHeader_init_zero, false, fsae_FastTelemetry_init_zero, false, fsae_VehicleState_init_zero, false, fsae_ThermalSummary_init_zero, 0, {fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero}, false, fsae_IvtTelemetry_init_zero, false, fsae_EnergyMeterTelemetry_init_zero, false, fsae_MotionTelemetry_init_zero, false, fsae_BmsTelemetry_init_zero, false, fsae_ImdTelemetry_init_zero, false, fsae_SopLimits_init_zero, false, fsae_ChargerTelemetry_init_zero, false, fsae_PdmTelemetry_init_zero, false, fsae_FanTelemetry_init_zero, false, fsae_BatteryFanTelemetry_init_zero, false, fsae_CancTelemetry_init_zero}
+#define fsae_RegenTelemetry_init_zero            {false, 0, false, 0, false, 0, false, 0, false, 0}
+#define fsae_TelemetryFrame_init_zero            {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero, fsae_BatteryModule_init_zero}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, fsae_PacketHeader_init_zero, false, fsae_FastTelemetry_init_zero, false, fsae_VehicleState_init_zero, false, fsae_ThermalSummary_init_zero, 0, {fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero, fsae_Alarm_init_zero}, false, fsae_IvtTelemetry_init_zero, false, fsae_EnergyMeterTelemetry_init_zero, false, fsae_MotionTelemetry_init_zero, false, fsae_BmsTelemetry_init_zero, false, fsae_ImdTelemetry_init_zero, false, fsae_SopLimits_init_zero, false, fsae_ChargerTelemetry_init_zero, false, fsae_PdmTelemetry_init_zero, false, fsae_FanTelemetry_init_zero, false, fsae_BatteryFanTelemetry_init_zero, false, fsae_CancTelemetry_init_zero, false, 0, false, fsae_RegenTelemetry_init_zero, false, 0}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define fsae_PacketHeader_timestamp_ms_tag       1
@@ -791,6 +819,9 @@ extern "C" {
 #define fsae_MotionTelemetry_accel_z_g_tag       4
 #define fsae_MotionTelemetry_yaw_rate_dps_tag    5
 #define fsae_MotionTelemetry_yaw_deg_tag         6
+#define fsae_MotionTelemetry_gps_latitude_e7_tag 7
+#define fsae_MotionTelemetry_gps_longitude_e7_tag 8
+#define fsae_MotionTelemetry_gps_position_valid_tag 9
 #define fsae_ThermalRawChunk_position_tag        1
 #define fsae_ThermalRawChunk_frame_id_tag        2
 #define fsae_ThermalRawChunk_chunk_index_tag     3
@@ -1003,6 +1034,11 @@ extern "C" {
 #define fsae_CancTelemetry_sas_sensor_tag        8
 #define fsae_CancTelemetry_vcu_requests_tag      9
 #define fsae_CancTelemetry_vcu_status_tag        10
+#define fsae_RegenTelemetry_recycle_rate_tag     1
+#define fsae_RegenTelemetry_power_limit_reason_fl_tag 2
+#define fsae_RegenTelemetry_power_limit_reason_fr_tag 3
+#define fsae_RegenTelemetry_power_limit_reason_rl_tag 4
+#define fsae_RegenTelemetry_power_limit_reason_rr_tag 5
 #define fsae_TelemetryFrame_timestamp_ms_tag     1
 #define fsae_TelemetryFrame_frame_id_tag         2
 #define fsae_TelemetryFrame_apps_position_tag    3
@@ -1044,6 +1080,9 @@ extern "C" {
 #define fsae_TelemetryFrame_fan_telemetry_tag    39
 #define fsae_TelemetryFrame_battery_fan_tag      40
 #define fsae_TelemetryFrame_canc_tag             41
+#define fsae_TelemetryFrame_battery_soc_pct_x10_tag 42
+#define fsae_TelemetryFrame_regen_telemetry_tag  43
+#define fsae_TelemetryFrame_brake_pedal_encoder_angle_deg_tag 44
 
 /* Struct field encoding specification for nanopb */
 #define fsae_PacketHeader_FIELDLIST(X, a) \
@@ -1104,7 +1143,10 @@ X(a, STATIC,   SINGULAR, FLOAT,    accel_x_g,         2) \
 X(a, STATIC,   SINGULAR, FLOAT,    accel_y_g,         3) \
 X(a, STATIC,   SINGULAR, FLOAT,    accel_z_g,         4) \
 X(a, STATIC,   SINGULAR, FLOAT,    yaw_rate_dps,      5) \
-X(a, STATIC,   SINGULAR, FLOAT,    yaw_deg,           6)
+X(a, STATIC,   SINGULAR, FLOAT,    yaw_deg,           6) \
+X(a, STATIC,   OPTIONAL, SINT32,   gps_latitude_e7,   7) \
+X(a, STATIC,   OPTIONAL, SINT32,   gps_longitude_e7,   8) \
+X(a, STATIC,   OPTIONAL, UINT32,   gps_position_valid,   9)
 #define fsae_MotionTelemetry_CALLBACK NULL
 #define fsae_MotionTelemetry_DEFAULT NULL
 
@@ -1443,6 +1485,15 @@ X(a, STATIC,   OPTIONAL, MESSAGE,  vcu_status,       10)
 #define fsae_CancTelemetry_vcu_requests_MSGTYPE fsae_CancVcuRequests
 #define fsae_CancTelemetry_vcu_status_MSGTYPE fsae_CancVcuStatus
 
+#define fsae_RegenTelemetry_FIELDLIST(X, a) \
+X(a, STATIC,   OPTIONAL, UINT32,   recycle_rate,      1) \
+X(a, STATIC,   OPTIONAL, UINT32,   power_limit_reason_fl,   2) \
+X(a, STATIC,   OPTIONAL, UINT32,   power_limit_reason_fr,   3) \
+X(a, STATIC,   OPTIONAL, UINT32,   power_limit_reason_rl,   4) \
+X(a, STATIC,   OPTIONAL, UINT32,   power_limit_reason_rr,   5)
+#define fsae_RegenTelemetry_CALLBACK NULL
+#define fsae_RegenTelemetry_DEFAULT NULL
+
 #define fsae_TelemetryFrame_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UINT32,   timestamp_ms,      1) \
 X(a, STATIC,   SINGULAR, UINT32,   frame_id,          2) \
@@ -1484,7 +1535,10 @@ X(a, STATIC,   OPTIONAL, MESSAGE,  charger_telemetry,  37) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  pdm_telemetry,    38) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  fan_telemetry,    39) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  battery_fan,      40) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  canc,             41)
+X(a, STATIC,   OPTIONAL, MESSAGE,  canc,             41) \
+X(a, STATIC,   OPTIONAL, UINT32,   battery_soc_pct_x10,  42) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  regen_telemetry,  43) \
+X(a, STATIC,   OPTIONAL, FLOAT,    brake_pedal_encoder_angle_deg,  44)
 #define fsae_TelemetryFrame_CALLBACK NULL
 #define fsae_TelemetryFrame_DEFAULT NULL
 #define fsae_TelemetryFrame_modules_MSGTYPE fsae_BatteryModule
@@ -1504,6 +1558,7 @@ X(a, STATIC,   OPTIONAL, MESSAGE,  canc,             41)
 #define fsae_TelemetryFrame_fan_telemetry_MSGTYPE fsae_FanTelemetry
 #define fsae_TelemetryFrame_battery_fan_MSGTYPE fsae_BatteryFanTelemetry
 #define fsae_TelemetryFrame_canc_MSGTYPE fsae_CancTelemetry
+#define fsae_TelemetryFrame_regen_telemetry_MSGTYPE fsae_RegenTelemetry
 
 extern const pb_msgdesc_t fsae_PacketHeader_msg;
 extern const pb_msgdesc_t fsae_Alarm_msg;
@@ -1536,6 +1591,7 @@ extern const pb_msgdesc_t fsae_CancSasSensor_msg;
 extern const pb_msgdesc_t fsae_CancVcuRequests_msg;
 extern const pb_msgdesc_t fsae_CancVcuStatus_msg;
 extern const pb_msgdesc_t fsae_CancTelemetry_msg;
+extern const pb_msgdesc_t fsae_RegenTelemetry_msg;
 extern const pb_msgdesc_t fsae_TelemetryFrame_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
@@ -1570,6 +1626,7 @@ extern const pb_msgdesc_t fsae_TelemetryFrame_msg;
 #define fsae_CancVcuRequests_fields &fsae_CancVcuRequests_msg
 #define fsae_CancVcuStatus_fields &fsae_CancVcuStatus_msg
 #define fsae_CancTelemetry_fields &fsae_CancTelemetry_msg
+#define fsae_RegenTelemetry_fields &fsae_RegenTelemetry_msg
 #define fsae_TelemetryFrame_fields &fsae_TelemetryFrame_msg
 
 /* Maximum encoded size of messages (where known) */
@@ -1596,12 +1653,13 @@ extern const pb_msgdesc_t fsae_TelemetryFrame_msg;
 #define fsae_FastTelemetry_size                  26
 #define fsae_ImdTelemetry_size                   36
 #define fsae_IvtTelemetry_size                   60
-#define fsae_MotionTelemetry_size                31
+#define fsae_MotionTelemetry_size                49
 #define fsae_MotorState_size                     56
 #define fsae_PacketHeader_size                   18
 #define fsae_PdmTelemetry_size                   40
+#define fsae_RegenTelemetry_size                 30
 #define fsae_SopLimits_size                      48
-#define fsae_TelemetryFrame_size                 6216
+#define fsae_TelemetryFrame_size                 6280
 #define fsae_ThermalRawChunk_size                26
 #define fsae_ThermalSensorSummary_size           132
 #define fsae_ThermalSummary_size                 540

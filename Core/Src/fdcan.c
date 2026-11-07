@@ -67,7 +67,8 @@ HAL_StatusTypeDef FDCAN_Init(FDCAN_Bus_t bus)
     return MCP2518FD_Init(handle, &hspi1, MCP2518_CS_A_GPIO_Port, MCP2518_CS_A_Pin);
   }
 
-  MCP2518FD_SetStdFilters(handle, NULL, 0U);
+  static const uint16_t ids[] = {0x301,0x302,0x303,0x304,0x125,0x132,0x270,0x17E,0x0AB,0x166};
+  MCP2518FD_SetStdFilters(handle, ids, sizeof(ids)/sizeof(ids[0]));
   return MCP2518FD_Init(handle, &hspi3, MCP2518_CS_B_GPIO_Port, MCP2518_CS_B_Pin);
 }
 

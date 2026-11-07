@@ -15,7 +15,7 @@ test_and_fix/
 
 ## 通信与回归测试
 
-- `communication/core_y100m_mqtt_test.py`：Core-Y100M 串口、AT 和 MQTT 基础连通性测试。
+- `communication/core_y100m_mqtt_test.py`：Core-Y100M DTU 固件串口封包测试；不发 AT 或 MQTT 报文，默认 COM16 / 115200 8N1，发送 10 帧GPS 速度和待行驶状态。
 - `communication/pc_y100m_gps_publish_test.py`：Y100M + TelemetryFrame GPS 发布链路测试。
 - `firmware/publish_presence_test.c`：使用真实发布编码与 nanopb 解码检查字段存在性。它不属于正常固件；需要在 HAL tick 初始化后、采集及 RTOS 任务启动前调用 `Publish_PresenceRegressionTest()`，返回 0 表示成功，否则返回失败行号。测试会覆盖遥测缓存，不可在运行中的车辆上调用。
 - `build/4g_verify.mk`：基于 CubeIDE Debug makefile 验证串口、DTU 通信及日志模块，兼容新模块尚未加入生成列表的情况。
@@ -53,3 +53,20 @@ python test_and_fix/build/verify_firmware.py
 - 新增自有测试、验证及修复工具统一放入本目录，并在本文登记用途与执行条件。
 - 编译产物与运行日志留在构建目录，不作为测试源码提交。
 - 硬件备份继续放在 `hardware/`，协议源文件和固件源码继续保留原位置。
+
+## Core-Y100M DTU 固件测试
+
+安装 `pyserial`、`protobuf` 并将 `protoc` 加入 PATH（或通过 `--protoc` 指定）。脚本读取同目录实际 `.proto`，在临时目录生成描述符，不修改生成代码。
+
+```powershell
+python test_and_fix/communication/core_y100m_mqtt_test.py --dry-run --count 2
+python test_and_fix/communication/core_y100m_mqtt_test.py --port COM16 --count 10
+python test_and_fix/communication/core_y100m_mqtt_test.py --port COM16 --count 0
+python test_and_fix/communication/core_y100m_mqtt_test.py --port COM16 --listen-only
+python test_and_fix/communication/core_y100m_mqtt_test.py --payload-file capture.pb --count 1
+python -m unittest discover -s test_and_fix/communication -p test_dtu_transport.py
+```
+
+`capture.pb` 必须是裸 TelemetryFrame 二进制；脚本校验可解码后原样加封包，不能传 HEX 文本、已封包数据或 MQTT 报文。默认每帧将 1..120 km/h 随机数直接写入 motion.gps_speed_kmh，连续帧不重复，并设置顶层 ready_to_drive=1（待行驶按已准备好行驶理解）。不填充 fast_telemetry、vehicle_state、电压、电流或温度。速度是指定的测试数值，并非从 GPS 硬件采集。--speed 可指定固定车速；--payload-file 仍原样发送文件，不改速度或状态。内部 frame_id/header.seq/source_id 按当前 MCU 保持 0；外层序号从 0 递增并回绕。默认发送后间隔 0.21 秒，另计预计 UART 线速耗时；PC/USB 调度不保证与 MCU 精确同步。
+
+DTU 的 MQTT 配置在设备端保存：bitfsae.com:1883，发布 fsae/telemetry、订阅 fsae/command。脚本不保存密码，不联网验证、不更改模块设置。RX 显示原始字节分片，不视为服务器确认。串口写入成功只证明 PC 已交给串口驱动；端到端须在服务器检查 framed_ok、CRC 和解码值。测试时 PC 与 MCU 不可同时驱动模块 RX。Ctrl+C 关闭串口退出。

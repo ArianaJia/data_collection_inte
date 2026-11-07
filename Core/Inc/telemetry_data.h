@@ -152,6 +152,7 @@ typedef struct
     uint8_t  HallErrorCode;
     /* State of charge percentage. */
     uint8_t  SOC;
+    uint16_t SocDeciPct;
     /* Charger requested output voltage. */
     uint16_t Charge_ReqVolt;
     /* Charger requested output current. */
@@ -220,7 +221,14 @@ typedef struct
     /* Throttle pedal position in 0.1 percent units. */
     uint16_t ThrottlePositionDeciPct;
     /* Oil pressure in milli-kPa. */
-    uint16_t OilPressureMilliKpa;
+    uint16_t OilPressureMilliKpa; /* Right circuit. */
+    uint16_t OilPressureLeftMilliKpa;
+    uint32_t ModeTick;
+    int32_t LatitudeE7, LongitudeE7;
+    uint32_t PositionTick, PositionStatusTick, RegenTick, PedalTick;
+    uint8_t PositionSeen, PositionStatusSeen, PositionFlags, RegenSeen, PedalSeen;
+    uint8_t RegenRate, RegenReasons[4]; /* FL, FR, RL, RR */
+    uint16_t PedalCount;
     /* Legacy per-channel error cache kept for compatibility. */
     int      ERRO[4];
 } CANB_ECU_VehicleTypeDef;

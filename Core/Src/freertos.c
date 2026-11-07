@@ -59,7 +59,7 @@ typedef StaticQueue_t osStaticMessageQDef_t;
 #define APP_SPICANA_DECODE_ENABLED       1U
 #define APP_SPICANA_PUBLISH_ENABLED      1U
 #define APP_MLX90640_PUBLISH_ENABLED     1U
-#define APP_SPICDC_TASK_ENABLED          0U
+#define APP_SPICDC_TASK_ENABLED          1U
 
 /* USER CODE END PD */
 
@@ -274,6 +274,8 @@ const osMessageQueueAttr_t task01DebugQueue_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
+/* Queue overflow counters: index 0=CANA, 1=CANC; inspect with debugger. */
+volatile uint32_t g_spiCanQueueDrops[2];
 static void App_WaitForBootInit(void);
 static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data);
 static void CanBattery_Dispatch(const CAN_Msg_Queue_t *recv_data);
@@ -287,8 +289,6 @@ static void Mlx_SendCanSummary(uint8_t sensor_id);
 static uint32_t Mlx_GetCanSummaryId(uint8_t sensor_id);
 static void Mlx_EncodeCanSummaryPair(int32_t centi_c, uint8_t *integer_part, uint8_t *fraction_part);
 static void SpiCan_PollToQueue(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus, osMessageQueueId_t queue_handle, uint8_t can_channel);
-static bool SpiCana_Poll(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus);
-static void SpiCdc_Poll(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus);
 static HAL_StatusTypeDef Rs485_StartDma(void);
 static void Rs485_DrainDmaBuffer(void);
 static void Rs485_ProcessSpan(uint16_t start, uint16_t end);
@@ -440,7 +440,8 @@ void CanForViehcleTask(void *argument)
   {
     if(osMessageQueueGet(CAN_Msg_QueueHandle, &recv_data, NULL, pdMS_TO_TICKS(20U)) == osOK)
     {
-      app_can_debug_log_rx_context("CAN2 RX", &g_can2_ctx);
+      if (recv_data.can_channel == CAN_CHANNEL_VEHICLE_CANB)
+        app_can_debug_log_rx_context("CAN2 RX", &g_can2_ctx);
       CanVehicle_Dispatch(&recv_data);
     }
     CAN_DecodeVehicleService(HAL_GetTick());
@@ -640,7 +641,7 @@ void SPICanCDCTask(void *argument)
     {
       SpiCdc_Dispatch(&recv_data);
     }
-    osDelay(200);
+    osDelay(2);
   }
   /* USER CODE END SPICanCDCTask */
 }
@@ -1138,6 +1139,7 @@ static void SpiCan_PollToQueue(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus
     return;
   }
 
+  uint8_t budget = 32U;
   do
   {
     if (FDCAN_Poll(bus, &rx_frame, &received) != HAL_OK || (received == 0U))
@@ -1156,81 +1158,12 @@ static void SpiCan_PollToQueue(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus
     queue_item.is_ext_id = 0U;
     (void)memset(queue_item.msg_data, 0, sizeof(queue_item.msg_data));
     (void)memcpy(queue_item.msg_data, rx_frame.data, rx_frame.length);
-    (void)osMessageQueuePut(queue_handle, &queue_item, 0U, 0U);
-  } while (received != 0U);
-}
-
-static bool SpiCana_Poll(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus)
-{
-  CAN_Msg_Queue_t frame_data;
-  FDCAN_StdFrame_t rx_frame;
-  uint8_t received = 0U;
-  bool decoded_any = false;
-
-  if ((recv_data == NULL) || (FDCAN_IsReady(bus) == 0U))
-  {
-    return false;
-  }
-
-  do
-  {
-    if (FDCAN_Poll(bus, &rx_frame, &received) != HAL_OK || (received == 0U))
+    if (osMessageQueuePut(queue_handle, &queue_item, 0U, 0U) != osOK)
     {
-      return decoded_any;
-    }
-
-    if ((rx_frame.frame_format != FDCAN_FRAME_CLASSIC) || (rx_frame.length > 8U))
-    {
-      continue;
-    }
-
-    frame_data.can_channel = CAN_CHANNEL_CONTROLLER_CANA;
-    frame_data.msg_id = rx_frame.std_id;
-    frame_data.dlc = rx_frame.length;
-    frame_data.is_ext_id = 0U;
-    (void)memset(frame_data.msg_data, 0, sizeof(frame_data.msg_data));
-    (void)memcpy(frame_data.msg_data, rx_frame.data, rx_frame.length);
-    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
-#if (APP_SPICANA_DECODE_ENABLED != 0U)
-    CAN_DecodeControllerCanaMessage(&frame_data);
-#endif
-    decoded_any = true;
-  } while (received != 0U);
-
-  return decoded_any;
-}
-
-static void SpiCdc_Poll(const Peripheral_Rx_Frame_t *recv_data, FDCAN_Bus_t bus)
-{
-  CAN_Msg_Queue_t frame_data;
-  FDCAN_StdFrame_t rx_frame;
-  uint8_t received = 0U;
-
-  if ((recv_data == NULL) || (FDCAN_IsReady(bus) == 0U))
-  {
-    return;
-  }
-
-  do
-  {
-    if (FDCAN_Poll(bus, &rx_frame, &received) != HAL_OK || (received == 0U))
-    {
+      g_spiCanQueueDrops[bus == FDCAN_BUS_A ? 0U : 1U]++;
       return;
     }
-
-    if ((rx_frame.frame_format != FDCAN_FRAME_CLASSIC) || (rx_frame.length > 8U))
-    {
-      continue;
-    }
-
-    frame_data.can_channel = CAN_CHANNEL_CDC_MONITOR;
-    frame_data.msg_id = rx_frame.std_id;
-    frame_data.dlc = rx_frame.length;
-    frame_data.is_ext_id = 0U;
-    (void)memset(frame_data.msg_data, 0, sizeof(frame_data.msg_data));
-    (void)memcpy(frame_data.msg_data, rx_frame.data, rx_frame.length);
-    CAN_DecodeCdcMonitorMessage(&frame_data);
-  } while (received != 0U);
+  } while ((received != 0U) && (--budget != 0U));
 }
 
 static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data)
@@ -1240,6 +1173,24 @@ static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data)
     return;
   }
 
+  /* Only this queue consumer decodes SPI CAN frames and requests publish. */
+  if (recv_data->can_channel == CAN_CHANNEL_CONTROLLER_CANA)
+  {
+#if (APP_SPICANA_DECODE_ENABLED != 0U)
+    CAN_DecodeControllerCanaMessage(recv_data);
+#if (APP_SPICANA_PUBLISH_ENABLED != 0U)
+    (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
+    (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
+#endif
+#endif
+    return;
+  }
+  if (recv_data->can_channel == CAN_CHANNEL_CDC_MONITOR)
+  {
+    CAN_DecodeCdcMonitorMessage(recv_data);
+    (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
+    return;
+  }
   if (recv_data->can_channel == CAN_CHANNEL_VEHICLE_CANB)
   {
     CAN_DecodeVehicleCanbMessage(recv_data);
@@ -1266,13 +1217,8 @@ static void Rs485_Dispatch(const Peripheral_Rx_Frame_t *recv_data)
 static void SpiCana_Dispatch(const Peripheral_Rx_Frame_t *recv_data)
 {
 #if (APP_SPICANA_POLL_ENABLED != 0U)
-  if (SpiCana_Poll(recv_data, FDCAN_BUS_A))
-  {
-#if (APP_SPICANA_PUBLISH_ENABLED != 0U)
-    (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
-    (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
-#endif
-  }
+  SpiCan_PollToQueue(recv_data, FDCAN_BUS_A, CAN_Msg_QueueHandle,
+                     CAN_CHANNEL_CONTROLLER_CANA);
 #else
   (void)recv_data;
 #endif
@@ -1280,7 +1226,8 @@ static void SpiCana_Dispatch(const Peripheral_Rx_Frame_t *recv_data)
 
 static void SpiCdc_Dispatch(const Peripheral_Rx_Frame_t *recv_data)
 {
-  SpiCdc_Poll(recv_data, FDCAN_BUS_B);
+  SpiCan_PollToQueue(recv_data, FDCAN_BUS_B, CAN_Msg_QueueHandle,
+                     CAN_CHANNEL_CDC_MONITOR);
 }
 
 static void VehicleCan_Send(const CAN_Tx_Queue_t *tx_data)

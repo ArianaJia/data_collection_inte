@@ -17,6 +17,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cc", default="arm-none-eabi-gcc", help="ARM GCC executable (GCC 11 or newer)")
     parser.add_argument("--uplink", choices=["0", "1"], help="Override APP_UPLINK_ENABLED")
+    parser.add_argument("--optimization", choices=["0", "2", "s"], default="0")
     args = parser.parse_args()
     cc = shutil.which(args.cc)
     if not cc:
@@ -37,7 +38,7 @@ def main():
                 "Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F"]
     cpu = ["-mcpu=cortex-m4", "-mthumb", "-mfpu=fpv4-sp-d16", "-mfloat-abi=hard"]
     flags = cpu + ["-std=gnu11", "-DDEBUG", "-DUSE_HAL_DRIVER", "-DSTM32F407xx",
-                   "-O0", "-g3", "-ffunction-sections", "-fdata-sections", "-Wall",
+                   "-O" + args.optimization, "-g3", "-ffunction-sections", "-fdata-sections", "-Wall",
                    "-Werror=implicit-function-declaration", "-fstack-usage",
                    "--specs=nano.specs"] + ["-I" + p for p in includes]
     if args.uplink is not None:
