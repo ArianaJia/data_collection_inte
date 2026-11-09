@@ -1,4 +1,5 @@
-VERSION "MLX90640 CAN Summary"
+VERSION ""
+
 
 NS_ : 
 	NS_DESC_
@@ -32,85 +33,51 @@ NS_ :
 
 BS_:
 
-BU_: DATA_COLLECTION_INTEGRAL VEHICLE_LOGGER
+BU_: ECU Display VCU SteeringWheel WirelessGateway DATA_COLLECTION_INTEGRAL PDM FanController BMS_Master Competition_Meter FS_Datalogger Chroma LegacyCharger Tools BrakePedalAngleSensor
 
-BO_ 113 MLX90640_THERMAL_SUMMARY_FR: 8 DATA_COLLECTION_INTEGRAL
- SG_ R0_Integer : 0|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R0_Fraction : 8|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
- SG_ R1_Integer : 16|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R1_Fraction : 24|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
- SG_ R2_Integer : 32|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R2_Fraction : 40|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
- SG_ R3_Integer : 48|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R3_Fraction : 56|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
 
-BO_ 114 MLX90640_THERMAL_SUMMARY_FL: 8 DATA_COLLECTION_INTEGRAL
- SG_ R0_Integer : 0|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R0_Fraction : 8|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
- SG_ R1_Integer : 16|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R1_Fraction : 24|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
- SG_ R2_Integer : 32|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R2_Fraction : 40|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
- SG_ R3_Integer : 48|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R3_Fraction : 56|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+BO_ 113 MLX90640_TireTemp_01_04_0x071: 8 DATA_COLLECTION_INTEGRAL
+ SG_ TireTemp01_Integer : 0|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp01_Fraction : 8|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
+ SG_ TireTemp02_Integer : 16|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp02_Fraction : 24|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
+ SG_ TireTemp03_Integer : 32|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp03_Fraction : 40|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
+ SG_ TireTemp04_Integer : 48|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp04_Fraction : 56|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
 
-BO_ 115 MLX90640_THERMAL_SUMMARY_RL: 8 DATA_COLLECTION_INTEGRAL
- SG_ R0_Integer : 0|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R0_Fraction : 8|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
- SG_ R1_Integer : 16|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R1_Fraction : 24|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
- SG_ R2_Integer : 32|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R2_Fraction : 40|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
- SG_ R3_Integer : 48|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R3_Fraction : 56|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+BO_ 114 MLX90640_TireTemp_05_08_0x072: 8 DATA_COLLECTION_INTEGRAL
+ SG_ TireTemp05_Integer : 0|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp05_Fraction : 8|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
+ SG_ TireTemp06_Integer : 16|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp06_Fraction : 24|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
+ SG_ TireTemp07_Integer : 32|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp07_Fraction : 40|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
+ SG_ TireTemp08_Integer : 48|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp08_Fraction : 56|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
 
-BO_ 116 MLX90640_THERMAL_SUMMARY_RR: 8 DATA_COLLECTION_INTEGRAL
- SG_ R0_Integer : 0|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R0_Fraction : 8|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
- SG_ R1_Integer : 16|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R1_Fraction : 24|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
- SG_ R2_Integer : 32|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R2_Fraction : 40|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
- SG_ R3_Integer : 48|8@1+ (1,0) [0|255] "degC" VEHICLE_LOGGER
- SG_ R3_Fraction : 56|8@1+ (0.01,0) [0|99] "degC" VEHICLE_LOGGER
+BO_ 115 MLX90640_TireTemp_09_12_0x073: 8 DATA_COLLECTION_INTEGRAL
+ SG_ TireTemp09_Integer : 0|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp09_Fraction : 8|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
+ SG_ TireTemp10_Integer : 16|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp10_Fraction : 24|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
+ SG_ TireTemp11_Integer : 32|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp11_Fraction : 40|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
+ SG_ TireTemp12_Integer : 48|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp12_Fraction : 56|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
 
-CM_ BO_ 113 "MLX90640 front-right summary. Region meaning is fixed as R0=upper-left, R1=upper-right, R2=lower-left, R3=lower-right inside the sensor field of view. Each region is encoded as integer byte + fractional byte (0.01 degC).";
-CM_ BO_ 114 "MLX90640 front-left summary. Region meaning is fixed as R0=upper-left, R1=upper-right, R2=lower-left, R3=lower-right inside the sensor field of view. Payload layout is identical to FR.";
-CM_ BO_ 115 "MLX90640 rear-left summary. Region meaning is fixed as R0=upper-left, R1=upper-right, R2=lower-left, R3=lower-right inside the sensor field of view. Payload layout is identical to FL.";
-CM_ BO_ 116 "MLX90640 rear-right summary. Region meaning is fixed as R0=upper-left, R1=upper-right, R2=lower-left, R3=lower-right inside the sensor field of view. Payload layout is identical to FL.";
+BO_ 116 MLX90640_TireTemp_13_16_0x074: 8 DATA_COLLECTION_INTEGRAL
+ SG_ TireTemp13_Integer : 0|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp13_Fraction : 8|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
+ SG_ TireTemp14_Integer : 16|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp14_Fraction : 24|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
+ SG_ TireTemp15_Integer : 32|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp15_Fraction : 40|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
+ SG_ TireTemp16_Integer : 48|8@1+ (1,0) [0|255] "degC"  Display,WirelessGateway
+ SG_ TireTemp16_Fraction : 56|8@1+ (0.01,0) [0|0.99] "degC"  Display,WirelessGateway
 
-CM_ SG_ 113 R0_Integer "Front-right sensor Region 0 integer part. Region 0 = upper-left quadrant of the sensor image. Final temperature = R0_Integer + R0_Fraction.";
-CM_ SG_ 113 R0_Fraction "Front-right sensor Region 0 fractional part, unit 0.01 degC. Region 0 = upper-left quadrant. Example: Integer=23, Fraction=45 means 23.45 degC.";
-CM_ SG_ 113 R1_Integer "Front-right sensor Region 1 integer part. Region 1 = upper-right quadrant of the sensor image. Final temperature = R1_Integer + R1_Fraction.";
-CM_ SG_ 113 R1_Fraction "Front-right sensor Region 1 fractional part, unit 0.01 degC. Region 1 = upper-right quadrant.";
-CM_ SG_ 113 R2_Integer "Front-right sensor Region 2 integer part. Region 2 = lower-left quadrant of the sensor image. Final temperature = R2_Integer + R2_Fraction.";
-CM_ SG_ 113 R2_Fraction "Front-right sensor Region 2 fractional part, unit 0.01 degC. Region 2 = lower-left quadrant.";
-CM_ SG_ 113 R3_Integer "Front-right sensor Region 3 integer part. Region 3 = lower-right quadrant of the sensor image. Final temperature = R3_Integer + R3_Fraction.";
-CM_ SG_ 113 R3_Fraction "Front-right sensor Region 3 fractional part, unit 0.01 degC. Region 3 = lower-right quadrant.";
 
-CM_ SG_ 114 R0_Integer "Front-left sensor Region 0 integer part. Region 0 = upper-left quadrant of the sensor image. Final temperature = R0_Integer + R0_Fraction.";
-CM_ SG_ 114 R0_Fraction "Front-left sensor Region 0 fractional part, unit 0.01 degC. Region 0 = upper-left quadrant.";
-CM_ SG_ 114 R1_Integer "Front-left sensor Region 1 integer part. Region 1 = upper-right quadrant of the sensor image. Final temperature = R1_Integer + R1_Fraction.";
-CM_ SG_ 114 R1_Fraction "Front-left sensor Region 1 fractional part, unit 0.01 degC. Region 1 = upper-right quadrant.";
-CM_ SG_ 114 R2_Integer "Front-left sensor Region 2 integer part. Region 2 = lower-left quadrant of the sensor image. Final temperature = R2_Integer + R2_Fraction.";
-CM_ SG_ 114 R2_Fraction "Front-left sensor Region 2 fractional part, unit 0.01 degC. Region 2 = lower-left quadrant.";
-CM_ SG_ 114 R3_Integer "Front-left sensor Region 3 integer part. Region 3 = lower-right quadrant of the sensor image. Final temperature = R3_Integer + R3_Fraction.";
-CM_ SG_ 114 R3_Fraction "Front-left sensor Region 3 fractional part, unit 0.01 degC. Region 3 = lower-right quadrant.";
-
-CM_ SG_ 115 R0_Integer "Rear-left sensor Region 0 integer part. Region 0 = upper-left quadrant of the sensor image. Final temperature = R0_Integer + R0_Fraction.";
-CM_ SG_ 115 R0_Fraction "Rear-left sensor Region 0 fractional part, unit 0.01 degC. Region 0 = upper-left quadrant.";
-CM_ SG_ 115 R1_Integer "Rear-left sensor Region 1 integer part. Region 1 = upper-right quadrant of the sensor image. Final temperature = R1_Integer + R1_Fraction.";
-CM_ SG_ 115 R1_Fraction "Rear-left sensor Region 1 fractional part, unit 0.01 degC. Region 1 = upper-right quadrant.";
-CM_ SG_ 115 R2_Integer "Rear-left sensor Region 2 integer part. Region 2 = lower-left quadrant of the sensor image. Final temperature = R2_Integer + R2_Fraction.";
-CM_ SG_ 115 R2_Fraction "Rear-left sensor Region 2 fractional part, unit 0.01 degC. Region 2 = lower-left quadrant.";
-CM_ SG_ 115 R3_Integer "Rear-left sensor Region 3 integer part. Region 3 = lower-right quadrant of the sensor image. Final temperature = R3_Integer + R3_Fraction.";
-CM_ SG_ 115 R3_Fraction "Rear-left sensor Region 3 fractional part, unit 0.01 degC. Region 3 = lower-right quadrant.";
-
-CM_ SG_ 116 R0_Integer "Rear-right sensor Region 0 integer part. Region 0 = upper-left quadrant of the sensor image. Final temperature = R0_Integer + R0_Fraction.";
-CM_ SG_ 116 R0_Fraction "Rear-right sensor Region 0 fractional part, unit 0.01 degC. Region 0 = upper-left quadrant.";
-CM_ SG_ 116 R1_Integer "Rear-right sensor Region 1 integer part. Region 1 = upper-right quadrant of the sensor image. Final temperature = R1_Integer + R1_Fraction.";
-CM_ SG_ 116 R1_Fraction "Rear-right sensor Region 1 fractional part, unit 0.01 degC. Region 1 = upper-right quadrant.";
-CM_ SG_ 116 R2_Integer "Rear-right sensor Region 2 integer part. Region 2 = lower-left quadrant of the sensor image. Final temperature = R2_Integer + R2_Fraction.";
-CM_ SG_ 116 R2_Fraction "Rear-right sensor Region 2 fractional part, unit 0.01 degC. Region 2 = lower-left quadrant.";
-CM_ SG_ 116 R3_Integer "Rear-right sensor Region 3 integer part. Region 3 = lower-right quadrant of the sensor image. Final temperature = R3_Integer + R3_Fraction.";
-CM_ SG_ 116 R3_Fraction "Rear-right sensor Region 3 fractional part, unit 0.01 degC. Region 3 = lower-right quadrant.";
+CM_ BO_ 113 "MLX90640 right-front tire-temperature cells 1..4, standard CAN ID 0x071, DLC=8. R0..R3 map directly to cells 1..4 in payload order, from RF rightmost/outside to RF leftmost/inside. Bytes 0/2/4/6 are unsigned integer degC; bytes 1/3/5/7 are unsigned hundredths 0..99. Full temperature = Integer + Fraction.";
+CM_ BO_ 114 "MLX90640 left-front tire-temperature cells 5..8, standard CAN ID 0x072, DLC=8. R0..R3 map directly to cells 5..8 in payload order, from LF rightmost/inside to LF leftmost/outside. Bytes 0/2/4/6 are unsigned integer degC; bytes 1/3/5/7 are unsigned hundredths 0..99. Full temperature = Integer + Fraction.";
+CM_ BO_ 115 "MLX90640 left-rear tire-temperature cells 9..12, standard CAN ID 0x073, DLC=8. R0..R3 map directly to cells 9..12 in payload order, from LR leftmost/outside to LR rightmost/inside. Bytes 0/2/4/6 are unsigned integer degC; bytes 1/3/5/7 are unsigned hundredths 0..99. Full temperature = Integer + Fraction.";
+CM_ BO_ 116 "MLX90640 right-rear tire-temperature cells 13..16, standard CAN ID 0x074, DLC=8. R0..R3 map directly to cells 13..16 in payload order, from RR leftmost/inside to RR rightmost/outside. Bytes 0/2/4/6 are unsigned integer degC; bytes 1/3/5/7 are unsigned hundredths 0..99. Full temperature = Integer + Fraction.";

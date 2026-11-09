@@ -75,25 +75,26 @@ endif
 ######################################
 # C sources
 C_SOURCES =  \
+Core/Src/MLX90640_API.c \
+Core/Src/MLX90640_I2C_Driver.c \
 Core/Src/app_log.c \
+Core/Src/can.c \
+Core/Src/can_decode.c \
+Core/Src/canc_telemetry.c \
+Core/Src/dma.c \
 Core/Src/fdcan.c \
+Core/Src/freertos.c \
 Core/Src/fsae_telemetry.pb.c \
+Core/Src/gpio.c \
+Core/Src/i2c.c \
+Core/Src/main.c \
 Core/Src/mcp2518fd.c \
+Core/Src/mlx90640_app.c \
 Core/Src/modem_dtu.c \
 Core/Src/pb_common.c \
 Core/Src/pb_decode.c \
 Core/Src/pb_encode.c \
 Core/Src/publish.c \
-Core/Src/MLX90640_API.c \
-Core/Src/MLX90640_I2C_Driver.c \
-Core/Src/can.c \
-Core/Src/can_decode.c \
-Core/Src/dma.c \
-Core/Src/freertos.c \
-Core/Src/gpio.c \
-Core/Src/i2c.c \
-Core/Src/main.c \
-Core/Src/mlx90640_app.c \
 Core/Src/spi.c \
 Core/Src/stm32f4xx_hal_msp.c \
 Core/Src/stm32f4xx_hal_timebase_tim.c \
@@ -102,6 +103,7 @@ Core/Src/syscalls.c \
 Core/Src/sysmem.c \
 Core/Src/system_stm32f4xx.c \
 Core/Src/telemetry_data.c \
+Core/Src/telemetry_extra.c \
 Core/Src/usart.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_can.c \
@@ -210,6 +212,8 @@ AS_DEFS =
 
 # C defines
 C_DEFS =  \
+-DSTM32F407xx \
+-DUSE_HAL_DRIVER
 
 
 # CXX defines
@@ -226,9 +230,6 @@ C_INCLUDES =  \
 -IDrivers/CMSIS/Include \
 -IDrivers/STM32F4xx_HAL_Driver/Inc \
 -IDrivers/STM32F4xx_HAL_Driver/Inc/Legacy \
--IFATFS/App \
--IFATFS/Target \
--IMiddlewares/Third_Party/FatFs/src \
 -IMiddlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 \
 -IMiddlewares/Third_Party/FreeRTOS/Source/include \
 -IMiddlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F
@@ -269,7 +270,7 @@ LIBDIR = \
 
 
 # Additional LD Flags from config file
-ADDITIONALLDFLAGS = -Wl,--print-memory-usage 
+ADDITIONALLDFLAGS = --specs=nano.specs --specs=nosys.specs -Wl,--print-memory-usage 
 
 LDFLAGS = $(MCU) $(ADDITIONALLDFLAGS) -T$(LDSCRIPT) $(LIBDIR) $(LIBS) -Wl,-Map=$(BUILD_DIRECTORY)/$(TARGET).map,--cref -Wl,--gc-sections
 

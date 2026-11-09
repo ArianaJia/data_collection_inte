@@ -29,6 +29,22 @@ extern "C" {
 #define CANB_MOTION_VALID_ACCEL (1U << 1)
 #define CANB_MOTION_VALID_GYRO (1U << 2)
 #define CANB_MOTION_VALID_YAW  (1U << 3)
+/* Gateway receive policies; CG source validity is provided by Display. */
+#define CANB_GPS_TIMEOUT_MS             500U
+#define CANB_CG_RX_TIMEOUT_MS           150U
+#define CANB_CG_VELOCITY_VALID          (1U << 0)
+#define CANB_CG_SPEED_VALID             (1U << 1)
+#define CANB_CG_TRACK_VALID             (1U << 2)
+#define CANB_CG_HEADING_VALID           (1U << 3)
+#define CANB_CG_YAW_RATE_VALID          (1U << 4)
+#define CANB_CG_YAW_RATE_ESTIMATED      (1U << 5)
+#define CANB_CG_VELOCITY_SATURATED      (1U << 6)
+
+/* Physical MLX sensor order on this board, shared by CAN and protobuf. */
+#define MLX90640_SENSOR_FR 0U
+#define MLX90640_SENSOR_FL 1U
+#define MLX90640_SENSOR_RL 2U
+#define MLX90640_SENSOR_RR 3U
 
 /* IVT flags follow CAN1 MUX 0..7. Received and usable are distinct. */
 #define BATTERY_IVT_VALID_CURRENT (1U << 0)
@@ -94,6 +110,12 @@ typedef struct
     uint8_t ChargeCommValid;
     uint8_t CoolingControl, FanTargetDuty, FanStatusFlags;
     uint16_t FanSpeedRpm;
+    struct {
+        uint8_t Seen, ActualDutyPct, ActiveLimitPct, Mode, PowerSource;
+        uint8_t StatusFlags, LeaseRemainingS, ProtocolVersion;
+        uint16_t Rpm;
+        uint32_t Tick;
+    } CanbFan; /* 0x5AA, independent of the CAN1 fan source. */
     uint8_t ImdFrequencyClass, ImdFlags, ImdReceived;
     uint16_t ImdDutyDeciPct, ImdResistanceKohm, ImdFrequencyCentiHz;
     uint8_t HvRequestFlags, LastPrechargeResult;
@@ -220,9 +242,18 @@ typedef struct
     int16_t  SteeringAngleDeciDeg;
     /* Throttle pedal position in 0.1 percent units. */
     uint16_t ThrottlePositionDeciPct;
-    /* Oil pressure in milli-kPa. */
-    uint16_t OilPressureMilliKpa; /* Right circuit. */
-    uint16_t OilPressureLeftMilliKpa;
+    /* 0x305 OilPressure_R/F: raw 1 kPa = 0.001 MPa, rear/front. */
+    uint16_t OilPressureRearKpa;
+    uint16_t OilPressureFrontKpa;
+    uint8_t DriverInputsSeen;
+    uint32_t DriverInputsTick;
+    /* 0x509 bit masks use FR, FL, RR, RL in bits 0..3. */
+    uint8_t AmkSystemReadyMask, AmkQuitDcOnMask, AmkQuitInverterOnMask, AmkEnableMask;
+    /* Requests are monitored separately from confirmed 0x509 driving mode. */
+    uint8_t RequestedDriveModeCode, DriveModeRequestSeen;
+    uint32_t DriveModeRequestTick;
+    uint8_t SlipLevel, DisableRequest, ErrorClearActive, LapTimerToggle, SteeringCommandSeen;
+    uint32_t SteeringCommandTick;
     uint32_t ModeTick;
     int32_t LatitudeE7, LongitudeE7;
     uint32_t PositionTick, PositionStatusTick, RegenTick, PedalTick;
@@ -232,6 +263,28 @@ typedef struct
     /* Legacy per-channel error cache kept for compatibility. */
     int      ERRO[4];
 } CANB_ECU_VehicleTypeDef;
+
+typedef struct
+{
+    /* 0x068: retain all compact GPS motion and quality fields. */
+    uint16_t GroundTrackCentiDeg, DualHeadingCentiDeg;
+    int16_t AltitudeDeciM;
+    uint8_t LapDiagState, HeadingQuality, FixQuality, SignalLevel;
+    /* 0x069: body X forward, Y left, raw 0.01 m/s; -32768 invalid. */
+    int16_t CgVelocityXCentiMps, CgVelocityYCentiMps;
+    uint8_t CgFlags, CgSampleCounter, CgSeen, CgVelocityValid;
+    uint16_t CgSampleAgeMs;
+    uint32_t CgTick;
+    /* 0x7A0: 24-bit odometer in 0.1 km; SNR is signed. */
+    uint32_t OdometerDeciKm, StatusTick;
+    int8_t MaxSnrDbHz, AvgSnrDbHz;
+    uint8_t Satellites, TrackedSatellites, LapCount, StatusSeen;
+    /* 0x7A1: all lap times and signed delta in centiseconds. */
+    uint16_t CurrentLapCentiS, LastLapCentiS, BestLapCentiS;
+    int16_t LapDeltaCentiS;
+    uint8_t LapTimingSeen;
+    uint32_t LapTimingTick;
+} CANB_GpsData;
 
 typedef struct
 {
@@ -254,6 +307,7 @@ typedef struct
     /* GPS or wheel-speed value in km/h. */
     uint16_t GpsSpeedDeciKmh; /* CAN raw unit: 0.1 km/h. */
     uint16_t GpsSpeedKmh; /* Rounded compatibility view for the existing protobuf. */
+    uint32_t GpsSpeedTick;
     /* Raw yaw-rate reading. */
     int16_t  YawRateRaw;
     /* Raw yaw angle reading. */
@@ -268,6 +322,32 @@ typedef struct
     CANB_ECU_VehicleTypeDef ECU;
     /* IMU telemetry cache. */
     CANB_IMU_TypeDef        IMU;
+    CANB_GpsData            GPS;
+    /* Additional V4 fan fields without shared protobuf assignments. */
+    struct {
+        struct {
+            uint8_t Seen, Valid, SupplyState, LimitReason;
+            uint8_t ThermalRequestPct[2], TargetPct[2], CurrentBudgetDeciA;
+            uint16_t PredictedCurrentDeciA;
+            uint32_t Tick;
+        } Power; /* 0x5A8 */
+        struct {
+            uint8_t Seen, Valid, State, AbortReason, Step, TargetPct[2];
+            uint8_t LeaseS, Version;
+            uint16_t Flags;
+            uint32_t Tick;
+        } Calibration; /* 0x5A9, Version=4 */
+        struct {
+            uint8_t Seen, Valid, Requested, EffectiveStrategy[2], RuntimeCapPct[2];
+            uint8_t LeaseS, Flags, SourceState, LimitReason;
+            uint32_t Tick;
+        } Profile; /* 0x5AF, Version=4 */
+        struct {
+            uint8_t Seen, Valid, TempOff, TempOn, TempFull, MinDutyPct;
+            uint8_t RampUpPctPerS, TempCritical, StartDutyPct;
+            uint32_t Tick;
+        } Curve[2]; /* 0x5A6 CH1/CH2 kept independently. */
+    } Fan;
     /* Unified energy meter cache for publish.
      * This layer allows protobuf output to stay stable even if the physical
      * source is competition IVT or FS.

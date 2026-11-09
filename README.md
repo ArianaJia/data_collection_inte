@@ -6,9 +6,13 @@ STM32F407ZET6 数据采集工程：MLX90640 胎温采集、原生 CAN1/CAN2、MC
 
 工程自有测试、编译验证与历史迁移工具统一归档在 [`test_and_fix/`](test_and_fix/README.md)，使用方式与执行条件见目录说明。
 
+**DTU 正式版（2026-11-09，main）**：默认启用 DTU 上传，包含本次整车 CANB 协议同步。正式版发布指本分支源码基线；验证范围为主机报文回归及完整固件编译、链接，实车和服务器端验收仍按下文步骤执行。
+
 ## 当前运行模式
 
 当前默认启用 DTU 上传：`Core/Inc/app_config.h` 中 `APP_UPLINK_ENABLED=1`。MCU 通过 USART1（115200 8N1）向已配置为 MQTT 模式的 DTU 发送封包；DTU 管理服务器连接、认证和重连。设为 0 可恢复仅本地采集模式。
+
+MLX90640 任务当前在入口暂时自行挂起，不执行传感器初始化、采集或胎温 CAN/DTU 摘要发送。需要恢复采集时可调用 `osThreadResume(MLX90640Handle)`；移除入口的 `osThreadSuspend(osThreadGetId())` 可恢复上电自动采集。
 
 - `Core/Src/modem_dtu.c` 替换原 AT 后端，`Modem_Send` 接收 Protobuf，添加 `AA 55 | payload_len(u16 LE) | seq(u8) | payload | CRC16(u16 LE)`，通过 DMA 发送并等待完成。CRC 使用 MODBUS CRC16，初值 0xFFFF，覆盖长度、序号和 payload。所有主题共用从 1 起的帧号，`frame_id=header.seq`、`header.source_id=1`，外层 seq 取帧号低 8 位。UART 发送完成后间隔 10+200 ms；发送失败后的新尝试使用新帧号。MCU 不再保存 MQTT 凭据，也不发送 AT 或 MQTT 协议包。
 - `Core/Src/app_log.c` 与 `Core/Inc/app_log.h` 管理日志格式化、非阻塞入队及 USART3 DMA 输出；默认任务调用 `App_LogProcess()`。日志队列满或格式化缓冲被其他任务占用时丢弃日志。MCP 启动诊断保留独立的阻塞输出入口，仅用于启动阶段。
@@ -18,9 +22,9 @@ STM32F407ZET6 数据采集工程：MLX90640 胎温采集、原生 CAN1/CAN2、MC
 
 | 链路 | 当前状态 | 主要入口 |
 |---|---|---|
-| MLX90640 / I2C1 | 50 kHz，四通道独立初始化、采集和失败重试 | `MLX90640Task` |
+| MLX90640 / I2C1 | 任务入口暂时挂起，恢复后按 50 kHz 进行四通道初始化与采集 | `MLX90640Task` |
 | CAN1 / 电池箱 | 启用，中断收包后交任务解码 | `CanForBMSTask` |
-| CAN2 / 整车 CANB | 启用，收包解码与温度摘要发送 | `CanForViehcleTask`、`CanBTextTask` |
+| CAN2 / 整车 CANB | 启用收包解码；MLX 暂停期间不生成胎温发送帧 | `CanForViehcleTask`、`CanBTextTask` |
 | SPI1 / MCP2518FD-A / CANA | 启用，初始化后每 200 ms 轮询并解码控制器报文 | `SPICanControlTask` |
 | SPI3 / MCP2518FD-B / CDC | 启用；2 ms 有界轮询，解析 CANC 10 条报文 | `SPICanCDCTask` |
 | USART2 / RS485 | 接收任务已创建，业务解析仍为预留入口 | `TensionSensorTask` |
@@ -830,7 +834,7 @@ TaskXX poll
 - CANA 电机控制器仍走 MCP2518FD-A/SPI1；CANC CDC 走 MCP2518FD-B/SPI3，启用初始化，10 个标准 ID 精确过滤，每 2 ms 最多处理 32 帧。
 - `canc_telemetry.c` 保存 10 帧、57 个原始信号、独立接收时间/间隔/计数、DLC 拒绝计数、范围和枚举掩码。超过 100 ms 仅发布状态和最后负载。
 - `telemetry_extra.c` 接入 PDM、风扇、Chroma 浮点反馈、SOP V3 CRC/版本校验，以及 BMS 继电器、预充和 IMD；各来源独立计龄。电池风扇 CAN1 优先、CANB 备用。
-- 更新诊断码、左右油压、驾驶模式、SOC 小数、GPS、回收与踏板，停用旧 CANB IMU 解码；BMS 模组保留断线原值，完整新鲜模组才上报。
+- 更新诊断码、油压（前后语义已在 2026-11-09 更正）、驾驶模式、SOC 小数、GPS、回收与踏板，停用旧 CANB IMU 解码；BMS 模组保留断线原值，完整新鲜模组才上报。
 - CANC 信号由 DBC 生成：`python test_and_fix/migrations/generate_canc.py --interfaces <参考仓库目录>`。主机回归：`python test_and_fix/firmware/test_protocol_host.py --cc <本机gcc路径>`。
 
 本次只更新和验证固件，不涉及服务器部署、车辆控制报文发送或烧录。
@@ -843,3 +847,25 @@ CAN 解析以 [BITFSAE/vehicle-interfaces](https://github.com/BITFSAE/vehicle-in
 - `docs/CANC接口.md`、`docs/CAN与遥测对照.md`、`telemetry/docs/interface-notes.md` 和 `telemetry/docs/protocol.md` 补充来源优先级、有效性、超时与发布规则；更新时同时阅读 `CHANGELOG.md`，不可仅替换生成文件。
 - SPI/MCP2518FD 驱动只收帧；`SPICanControlTask`、`SPICanCDCTask` 通过 `SpiCan_PollToQueue()` 将原始帧放入 `CAN_Msg_QueueHandle`。专门的消费任务 `CanForViehcleTask` 按来源调用 CANA/CANB/CANC 解析函数更新缓存，再通过发布请求队列通知 `Publish4GTask`。发布任务负责字段映射、Protobuf 编码和串口发送，DTU 完成 MQTT 网络封装。
 - 本工程保留构建所需的 proto/options、Nanopb 生成文件及自身解析代码。参考仓库完整副本与下载压缩包已清除；重新生成 CANC 解析时，将单独获取的上述版本仓库路径传给 `generate_canc.py --interfaces`。
+
+## CANB 同步（2026-11-09）
+
+本次 CANB 依据用户提供的 `C:/Users/ArianaJia/Downloads/Vehicle_CanB.dbc`，SHA-256：
+`E5DCA851367F8C3CD7443F486D3F6DC70798CAEBCFCF65319F148A5B6CE395BB`。
+该文件覆盖上文 2026-11-07 基线中的 CANB 定义；CANA、CAN1、CANC 和 Protobuf 编号沿用原版本。未从 GitHub 验证此次提交号，不保存新的协议副本。
+
+- `0x305`：Byte4..5 为后制动压力 `OilPressure_R`，Byte6..7 为前制动压力 `OilPressure_F`。缓存 `ECU.OilPressureRearKpa/FrontKpa` 存储 1 kPa 原始值，乘 0.001 为 MPa。旧 `TelemetryFrame.brake_pressure` 继续发布后制动压力，单位 MPa。
+- `0x071/0x072/0x073/0x074`：依次为右前、左前、左后、右后胎温；物理传感器索引 0/1/2/3。CAN 发送和 Protobuf 轮位使用一致映射；R0..R3 按载荷顺序对应四个温度单元，安装方向见现有 `mlx90640_can_summary.dbc`。小数字节的比例为 0.01、物理范围 0..0.99。
+- `0x067/0x068/0x069/0x7A0/0x7A1`：位置、运动质量、车体质心速度、里程/卫星状态、圈速解码。新字段直接存储在现有 `CANB_LoopAllData.GPS` 中，保留原始定点单位、有效标志、接收时间和 Seen 状态。质心速度 X 向前、Y 向左，单位 0.01 m/s；与 `0x301` 无符号地速独立。
+- 质心速度要求五个源有效位、无饱和、X/Y 不为 -32768、SampleAge 不为 65535。`CgFlags` 保留发送端各有效位，`CgSampleCounter` 仅为采样序号；相同序号仍保留最新 SampleAge。接收端暂以 150 ms（3 个发送周期）为失联门限；这是网关策略，并非该 DBC 定义的完整源时效规则。失联清 `CgVelocityValid`，保留原始值供诊断。`0x301` 失联超过 500 ms 清地速有效位并置零。
+- `0x703`：缓存滑移级别、退出使能请求、清错和计时按键。`0x310` 请求码 47..51 与 `0x509` 已确认模式独立保存。`0x509` 补齐 SystemReady/QuitDcOn/QuitInverterOn/Enable 状态；`0x503` 统一命名为四电机诊断码，移除废弃的 `0x501/0x504` 定义。`0x726` 按本次 DBC 使用 DLC=8。
+- 风扇 `0x5A3/0x5A5/0x5A6/0x5A7` 补齐现有 Protobuf 字段，温度 0x7FFF 不上报为测量值；两通道曲线独立缓存，旧单组曲线字段只发布 CH1。`0x5A8/0x5A9/0x5AF` 新字段位于现有 `CANB_LoopAllData.Fan`；V4 校准和配置帧要求版本 4，超过 1500 ms 清 Valid。CANB 电池箱风扇状态放在现有 `Battery_InfoDef.CanbFan`，CAN1 优先的发布逻辑保持不变。
+- 未给 GPS/质心速度、前制动压力、风扇 V4 新信号分配 Protobuf 字段号；可直接从上述本地结构体读取，已有字段继续发布。Tools 专用控制指令、应答和校准管理帧不新增控制流程；历史 V3 `0x5AE` 不接入。
+
+复用现有主机测试入口，直接读取给定 DBC 生成报文测试向量，不依赖额外 Python 包：
+
+```powershell
+python test_and_fix/firmware/test_protocol_host.py --cc <原生gcc路径> --dbc <Vehicle_CanB.dbc路径>
+```
+
+覆盖过滤器容量、新帧 DLC/来源、油压单位、GPS/质心速度符号与无效值、计时回绕、请求/反馈分离、风扇 V4、曲线通道隔离、风扇来源优先级、前轮温度发布轮位及真实 Protobuf 往返。默认 DBC 路径为当前用户 Downloads/Vehicle_CanB.dbc，构建产物位于 build/host_protocol，不烧录硬件。

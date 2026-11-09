@@ -438,11 +438,16 @@ void CanForViehcleTask(void *argument)
 
   for(;;)
   {
-    if(osMessageQueueGet(CAN_Msg_QueueHandle, &recv_data, NULL, pdMS_TO_TICKS(20U)) == osOK)
+    /* RX0 ISR posts directly to this queue; the timeout is only a service
+     * fallback for freshness checks when the bus is quiet. */
+    if(osMessageQueueGet(CAN_Msg_QueueHandle, &recv_data, NULL, pdMS_TO_TICKS(50U)) == osOK)
     {
-      if (recv_data.can_channel == CAN_CHANNEL_VEHICLE_CANB)
-        app_can_debug_log_rx_context("CAN2 RX", &g_can2_ctx);
-      CanVehicle_Dispatch(&recv_data);
+      do
+      {
+        if (recv_data.can_channel == CAN_CHANNEL_VEHICLE_CANB)
+          app_can_debug_log_rx_context("CAN2 RX", &g_can2_ctx);
+        CanVehicle_Dispatch(&recv_data);
+      } while (osMessageQueueGet(CAN_Msg_QueueHandle, &recv_data, NULL, 0U) == osOK);
     }
     CAN_DecodeVehicleService(HAL_GetTick());
   }
@@ -465,11 +470,15 @@ void CanForBMSTask(void *argument)
 
   for(;;)
   {
-    if(osMessageQueueGet(CAN_Msg_Queue_2Handle, &recv_data, NULL, pdMS_TO_TICKS(20U)) == osOK)
+    /* CAN1/CAN2 RX interrupts wake this task through their queues. */
+    if(osMessageQueueGet(CAN_Msg_Queue_2Handle, &recv_data, NULL, pdMS_TO_TICKS(50U)) == osOK)
     {
-      app_can_debug_log_rx_context("BAT RX",
-          recv_data.can_channel == CAN_CHANNEL_BATTERY_BOX ? &g_can1_ctx : &g_can2_ctx);
-      CanBattery_Dispatch(&recv_data);
+      do
+      {
+        app_can_debug_log_rx_context("BAT RX",
+            recv_data.can_channel == CAN_CHANNEL_BATTERY_BOX ? &g_can1_ctx : &g_can2_ctx);
+        CanBattery_Dispatch(&recv_data);
+      } while (osMessageQueueGet(CAN_Msg_Queue_2Handle, &recv_data, NULL, 0U) == osOK);
     }
     CAN_DecodeBatteryService(HAL_GetTick());
   }
@@ -486,6 +495,10 @@ void CanForBMSTask(void *argument)
 void MLX90640Task(void *argument)
 {
   /* USER CODE BEGIN MLX90640Task */
+  /* Temporarily pause before sensor initialization, capture and publishing.
+   * Resume with osThreadResume(MLX90640Handle) when acquisition is needed. */
+  osThreadSuspend(osThreadGetId());
+
   uint32_t retry_tick[MLX90640_SENSOR_COUNT] = {0};
   uint8_t attempted[MLX90640_SENSOR_COUNT] = {0};
 
@@ -616,7 +629,7 @@ void SPICanControlTask(void *argument)
 #else
     (void)recv_data;
 #endif
-    osDelay(200);
+    osDelay(50);
   }
   /* USER CODE END SPICanControlTask */
 }
@@ -704,6 +717,7 @@ void Publish4GTask(void *argument)
         if (tx_status == HAL_OK)
         {
           g_diagPublishOkCount++;
+          /* DMA has completed; only the DTU inter-frame cooldown remains. */
           osDelay(PUBLISH_COOLDOWN_MS);
         }
         else
@@ -735,7 +749,6 @@ void Publish4GTask(void *argument)
         osDelay(1000U);
         (void)Publish_QueueTopic(item.topic);
       }
-      osDelay(200);
     }
   }
 #endif
@@ -1053,13 +1066,13 @@ static uint32_t Mlx_GetCanSummaryId(uint8_t sensor_id)
 {
   switch (sensor_id)
   {
-    case 0U:
+    case MLX90640_SENSOR_FR:
       return CAN_ID_CANB_THERMAL_SUMMARY_FR;
-    case 1U:
+    case MLX90640_SENSOR_FL:
       return CAN_ID_CANB_THERMAL_SUMMARY_FL;
-    case 2U:
+    case MLX90640_SENSOR_RL:
       return CAN_ID_CANB_THERMAL_SUMMARY_RL;
-    case 3U:
+    case MLX90640_SENSOR_RR:
       return CAN_ID_CANB_THERMAL_SUMMARY_RR;
     default:
       return 0U;

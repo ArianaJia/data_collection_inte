@@ -12,7 +12,7 @@ extern "C" {
 #define RS485_DMA_BUFFER_SIZE    256U
 #define RS485_FLAG_RX_READY      (1UL << 0)
 #define RS485_FLAG_RX_RESTART    (1UL << 1)
-#define PUBLISH_COOLDOWN_MS      10U
+#define PUBLISH_COOLDOWN_MS      50U
 
 typedef struct
 {

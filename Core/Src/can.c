@@ -21,10 +21,18 @@
 /* USER CODE BEGIN 0 */
 
 static const uint16_t g_can2_vehicle_filter_ids[] = {
-  0x001U, 0x067U, 0x068U, 0x726U,
-  0x5A0U,0x5A1U,0x5A2U,0x5AAU,0x201U,0x202U,0x204U,0x205U,0x4A0U,0x4A3U,0x4A4U,
+  CAN_ID_CANB_BRAKE_PEDAL_ENCODER,
+  CAN_ID_CANB_GPS_POSITION,
+  CAN_ID_CANB_GPS_MOTION,
+  CAN_ID_CANB_GPS_CG_VELOCITY,
+  CAN_ID_CANB_GPS_STATUS_ODOMETER,
+  CAN_ID_CANB_GPS_LAP_TIMING,
+  CAN_ID_CANB_STEERING_COMMAND,
+  CAN_ID_CANB_RECYCLE_INFO,
+  0x5A0U,0x5A1U,0x5A2U,0x5A3U,0x5A5U,0x5A6U,0x5A7U,0x5A8U,0x5A9U,0x5AFU,
+  0x5AAU,0x201U,0x202U,0x204U,0x205U,0x4A0U,0x4A3U,0x4A4U,
   CAN_ID_CANB_WHEEL_ACTUAL_TORQUE,
-  CAN_ID_CANB_REAR_MOTOR_DIAGNOSTIC_CODE,
+  CAN_ID_CANB_MOTOR_DIAGNOSTIC_CODES,
   CAN_ID_CANB_WHEEL_ACTUAL_SPEED,
   CAN_ID_CANB_MOTOR_TEMPERATURE,
   CAN_ID_CANB_INVERTER_TEMPERATURE,
@@ -117,7 +125,8 @@ static HAL_StatusTypeDef CAN_ConfigCan2Filters(CAN_HandleTypeDef *canHandle)
   uint32_t bank_index;
   uint32_t id_index = 0U;
   uint32_t id_count = (uint32_t)(sizeof(g_can2_vehicle_filter_ids) / sizeof(g_can2_vehicle_filter_ids[0]));
-  uint32_t bank_count = (id_count + 3U) / 4U;
+  uint32_t standard_bank_count = (id_count + 3U) / 4U;
+  uint32_t bank_count = standard_bank_count + 1U;
 
   if ((canHandle == NULL) || (bank_count > 14U))
   {
@@ -130,7 +139,7 @@ static HAL_StatusTypeDef CAN_ConfigCan2Filters(CAN_HandleTypeDef *canHandle)
   filter.FilterScale = CAN_FILTERSCALE_16BIT;
   filter.SlaveStartFilterBank = 14;
 
-  for (bank_index = 0U; bank_index < bank_count; bank_index++)
+  for (bank_index = 0U; bank_index < standard_bank_count; bank_index++)
   {
     uint16_t id0 = (uint16_t)(g_can2_vehicle_filter_ids[id_index++] << 5);
     uint16_t id1 = (id_index < id_count) ? (uint16_t)(g_can2_vehicle_filter_ids[id_index++] << 5) : id0;
@@ -147,6 +156,21 @@ static HAL_StatusTypeDef CAN_ConfigCan2Filters(CAN_HandleTypeDef *canHandle)
     {
       return HAL_ERROR;
     }
+  }
+
+  /* The CANB DBC places LegacyCharger_Feedback on an extended CAN frame. */
+  filter.FilterBank = 14U + standard_bank_count;
+  filter.FilterMode = CAN_FILTERMODE_IDMASK;
+  filter.FilterScale = CAN_FILTERSCALE_32BIT;
+  filter.FilterIdHigh = (uint16_t)(((CAN_ID_BATTERY_CHARGER_FEEDBACK << 3) |
+                                    CAN_ID_EXT) >> 16);
+  filter.FilterIdLow = (uint16_t)((CAN_ID_BATTERY_CHARGER_FEEDBACK << 3) |
+                                  CAN_ID_EXT);
+  filter.FilterMaskIdHigh = (uint16_t)((0xFFFFFFFEUL) >> 16);
+  filter.FilterMaskIdLow = (uint16_t)0xFFFFFFFEUL;
+  if (HAL_CAN_ConfigFilter(canHandle, &filter) != HAL_OK)
+  {
+    return HAL_ERROR;
   }
 
   return HAL_OK;

@@ -17,6 +17,7 @@ test_and_fix/
 
 - `communication/core_y100m_mqtt_test.py`：Core-Y100M DTU 固件串口封包测试；不发 AT 或 MQTT 报文，默认 COM16 / 115200 8N1，发送 10 帧测试 GPS 速度，ready_to_drive=0。
 - `communication/pc_y100m_gps_publish_test.py`：Y100M + TelemetryFrame GPS 发布链路测试。
+- `firmware/test_protocol_host.py`：用原生 GCC 编译并执行真实 CAN/CANC 解码、发布及 nanopb 往返回归；`--cc` 指定编译器，`--dbc` 指定整车 CANB DBC（默认 Downloads/Vehicle_CanB.dbc）。不依赖额外 Python 包，不烧录。
 - `firmware/publish_presence_test.c`：使用真实发布编码与 nanopb 解码检查字段存在性。它不属于正常固件；需要在 HAL tick 初始化后、采集及 RTOS 任务启动前调用 `Publish_PresenceRegressionTest()`，返回 0 表示成功，否则返回失败行号。测试会覆盖遥测缓存，不可在运行中的车辆上调用。
 - `build/4g_verify.mk`：基于 CubeIDE Debug makefile 验证串口、DTU 通信及日志模块，兼容新模块尚未加入生成列表的情况。
 - `build/verify_firmware.py`：不依赖 IDE 生成文件，按 `STM32Make.make` 列表并自动补齐 `Core/Src` 源码进行完整编译与链接；输出在 `build/refactor_verify/`，不烧录硬件。需 ARM GCC 11 或更新版本；DTU 后端不需要本地 MQTT 凭据头文件。
