@@ -235,13 +235,13 @@ static uint8_t Publish_MapMotorOrderToThermalSensorIndex(uint8_t motor_index)
     switch (motor_index)
     {
         case 0U:
-            return 2U;
+            return MLX90640_SENSOR_RL;
         case 1U:
-            return 3U;
+            return MLX90640_SENSOR_RR;
         case 2U:
-            return 0U;
+            return MLX90640_SENSOR_FL;
         case 3U:
-            return 1U;
+            return MLX90640_SENSOR_FR;
         default:
             return 0xFFU;
     }
@@ -507,7 +507,8 @@ static void Publish_MapCommonTelemetryFrame(fsae_TelemetryFrame *frame)
     Extra_Map(frame, now);
     frame->timestamp_ms = now;
     frame->apps_position = (float)g_CANB_LoopData.ECU.ThrottlePositionDeciPct / 10.0f;
-    frame->brake_pressure = (float)g_CANB_LoopData.ECU.OilPressureMilliKpa / 1000.0f;
+    /* Legacy scalar remains rear hydraulic pressure, in MPa. */
+    frame->brake_pressure = (float)g_CANB_LoopData.ECU.OilPressureRearKpa / 1000.0f;
     frame->steering_angle = (float)g_CANB_LoopData.ECU.SteeringAngleDeciDeg / 10.0f;
     frame->hv_voltage = (float)g_BatteryInfo.TotalVolt / 1000.0f;
     frame->hv_current = (float)g_BatteryInfo.TotalCurrent / 1000.0f;

@@ -75,15 +75,6 @@ endif
 ######################################
 # C sources
 C_SOURCES =  \
-Core/Src/app_log.c \
-Core/Src/fdcan.c \
-Core/Src/fsae_telemetry.pb.c \
-Core/Src/mcp2518fd.c \
-Core/Src/modem_dtu.c \
-Core/Src/pb_common.c \
-Core/Src/pb_decode.c \
-Core/Src/pb_encode.c \
-Core/Src/publish.c \
 Core/Src/MLX90640_API.c \
 Core/Src/MLX90640_I2C_Driver.c \
 Core/Src/can.c \
@@ -134,6 +125,8 @@ Middlewares/Third_Party/FreeRTOS/Source/stream_buffer.c \
 Middlewares/Third_Party/FreeRTOS/Source/tasks.c \
 Middlewares/Third_Party/FreeRTOS/Source/timers.c
 
+# Include application modules even when the IDE-generated list lags behind.
+C_SOURCES := $(sort $(C_SOURCES) $(wildcard Core/Src/*.c))
 
 CXX_SOURCES = \
 
@@ -209,7 +202,7 @@ MCU = $(CPU) -mthumb $(FPU) $(FLOAT-ABI)
 AS_DEFS = 
 
 # C defines
-C_DEFS =  \
+C_DEFS = -DUSE_HAL_DRIVER -DSTM32F407xx
 
 
 # CXX defines
@@ -269,7 +262,7 @@ LIBDIR = \
 
 
 # Additional LD Flags from config file
-ADDITIONALLDFLAGS = -Wl,--print-memory-usage 
+ADDITIONALLDFLAGS = --specs=nano.specs --specs=nosys.specs -Wl,--print-memory-usage
 
 LDFLAGS = $(MCU) $(ADDITIONALLDFLAGS) -T$(LDSCRIPT) $(LIBDIR) $(LIBS) -Wl,-Map=$(BUILD_DIRECTORY)/$(TARGET).map,--cref -Wl,--gc-sections
 
@@ -386,5 +379,7 @@ clean:
 # dependencies
 #######################################
 -include $(wildcard $(RELEASE_DIRECTORY)/*.d)
+
+# *** EOF ***
 
 # *** EOF ***

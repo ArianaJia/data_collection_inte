@@ -1053,13 +1053,13 @@ static uint32_t Mlx_GetCanSummaryId(uint8_t sensor_id)
 {
   switch (sensor_id)
   {
-    case 0U:
+    case MLX90640_SENSOR_FR:
       return CAN_ID_CANB_THERMAL_SUMMARY_FR;
-    case 1U:
+    case MLX90640_SENSOR_FL:
       return CAN_ID_CANB_THERMAL_SUMMARY_FL;
-    case 2U:
+    case MLX90640_SENSOR_RL:
       return CAN_ID_CANB_THERMAL_SUMMARY_RL;
-    case 3U:
+    case MLX90640_SENSOR_RR:
       return CAN_ID_CANB_THERMAL_SUMMARY_RR;
     default:
       return 0U;

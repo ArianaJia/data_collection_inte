@@ -205,27 +205,87 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
   Extra_Receive(recv_data);
   switch (recv_data->msg_id)
   {
-    case 0x067U:
+    case CAN_ID_CANB_GPS_POSITION:
       if (recv_data->dlc == 8U) {
         g_CANB_LoopData.ECU.LatitudeE7 = (int32_t)CAN_DecodeReadLe32(recv_data->msg_data);
         g_CANB_LoopData.ECU.LongitudeE7 = (int32_t)CAN_DecodeReadLe32(recv_data->msg_data + 4);
         g_CANB_LoopData.ECU.PositionSeen = 1U;
         g_CANB_LoopData.ECU.PositionTick = HAL_GetTick();
       } break;
-    case 0x068U:
+    case CAN_ID_CANB_GPS_MOTION:
       if (recv_data->dlc == 8U) {
+        CANB_GpsData *gps = &g_CANB_LoopData.GPS;
+        uint16_t status = CAN_DecodeReadLe16(recv_data->msg_data + 6);
+        gps->GroundTrackCentiDeg = CAN_DecodeReadLe16(recv_data->msg_data);
+        gps->DualHeadingCentiDeg = CAN_DecodeReadLe16(recv_data->msg_data + 2);
+        gps->AltitudeDeciM = CAN_DecodeReadLe16Signed(recv_data->msg_data + 4);
+        gps->LapDiagState = (status >> 4) & 7U;
+        gps->HeadingQuality = (status >> 7) & 7U;
+        gps->FixQuality = (status >> 10) & 7U;
+        gps->SignalLevel = (status >> 13) & 7U;
         g_CANB_LoopData.ECU.PositionFlags = recv_data->msg_data[6];
         g_CANB_LoopData.ECU.PositionStatusSeen = 1U;
         g_CANB_LoopData.ECU.PositionStatusTick = HAL_GetTick();
       } break;
-    case 0x726U:
-      if (recv_data->dlc == 8U || recv_data->dlc == 3U) {
+    case CAN_ID_CANB_GPS_CG_VELOCITY:
+      if (recv_data->dlc == 8U) {
+        CANB_GpsData *gps = &g_CANB_LoopData.GPS;
+        gps->CgVelocityXCentiMps = CAN_DecodeReadLe16Signed(recv_data->msg_data);
+        gps->CgVelocityYCentiMps = CAN_DecodeReadLe16Signed(recv_data->msg_data + 2);
+        gps->CgFlags = recv_data->msg_data[4] & 0x7FU;
+        gps->CgSampleCounter = recv_data->msg_data[5];
+        gps->CgSampleAgeMs = CAN_DecodeReadLe16(recv_data->msg_data + 6);
+        gps->CgSeen = 1U;
+        gps->CgTick = HAL_GetTick();
+        gps->CgVelocityValid = ((gps->CgFlags & 0x5FU) == 0x1FU) &&
+            (gps->CgSampleAgeMs != UINT16_MAX) &&
+            (gps->CgVelocityXCentiMps != INT16_MIN) && (gps->CgVelocityYCentiMps != INT16_MIN);
+      } break;
+    case CAN_ID_CANB_GPS_STATUS_ODOMETER:
+      if (recv_data->dlc == 8U) {
+        CANB_GpsData *gps = &g_CANB_LoopData.GPS;
+        gps->OdometerDeciKm = CAN_DecodeReadLe32(recv_data->msg_data) & 0xFFFFFFUL;
+        gps->MaxSnrDbHz = (int8_t)recv_data->msg_data[3];
+        gps->AvgSnrDbHz = (int8_t)recv_data->msg_data[4];
+        gps->Satellites = recv_data->msg_data[5];
+        gps->TrackedSatellites = recv_data->msg_data[6];
+        gps->LapCount = recv_data->msg_data[7];
+        gps->StatusSeen = 1U;
+        gps->StatusTick = HAL_GetTick();
+      } break;
+    case CAN_ID_CANB_GPS_LAP_TIMING:
+      if (recv_data->dlc == 8U) {
+        CANB_GpsData *gps = &g_CANB_LoopData.GPS;
+        gps->CurrentLapCentiS = CAN_DecodeReadLe16(recv_data->msg_data);
+        gps->LastLapCentiS = CAN_DecodeReadLe16(recv_data->msg_data + 2);
+        gps->BestLapCentiS = CAN_DecodeReadLe16(recv_data->msg_data + 4);
+        gps->LapDeltaCentiS = CAN_DecodeReadLe16Signed(recv_data->msg_data + 6);
+        gps->LapTimingSeen = 1U;
+        gps->LapTimingTick = HAL_GetTick();
+      } break;
+    case CAN_ID_CANB_STEERING_COMMAND:
+      if (recv_data->dlc == 2U) {
+        g_CANB_LoopData.ECU.SlipLevel = recv_data->msg_data[0] & 7U;
+        g_CANB_LoopData.ECU.DisableRequest = recv_data->msg_data[1] & 1U;
+        g_CANB_LoopData.ECU.ErrorClearActive = (recv_data->msg_data[1] >> 1) & 1U;
+        g_CANB_LoopData.ECU.LapTimerToggle = (recv_data->msg_data[1] >> 2) & 1U;
+        g_CANB_LoopData.ECU.SteeringCommandSeen = 1U;
+        g_CANB_LoopData.ECU.SteeringCommandTick = HAL_GetTick();
+      } break;
+    case CAN_ID_CANB_DRIVING_MODE_CMD:
+      if (recv_data->dlc == 8U && recv_data->msg_data[0] >= 47U && recv_data->msg_data[0] <= 51U) {
+        g_CANB_LoopData.ECU.RequestedDriveModeCode = recv_data->msg_data[0];
+        g_CANB_LoopData.ECU.DriveModeRequestSeen = 1U;
+        g_CANB_LoopData.ECU.DriveModeRequestTick = HAL_GetTick();
+      } break;
+    case CAN_ID_CANB_RECYCLE_INFO:
+      if (recv_data->dlc == 8U) {
         for (uint8_t i=0; i<4; ++i) g_CANB_LoopData.ECU.RegenReasons[i] = (recv_data->msg_data[i/2] >> ((i%2)*4)) & 15U;
         g_CANB_LoopData.ECU.RegenRate = recv_data->msg_data[2];
         g_CANB_LoopData.ECU.RegenSeen = 1U;
         g_CANB_LoopData.ECU.RegenTick = HAL_GetTick();
       } break;
-    case 0x001U:
+    case CAN_ID_CANB_BRAKE_PEDAL_ENCODER:
       if (recv_data->dlc == 7U && recv_data->msg_data[0] == 7U && recv_data->msg_data[1] == 1U && recv_data->msg_data[2] == 1U) {
         uint32_t count = CAN_DecodeReadLe32(recv_data->msg_data+3);
         if (count < 4096U) {
@@ -241,6 +301,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         if (speed > 3000U) { g_CANB_LoopData.IMU.ValidFlags &= (uint8_t)~CANB_MOTION_VALID_GPS; break; }
         g_CANB_LoopData.IMU.GpsSpeedDeciKmh = speed;
         g_CANB_LoopData.IMU.GpsSpeedKmh = (uint16_t)((speed + 5U) / 10U);
+        g_CANB_LoopData.IMU.GpsSpeedTick = HAL_GetTick();
         g_CANB_LoopData.IMU.ValidFlags |= CANB_MOTION_VALID_GPS;
       }
       break;
@@ -250,8 +311,10 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
       {
         g_CANB_LoopData.ECU.SteeringAngleDeciDeg = CAN_DecodeReadLe16Signed(&recv_data->msg_data[0]);
         g_CANB_LoopData.ECU.ThrottlePositionDeciPct = CAN_DecodeReadLe16(&recv_data->msg_data[2]);
-        g_CANB_LoopData.ECU.OilPressureMilliKpa = CAN_DecodeReadLe16(&recv_data->msg_data[4]);
-        g_CANB_LoopData.ECU.OilPressureLeftMilliKpa = CAN_DecodeReadLe16(&recv_data->msg_data[6]);
+        g_CANB_LoopData.ECU.OilPressureRearKpa = CAN_DecodeReadLe16(&recv_data->msg_data[4]);
+        g_CANB_LoopData.ECU.OilPressureFrontKpa = CAN_DecodeReadLe16(&recv_data->msg_data[6]);
+        g_CANB_LoopData.ECU.DriverInputsSeen = 1U;
+        g_CANB_LoopData.ECU.DriverInputsTick = HAL_GetTick();
       }
       break;
 
@@ -290,7 +353,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         }
       break;
 
-    case CAN_ID_CANB_REAR_MOTOR_DIAGNOSTIC_CODE:
+    case CAN_ID_CANB_MOTOR_DIAGNOSTIC_CODES:
       if (recv_data->dlc == 8U)
       {
         g_CANB_LoopData.ECU.DiagnosticNumber[CAN_DECODE_MOTOR_RL] = CAN_DecodeReadLe16(&recv_data->msg_data[0]);
@@ -337,6 +400,10 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         g_CANB_LoopData.ECU.ERRO[CAN_DECODE_MOTOR_FL] = (recv_data->msg_data[0] & 0x02U) ? 1 : 0;
         g_CANB_LoopData.ECU.ERRO[CAN_DECODE_MOTOR_RR] = (recv_data->msg_data[0] & 0x04U) ? 1 : 0;
         g_CANB_LoopData.ECU.ERRO[CAN_DECODE_MOTOR_RL] = (recv_data->msg_data[0] & 0x08U) ? 1 : 0;
+        g_CANB_LoopData.ECU.AmkSystemReadyMask = recv_data->msg_data[1] & 15U;
+        g_CANB_LoopData.ECU.AmkQuitDcOnMask = recv_data->msg_data[1] >> 4;
+        g_CANB_LoopData.ECU.AmkQuitInverterOnMask = recv_data->msg_data[2] & 15U;
+        g_CANB_LoopData.ECU.AmkEnableMask = recv_data->msg_data[2] >> 4;
         g_CANB_LoopData.ECU.LogicState[CAN_DECODE_MOTOR_RR] = (uint8_t)(recv_data->msg_data[3] & 0x0FU);
         g_CANB_LoopData.ECU.LogicState[CAN_DECODE_MOTOR_RL] = (uint8_t)((recv_data->msg_data[3] >> 4) & 0x0FU);
         g_CANB_LoopData.ECU.LogicState[CAN_DECODE_MOTOR_FR] = (uint8_t)(recv_data->msg_data[4] & 0x0FU);
@@ -805,6 +872,23 @@ void CAN_DecodeBatteryService(uint32_t now)
 
 void CAN_DecodeVehicleService(uint32_t now)
 {
+  if ((uint32_t)(now - g_CANB_LoopData.IMU.GpsSpeedTick) > CANB_GPS_TIMEOUT_MS)
+  {
+    g_CANB_LoopData.IMU.ValidFlags &= (uint8_t)~CANB_MOTION_VALID_GPS;
+    g_CANB_LoopData.IMU.GpsSpeedDeciKmh = 0U;
+    g_CANB_LoopData.IMU.GpsSpeedKmh = 0U;
+  }
+  if ((uint32_t)(now - g_CANB_LoopData.GPS.CgTick) > CANB_CG_RX_TIMEOUT_MS)
+    g_CANB_LoopData.GPS.CgVelocityValid = 0U;
+  if ((uint32_t)(now - g_CANB_LoopData.Fan.Power.Tick) > 1500U)
+    g_CANB_LoopData.Fan.Power.Valid = 0U;
+  if ((uint32_t)(now - g_CANB_LoopData.Fan.Calibration.Tick) > 1500U)
+    g_CANB_LoopData.Fan.Calibration.Valid = 0U;
+  if ((uint32_t)(now - g_CANB_LoopData.Fan.Profile.Tick) > 1500U)
+    g_CANB_LoopData.Fan.Profile.Valid = 0U;
+  for (unsigned ch = 0U; ch < 2U; ++ch)
+    if ((uint32_t)(now - g_CANB_LoopData.Fan.Curve[ch].Tick) > 1500U)
+      g_CANB_LoopData.Fan.Curve[ch].Valid = 0U;
   if ((uint32_t)(now - g_CANB_LoopData.ECU.ModeTick) > 2000U) g_CANB_LoopData.ECU.driving_mode = 0;
   /* Competition timing is provisional; use the gateway's 2 s freshness policy. */
   for (uint8_t i = 0U; i < 5U; ++i)
