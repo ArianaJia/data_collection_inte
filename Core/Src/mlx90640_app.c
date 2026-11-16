@@ -44,6 +44,7 @@ void MLX90640_App_Log(const char *text)
 
 static void MLX90640_LogInitError(uint8_t sensorIndex, const char *step, int error)
 {
+  if (mlx90640LogCallback == NULL) return;
   (void)snprintf(mlx90640LineBuffer, sizeof(mlx90640LineBuffer),
       "MLX90640 init error, sensor=%u, channel=0x%02X, step=%s, status=%d, hal=%d, err=0x%08lX\r\n",
       (unsigned int)sensorIndex,
@@ -67,6 +68,8 @@ static int MLX90640_LoadParametersOnChannel(uint8_t sensorIndex)
   }
 
   status = MLX90640_I2CProbe(MLX90640_ADDR);
+  if (mlx90640LogCallback != NULL)
+  {
   (void)snprintf(mlx90640LineBuffer, sizeof(mlx90640LineBuffer),
       "MLX90640 probe, sensor=%u, channel=0x%02X, status=%d, hal=%d, err=0x%08lX\r\n",
       (unsigned int)sensorIndex,
@@ -75,6 +78,7 @@ static int MLX90640_LoadParametersOnChannel(uint8_t sensorIndex)
       (int)MLX90640_GetLastHalStatus(),
       (unsigned long)MLX90640_GetLastErrorCode());
   MLX90640_App_Log(mlx90640LineBuffer);
+  }
   if (status != MLX90640_NO_ERROR)
   {
     return status;
@@ -108,6 +112,8 @@ static int MLX90640_SelectReadySensor(uint8_t sensorIndex)
   }
 
   status = MLX90640_I2CProbe(MLX90640_ADDR);
+  if (mlx90640LogCallback != NULL)
+  {
   (void)snprintf(mlx90640LineBuffer, sizeof(mlx90640LineBuffer),
       "MLX90640 probe, sensor=%u, channel=0x%02X, status=%d, hal=%d, err=0x%08lX\r\n",
       (unsigned int)sensorIndex,
@@ -116,6 +122,7 @@ static int MLX90640_SelectReadySensor(uint8_t sensorIndex)
       (int)MLX90640_GetLastHalStatus(),
       (unsigned long)MLX90640_GetLastErrorCode());
   MLX90640_App_Log(mlx90640LineBuffer);
+  }
 
   return status;
 }
@@ -175,7 +182,7 @@ int MLX90640_App_InitSensor(uint8_t sensorIndex)
   int status = MLX90640_InitSensorOnChannel(sensorIndex);
   mlx90640SensorReady[sensorIndex] = (status == MLX90640_NO_ERROR);
   g_MLX90640_Frame.LastError[sensorIndex] = status;
-  if (status == MLX90640_NO_ERROR)
+  if ((status == MLX90640_NO_ERROR) && (mlx90640LogCallback != NULL))
   {
     (void)snprintf(mlx90640LineBuffer, sizeof(mlx90640LineBuffer),
                    "MLX90640 init ok, sensor=%u\r\n", (unsigned int)sensorIndex);
@@ -233,12 +240,15 @@ int MLX90640_App_CaptureOnce(uint8_t sensorIndex)
       return -MLX90640_FRAME_INCOMPLETE_ERROR;
     }
 
+    if (mlx90640LogCallback != NULL)
+    {
     (void)snprintf(mlx90640LineBuffer, sizeof(mlx90640LineBuffer),
         "Frame read error: %d, hal=%d, err=0x%08lX\r\n",
         status,
         (int)MLX90640_GetLastHalStatus(),
         (unsigned long)MLX90640_GetLastErrorCode());
     MLX90640_App_Log(mlx90640LineBuffer);
+    }
     mlx90640SensorReady[sensorIndex] = 0U;
     mlx90640SubPageMask[sensorIndex] = 0U;
     g_MLX90640_Frame.ValidMask &= (uint8_t)~(1U << sensorIndex);

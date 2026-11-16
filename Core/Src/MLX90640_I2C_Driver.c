@@ -10,6 +10,9 @@ static HAL_StatusTypeDef mlx90640LastHalStatus = HAL_OK;
 static uint32_t mlx90640LastErrorCode = HAL_I2C_ERROR_NONE;
 static volatile uint8_t mlx90640I2cRxDone = 0U;
 static volatile uint8_t mlx90640I2cError = 0U;
+static volatile uint32_t mlx90640DmaDoneTick;
+/* One acquisition task owns this buffer; DMA never targets a returned stack. */
+static uint8_t mlx90640DmaRxBuffer[MLX90640_I2C_READ_CHUNK_WORDS * 2U];
 static uint8_t i2c1StartupRecoveryDone = 0U;
 static uint8_t tca9548aConsecutiveBusyCount = 0U;
 static const uint8_t mlx90640SensorChannels[MLX90640_SENSOR_NUM] = {0U, 1U, 2U, 3U};
@@ -95,9 +98,17 @@ static HAL_StatusTypeDef MLX90640_I2CWaitForDmaRx(uint32_t tickstart)
   {
     mlx90640LastHalStatus = HAL_ERROR;
     mlx90640LastErrorCode = hi2c1.ErrorCode;
+    if (hi2c1.hdmarx != NULL) (void)HAL_DMA_Abort(hi2c1.hdmarx);
+    (void)HAL_I2C_DeInit(&hi2c1);
+    (void)HAL_I2C_Init(&hi2c1);
     return HAL_ERROR;
   }
 
+  /* Delay in task context, measured from the completion callback, not launch. */
+  while ((uint32_t)(HAL_GetTick() - mlx90640DmaDoneTick) < 20U)
+  {
+    if (osKernelGetState() == osKernelRunning) osDelay(1U);
+  }
   mlx90640LastHalStatus = HAL_OK;
   mlx90640LastErrorCode = hi2c1.ErrorCode;
   return HAL_OK;
@@ -236,7 +247,7 @@ int MLX90640_I2CRead(uint8_t slaveAddr, uint16_t startAddress, uint16_t nMemAddr
   uint16_t wordsRemaining = nMemAddressRead;
   uint16_t currentAddress = startAddress;
   uint16_t dataIndex = 0U;
-  uint8_t rawBuffer[MLX90640_I2C_READ_CHUNK_WORDS * 2U];
+  uint8_t *rawBuffer = mlx90640DmaRxBuffer;
 
   while (wordsRemaining > 0U)
   {
@@ -326,6 +337,7 @@ void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
   if (hi2c->Instance == I2C1)
   {
+    mlx90640DmaDoneTick = HAL_GetTick();
     mlx90640I2cRxDone = 1U;
     mlx90640I2cError = 0U;
     mlx90640LastHalStatus = HAL_OK;
