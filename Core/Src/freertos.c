@@ -442,12 +442,8 @@ void CanForViehcleTask(void *argument)
      * fallback for freshness checks when the bus is quiet. */
     if(osMessageQueueGet(CAN_Msg_QueueHandle, &recv_data, NULL, pdMS_TO_TICKS(50U)) == osOK)
     {
-      do
-      {
-        if (recv_data.can_channel == CAN_CHANNEL_VEHICLE_CANB)
-          app_can_debug_log_rx_context("CAN2 RX", &g_can2_ctx);
-        CanVehicle_Dispatch(&recv_data);
-      } while (osMessageQueueGet(CAN_Msg_QueueHandle, &recv_data, NULL, 0U) == osOK);
+      /* Temporarily keep CANB logging disabled during vehicle testing. */
+      CanVehicle_Dispatch(&recv_data);
     }
     CAN_DecodeVehicleService(HAL_GetTick());
   }
@@ -473,12 +469,8 @@ void CanForBMSTask(void *argument)
     /* CAN1/CAN2 RX interrupts wake this task through their queues. */
     if(osMessageQueueGet(CAN_Msg_Queue_2Handle, &recv_data, NULL, pdMS_TO_TICKS(50U)) == osOK)
     {
-      do
-      {
-        app_can_debug_log_rx_context("BAT RX",
-            recv_data.can_channel == CAN_CHANNEL_BATTERY_BOX ? &g_can1_ctx : &g_can2_ctx);
-        CanBattery_Dispatch(&recv_data);
-      } while (osMessageQueueGet(CAN_Msg_Queue_2Handle, &recv_data, NULL, 0U) == osOK);
+      /* Temporarily keep CAN1/CAN2 logging disabled during vehicle testing. */
+      CanBattery_Dispatch(&recv_data);
     }
     CAN_DecodeBatteryService(HAL_GetTick());
   }

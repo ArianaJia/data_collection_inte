@@ -77,6 +77,7 @@ endif
 C_SOURCES =  \
 Core/Src/MLX90640_API.c \
 Core/Src/MLX90640_I2C_Driver.c \
+<<<<<<< HEAD
 Core/Src/app_log.c \
 Core/Src/can.c \
 Core/Src/can_decode.c \
@@ -95,6 +96,16 @@ Core/Src/pb_common.c \
 Core/Src/pb_decode.c \
 Core/Src/pb_encode.c \
 Core/Src/publish.c \
+=======
+Core/Src/can.c \
+Core/Src/can_decode.c \
+Core/Src/dma.c \
+Core/Src/freertos.c \
+Core/Src/gpio.c \
+Core/Src/i2c.c \
+Core/Src/main.c \
+Core/Src/mlx90640_app.c \
+>>>>>>> 6a391459caae05f63275e4819ace0e73581614f0
 Core/Src/spi.c \
 Core/Src/stm32f4xx_hal_msp.c \
 Core/Src/stm32f4xx_hal_timebase_tim.c \
@@ -136,6 +147,8 @@ Middlewares/Third_Party/FreeRTOS/Source/stream_buffer.c \
 Middlewares/Third_Party/FreeRTOS/Source/tasks.c \
 Middlewares/Third_Party/FreeRTOS/Source/timers.c
 
+# Include application modules even when the IDE-generated list lags behind.
+C_SOURCES := $(sort $(C_SOURCES) $(wildcard Core/Src/*.c))
 
 CXX_SOURCES = \
 
@@ -211,9 +224,13 @@ MCU = $(CPU) -mthumb $(FPU) $(FLOAT-ABI)
 AS_DEFS = 
 
 # C defines
+<<<<<<< HEAD
 C_DEFS =  \
 -DSTM32F407xx \
 -DUSE_HAL_DRIVER
+=======
+C_DEFS = -DUSE_HAL_DRIVER -DSTM32F407xx
+>>>>>>> 6a391459caae05f63275e4819ace0e73581614f0
 
 
 # CXX defines
@@ -270,7 +287,11 @@ LIBDIR = \
 
 
 # Additional LD Flags from config file
+<<<<<<< HEAD
 ADDITIONALLDFLAGS = --specs=nano.specs --specs=nosys.specs -Wl,--print-memory-usage 
+=======
+ADDITIONALLDFLAGS = --specs=nano.specs --specs=nosys.specs -Wl,--print-memory-usage
+>>>>>>> 6a391459caae05f63275e4819ace0e73581614f0
 
 LDFLAGS = $(MCU) $(ADDITIONALLDFLAGS) -T$(LDSCRIPT) $(LIBDIR) $(LIBS) -Wl,-Map=$(BUILD_DIRECTORY)/$(TARGET).map,--cref -Wl,--gc-sections
 
@@ -387,5 +408,7 @@ clean:
 # dependencies
 #######################################
 -include $(wildcard $(RELEASE_DIRECTORY)/*.d)
+
+# *** EOF ***
 
 # *** EOF ***
