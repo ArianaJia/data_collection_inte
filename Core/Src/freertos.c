@@ -53,7 +53,8 @@ typedef StaticQueue_t osStaticMessageQDef_t;
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define APP_4G_PUBLISH_LOG_ENABLED       0U
+#define APP_4G_PUBLISH_LOG_ENABLED       1U
+#define APP_DEBUG_QUEUE_DEPTH           8U
 #define APP_SPICANA_READY_CHECK_ENABLED  1U
 #define APP_SPICANA_POLL_ENABLED         1U
 #define APP_SPICANA_DECODE_ENABLED       1U
@@ -87,7 +88,7 @@ static volatile uint32_t g_diagPublishFailCount = 0U;
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
-uint32_t defaultTaskBuffer[ 192 ];
+uint32_t defaultTaskBuffer[ 384 ];
 osStaticThreadDef_t defaultTaskControlBlock;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
@@ -99,7 +100,7 @@ const osThreadAttr_t defaultTask_attributes = {
 };
 /* Definitions for CanForViehcle */
 osThreadId_t CanForViehcleHandle;
-uint32_t CanForViehcleBuffer[ 128 ];
+uint32_t CanForViehcleBuffer[ 384 ];
 osStaticThreadDef_t CanForViehcleControlBlock;
 const osThreadAttr_t CanForViehcle_attributes = {
   .name = "CanForViehcle",
@@ -111,7 +112,7 @@ const osThreadAttr_t CanForViehcle_attributes = {
 };
 /* Definitions for CanForBMS */
 osThreadId_t CanForBMSHandle;
-uint32_t CanForBMSTaskBuffer[ 128 ];
+uint32_t CanForBMSTaskBuffer[ 384 ];
 osStaticThreadDef_t CanForBMSTaskControlBlock;
 const osThreadAttr_t CanForBMS_attributes = {
   .name = "CanForBMS",
@@ -262,7 +263,7 @@ const osMessageQueueAttr_t VehicleCanTxQueue_attributes = {
 };
 /* Definitions for task01DebugQueue */
 osMessageQueueId_t task01DebugQueueHandle;
-uint8_t task01DebugQueueBuffer[ 2 * sizeof( App_Uart_Tx_Item_t ) ];
+uint8_t task01DebugQueueBuffer[ APP_DEBUG_QUEUE_DEPTH * sizeof( App_Uart_Tx_Item_t ) ];
 osStaticMessageQDef_t task01DebugQueueControlBlock;
 const osMessageQueueAttr_t task01DebugQueue_attributes = {
   .name = "task01DebugQueue",
@@ -346,6 +347,7 @@ void MX_FREERTOS_Init(void) {
   VehicleCanTxQueueHandle = osMessageQueueNew(8, sizeof(CAN_Tx_Queue_t), &VehicleCanTxQueue_attributes);
 
   /* creation of task01DebugQueue */
+  task01DebugQueueHandle = osMessageQueueNew(APP_DEBUG_QUEUE_DEPTH, sizeof(App_Uart_Tx_Item_t), &task01DebugQueue_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -362,11 +364,11 @@ void MX_FREERTOS_Init(void) {
   CanForBMSHandle = osThreadNew(CanForBMSTask, NULL, &CanForBMS_attributes);
 
   /* creation of MLX90640 */
-  MLX90640Handle = osThreadNew(MLX90640Task, NULL, &MLX90640_attributes);
 
   /* creation of TensionSensor */
 
   /* creation of SPICanControl */
+  SPICanControlHandle = osThreadNew(SPICanControlTask, NULL, &SPICanControl_attributes);
 
   /* creation of SPICanCDC */
 
@@ -383,10 +385,11 @@ void MX_FREERTOS_Init(void) {
   if ((defaultTaskHandle == NULL) || (CanForViehcleHandle == NULL) ||
       (CanForBMSHandle == NULL) || (initTaskBootHandle == NULL) ||
       (Publish4GHandle == NULL) || (PublishQueueItemHandle == NULL) ||
-      (MLX90640Handle == NULL) || (CanBTextHandle == NULL) ||
-      (VehicleCanTxQueueHandle == NULL) ||
+      (SPICanControlHandle == NULL) || (CanBTextHandle == NULL) ||
+      (VehicleCanTxQueueHandle == NULL) || (task01DebugQueueHandle == NULL) ||
       (CAN_Msg_QueueHandle == NULL) || (CAN_Msg_Queue_2Handle == NULL))
   {
+    App_LogBootImmediate("[INIT] ERROR: RTOS task/queue creation failed\r\n");
     Error_Handler();
   }
   /* USER CODE END RTOS_THREADS */
@@ -407,11 +410,33 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+  uint32_t led_tick = HAL_GetTick();
+  uint32_t diag_tick = HAL_GetTick();
 
+  App_WaitForBootInit();
+  App_DebugLogString("[APP] boot complete; CAN1/CAN2 publish enabled; CANA isolated; log=USART3 115200\r\n");
   for(;;)
   {
-    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
-    osDelay(pdMS_TO_TICKS(200U));
+    App_LogProcess();
+    if ((uint32_t)(HAL_GetTick() - diag_tick) >= 2000U)
+    {
+#if APP_UPLINK_ENABLED
+      App_LogPrintf("[UPLINK] local_ready=%u queue=%lu len=%u status=%d uart_ok=%lu fail=%lu CANA_drop=%lu\r\n",
+                    (unsigned int)Modem_IsReady(),
+                    (unsigned long)osMessageQueueGetCount(PublishQueueItemHandle),
+                    (unsigned int)g_diagPublishPayloadLen, g_diagPublishStatus,
+                    (unsigned long)g_diagPublishOkCount, (unsigned long)g_diagPublishFailCount,
+                    (unsigned long)g_spiCanQueueDrops[0]);
+#endif
+      /* CAN status logging disabled while diagnosing the 4G uplink. */
+      diag_tick = HAL_GetTick();
+    }
+    if ((uint32_t)(HAL_GetTick() - led_tick) >= 200U)
+    {
+      HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
+      led_tick = HAL_GetTick();
+    }
+    osDelay(pdMS_TO_TICKS(1U));
   }
   /* USER CODE END StartDefaultTask */
 }
@@ -437,6 +462,7 @@ void CanForViehcleTask(void *argument)
     if (osMessageQueueGet(CAN_Msg_QueueHandle, &recv_data, NULL, pdMS_TO_TICKS(50U)) == osOK)
     {
       CanVehicle_Dispatch(&recv_data);
+      /* App_LogCan2RxFrame(&recv_data); */
     }
     CAN_DecodeVehicleService(HAL_GetTick());
     if ((uint32_t)(HAL_GetTick() - led_tick) >= 500U)
@@ -464,10 +490,11 @@ void CanForBMSTask(void *argument)
 
   for(;;)
   {
-    /* Restore battery publishing without per-frame logging. */
+    /* CAN2 battery frames share this consumer; CAN1 per-frame logging stays off. */
     if (osMessageQueueGet(CAN_Msg_Queue_2Handle, &recv_data, NULL, pdMS_TO_TICKS(50U)) == osOK)
     {
       CanBattery_Dispatch(&recv_data);
+      /* App_LogCan2RxFrame(&recv_data); */
     }
     CAN_DecodeBatteryService(HAL_GetTick());
   }
@@ -589,21 +616,31 @@ void TensionSensorTask(void *argument)
 void SPICanControlTask(void *argument)
 {
   /* USER CODE BEGIN SPICanControlTask */
-  Peripheral_Rx_Frame_t recv_data = {0};
+  FDCAN_StdFrame_t frame;
+  static volatile uint32_t rx_count;
+  static volatile uint32_t poll_error_count;
+  uint8_t received;
 
   App_WaitForBootInit();
 
   for(;;)
   {
-#if (APP_SPICANA_READY_CHECK_ENABLED != 0U)
     if (FDCAN_IsReady(FDCAN_BUS_A))
     {
-      SpiCana_Dispatch(&recv_data);
+      /* Receive and discard: no shared queue, decoder or publish requests. */
+      for (uint8_t budget = 0U; budget < 32U; ++budget)
+      {
+        received = 0U;
+        if (FDCAN_Poll(FDCAN_BUS_A, &frame, &received) != HAL_OK)
+        {
+          ++poll_error_count;
+          break;
+        }
+        if (received == 0U) break;
+        ++rx_count;
+      }
     }
-#else
-    (void)recv_data;
-#endif
-    osDelay(50);
+    osDelay(pdMS_TO_TICKS(50U));
   }
   /* USER CODE END SPICanControlTask */
 }
@@ -657,7 +694,10 @@ void Publish4GTask(void *argument)
   App_WaitForBootInit();
 
   /* Only the publishing task owns modem initialization. */
+  App_DebugLogString("[INIT] DTU local UART/DMA init (no AT)\r\n");
   Modem_Init();
+  App_DebugLogString(Modem_IsReady() ? "[INIT] DTU local UART/DMA ready\r\n" :
+                                     "[INIT] DTU local UART/DMA not ready\r\n");
 
   for(;;)
   {
@@ -762,8 +802,22 @@ void CanBTextTask(void *argument)
 void InitTask_Boot(void *argument)
 {
   /* USER CODE BEGIN InitTask_Boot */
-  /* SPI CAN remains disabled while validating MLX acquisition and uplink. */
+  /* CANA receive-only isolation; CANC and MLX remain disabled. */
+  App_LogBootImmediate("[INIT] boot task started; starting native CAN1/CAN2\r\n");
   CAN_Start();
+  App_LogBootImmediate("[INIT] native CAN1/CAN2 startup returned\r\n");
+  for (int retry = 0; retry < 3; ++retry)
+  {
+    App_LogBootImmediate("[INIT] CANA controller init (receive-only isolation)\r\n");
+    if (FDCAN_Init(FDCAN_BUS_A) == HAL_OK)
+    {
+      App_LogBootImmediate("[INIT] CANA controller ready; decode/publish disabled\r\n");
+      break;
+    }
+    App_LogBootImmediate("[INIT] CANA controller init failed\r\n");
+    osDelay(pdMS_TO_TICKS(10U));
+  }
+  App_LogBootImmediate("[INIT] boot complete; releasing acquisition/publish tasks\r\n");
   g_bootInitDone = 1U;
   osThreadExit();
   /* USER CODE END InitTask_Boot */
@@ -1128,7 +1182,7 @@ static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data)
   if (recv_data->can_channel == CAN_CHANNEL_CONTROLLER_CANA)
   {
 #if (APP_SPICANA_DECODE_ENABLED != 0U)
-    CAN_DecodeControllerCanaMessage(recv_data);
+    if (CAN_DecodeControllerCanaMessage(recv_data) == 0U) return;
 #if (APP_SPICANA_PUBLISH_ENABLED != 0U)
     (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
     (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
@@ -1138,13 +1192,13 @@ static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data)
   }
   if (recv_data->can_channel == CAN_CHANNEL_CDC_MONITOR)
   {
-    CAN_DecodeCdcMonitorMessage(recv_data);
+    if (CAN_DecodeCdcMonitorMessage(recv_data) == 0U) return;
     (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
     return;
   }
   if (recv_data->can_channel == CAN_CHANNEL_VEHICLE_CANB)
   {
-    CAN_DecodeVehicleCanbMessage(recv_data);
+    if (CAN_DecodeVehicleCanbMessage(recv_data) == 0U) return;
     (void)Publish_QueueTopic(PUBLISH_TOPIC_FAST_TELEMETRY);
     (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
     (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
@@ -1153,7 +1207,7 @@ static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data)
 
 static void CanBattery_Dispatch(const CAN_Msg_Queue_t *recv_data)
 {
-  CAN_DecodeBatteryBoxMessage(recv_data);
+  if (CAN_DecodeBatteryBoxMessage(recv_data) == 0U) return;
   (void)Publish_QueueTopic(PUBLISH_TOPIC_FAST_TELEMETRY);
   (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
   (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_DETAIL);

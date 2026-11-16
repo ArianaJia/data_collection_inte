@@ -10,8 +10,8 @@ static int32_t ReadMotorola(const uint8_t *data, unsigned bit, unsigned width, u
  for(unsigned i=0;i<width;i++){value=(value<<1)|((data[bit/8]>>(bit%8))&1U);bit=(bit%8)?bit-1:bit+15;}
  return sign && (value & (1UL<<(width-1))) ? (int32_t)value-(int32_t)(1UL<<width) : (int32_t)value;
 }
-void Canc_Receive(const CAN_Msg_Queue_t *frame) {
- if(!frame || frame->can_channel!=CAN_CHANNEL_CDC_MONITOR || frame->is_ext_id) return;
+uint8_t Canc_Receive(const CAN_Msg_Queue_t *frame) {
+ if(!frame || frame->can_channel!=CAN_CHANNEL_CDC_MONITOR || frame->is_ext_id) return 0U;
  unsigned index, length;
  switch(frame->msg_id){
  case 0x301: index=0; length=8; break;
@@ -24,14 +24,15 @@ void Canc_Receive(const CAN_Msg_Queue_t *frame) {
  case 0x17E: index=7; length=5; break;
  case 0x0AB: index=8; length=7; break;
  case 0x166: index=9; length=8; break;
- default:return;
+ default:return 0U;
  }
  taskENTER_CRITICAL();
  CancCache *c=&cache[index];
- if(frame->dlc!=length){c->rejected++;taskEXIT_CRITICAL();return;}
+ if(frame->dlc!=length){c->rejected++;taskEXIT_CRITICAL();return 0U;}
  uint32_t now=HAL_GetTick(); c->interval=now-c->tick;c->tick=now;c->count++;
  memcpy(c->data,frame->msg_data,length);
  taskEXIT_CRITICAL();
+ return 1U;
 }
 static void MapStatus(fsae_CancFrameStatus *s,const CancCache *c,unsigned length,uint32_t now){
  s->has_seen=s->has_fresh=s->has_rx_count=s->has_rejected_count=true;

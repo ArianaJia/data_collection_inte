@@ -17,7 +17,7 @@ head='''#ifndef CANC_TELEMETRY_H
 #define CANC_TELEMETRY_H
 #include "can.h"
 #include "fsae_telemetry.pb.h"
-void Canc_Receive(const CAN_Msg_Queue_t *frame);
+uint8_t Canc_Receive(const CAN_Msg_Queue_t *frame);
 void Canc_Map(fsae_TelemetryFrame *frame, uint32_t now);
 #endif
 '''
@@ -33,8 +33,8 @@ static int32_t ReadMotorola(const uint8_t *data, unsigned bit, unsigned width, u
  for(unsigned i=0;i<width;i++){value=(value<<1)|((data[bit/8]>>(bit%8))&1U);bit=(bit%8)?bit-1:bit+15;}
  return sign && (value & (1UL<<(width-1))) ? (int32_t)value-(int32_t)(1UL<<width) : (int32_t)value;
 }
-void Canc_Receive(const CAN_Msg_Queue_t *frame) {
- if(!frame || frame->can_channel!=CAN_CHANNEL_CDC_MONITOR || frame->is_ext_id) return;
+uint8_t Canc_Receive(const CAN_Msg_Queue_t *frame) {
+ if(!frame || frame->can_channel!=CAN_CHANNEL_CDC_MONITOR || frame->is_ext_id) return 0U;
  unsigned index, length;
  switch(frame->msg_id){
 '''
@@ -44,14 +44,15 @@ for i,(typ,name) in enumerate(links):
  ident=int(re.search(r'CANC 0x([0-9A-Fa-f]+)',body)[1],16)
  length,sig=msgs[ident];entries.append((typ,name,length,sig,body))
  src+=f' case 0x{ident:03X}: index={i}; length={length}; break;\n'
-src+=''' default:return;
+src+=''' default:return 0U;
  }
  taskENTER_CRITICAL();
  CancCache *c=&cache[index];
- if(frame->dlc!=length){c->rejected++;taskEXIT_CRITICAL();return;}
+ if(frame->dlc!=length){c->rejected++;taskEXIT_CRITICAL();return 0U;}
  uint32_t now=HAL_GetTick(); c->interval=now-c->tick;c->tick=now;c->count++;
  memcpy(c->data,frame->msg_data,length);
  taskEXIT_CRITICAL();
+ return 1U;
 }
 static void MapStatus(fsae_CancFrameStatus *s,const CancCache *c,unsigned length,uint32_t now){
  s->has_seen=s->has_fresh=s->has_rx_count=s->has_rejected_count=true;

@@ -103,6 +103,10 @@ int main(void)
   MX_USART3_UART_Init();
   MX_SPI3_Init();
   /* USER CODE BEGIN 2 */
+  {
+    static const uint8_t boot_log[] = "[BOOT] USART3 PB10 115200 8N1 ready; starting RTOS\r\n";
+    (void)HAL_UART_Transmit(&huart3, (uint8_t *)boot_log, sizeof(boot_log) - 1U, 100U);
+  }
 
   /* 上电先拉高LED一次，用于确认主函数已运行到这里（toggle仍在RTOS任务中做） */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);

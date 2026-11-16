@@ -30,8 +30,8 @@ static uint32_t CAN_DecodeReadBe32(const uint8_t *data);
 static int32_t CAN_DecodeReadBe32Signed(const uint8_t *data);
 static void CAN_DecodeStoreWheelLe16(int16_t values[4], const uint8_t *data);
 static uint8_t CAN_DecodeCompetitionResult(const CAN_Msg_Queue_t *recv_data);
-static void CAN_DecodeBatteryBoxStdMessage(const CAN_Msg_Queue_t *recv_data);
-static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data);
+static uint8_t CAN_DecodeBatteryBoxStdMessage(const CAN_Msg_Queue_t *recv_data);
+static uint8_t CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data);
 static uint8_t CAN_DecodeControllerMotorIndex(uint32_t msg_id, uint8_t *motor_index);
 
 static uint16_t CAN_DecodeReadLe16(const uint8_t *data)
@@ -85,13 +85,13 @@ static void CAN_DecodeStoreWheelLe16(int16_t values[4], const uint8_t *data)
 }
 
 /* Sources are identified by physical bus and ID, never numeric plausibility. */
-static void CAN_DecodeBatteryIvt(const CAN_Msg_Queue_t *frame)
+static uint8_t CAN_DecodeBatteryIvt(const CAN_Msg_Queue_t *frame)
 {
   Battery_IvtData *ivt = &g_BatteryInfo.IVT;
   uint8_t mux = (uint8_t)(frame->msg_id - CAN_ID_BATTERY_IVT_CURRENT);
   uint8_t bit;
   int32_t value;
-  if ((frame->dlc != 6U) || (mux >= 8U) || (frame->msg_data[0] != mux)) return;
+  if ((frame->dlc != 6U) || (mux >= 8U) || (frame->msg_data[0] != mux)) return 0U;
   bit = (uint8_t)(1U << mux);
   value = CAN_DecodeReadLe32Signed(&frame->msg_data[2]);
   ivt->State[mux] = frame->msg_data[1] >> 4;
@@ -112,6 +112,7 @@ static void CAN_DecodeBatteryIvt(const CAN_Msg_Queue_t *frame)
     case 7U: ivt->EnergyWh = value; ivt->EnergyState = ivt->State[mux]; break;
     default: break;
   }
+  return 1U;
 }
 
 static uint8_t CAN_DecodeCompetitionResult(const CAN_Msg_Queue_t *frame)
@@ -194,15 +195,16 @@ static uint8_t CAN_DecodeControllerMotorIndex(uint32_t msg_id, uint8_t *motor_in
   }
 }
 
-void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
+uint8_t CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
 {
+  uint8_t updated;
   /* Parse vehicle-side CANB frames and update the shared vehicle telemetry. */
   if (recv_data == NULL || recv_data->can_channel != CAN_CHANNEL_VEHICLE_CANB || recv_data->dlc > 8U)
   {
-    return;
+    return 0U;
   }
 
-  Extra_Receive(recv_data);
+  updated = Extra_Receive(recv_data);
   if (recv_data->is_ext_id != 0U)
   {
     if (recv_data->msg_id == CAN_ID_BATTERY_CHARGER_FEEDBACK && recv_data->dlc >= 5U)
@@ -211,8 +213,9 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
       g_BatteryInfo.Charger_OutCurr = (int16_t)CAN_DecodeReadBe16(&recv_data->msg_data[2]);
       g_BatteryInfo.Charger_Cmd = recv_data->msg_data[4];
       Battery_Charger_Calibrate();
+      return 1U;
     }
-    return;
+    return updated;
   }
 
   switch (recv_data->msg_id)
@@ -223,6 +226,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         g_CANB_LoopData.ECU.LongitudeE7 = (int32_t)CAN_DecodeReadLe32(recv_data->msg_data + 4);
         g_CANB_LoopData.ECU.PositionSeen = 1U;
         g_CANB_LoopData.ECU.PositionTick = HAL_GetTick();
+        return 1U;
       } break;
     case CAN_ID_CANB_GPS_MOTION:
       if (recv_data->dlc == 8U) {
@@ -238,6 +242,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         g_CANB_LoopData.ECU.PositionFlags = recv_data->msg_data[6];
         g_CANB_LoopData.ECU.PositionStatusSeen = 1U;
         g_CANB_LoopData.ECU.PositionStatusTick = HAL_GetTick();
+        return 1U;
       } break;
     case CAN_ID_CANB_GPS_CG_VELOCITY:
       if (recv_data->dlc == 8U) {
@@ -252,6 +257,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         gps->CgVelocityValid = ((gps->CgFlags & 0x5FU) == 0x1FU) &&
             (gps->CgSampleAgeMs != UINT16_MAX) &&
             (gps->CgVelocityXCentiMps != INT16_MIN) && (gps->CgVelocityYCentiMps != INT16_MIN);
+        return 1U;
       } break;
     case CAN_ID_CANB_GPS_STATUS_ODOMETER:
       if (recv_data->dlc == 8U) {
@@ -264,6 +270,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         gps->LapCount = recv_data->msg_data[7];
         gps->StatusSeen = 1U;
         gps->StatusTick = HAL_GetTick();
+        return 1U;
       } break;
     case CAN_ID_CANB_GPS_LAP_TIMING:
       if (recv_data->dlc == 8U) {
@@ -274,6 +281,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         gps->LapDeltaCentiS = CAN_DecodeReadLe16Signed(recv_data->msg_data + 6);
         gps->LapTimingSeen = 1U;
         gps->LapTimingTick = HAL_GetTick();
+        return 1U;
       } break;
     case CAN_ID_CANB_STEERING_COMMAND:
       if (recv_data->dlc == 2U) {
@@ -283,12 +291,14 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         g_CANB_LoopData.ECU.LapTimerToggle = (recv_data->msg_data[1] >> 2) & 1U;
         g_CANB_LoopData.ECU.SteeringCommandSeen = 1U;
         g_CANB_LoopData.ECU.SteeringCommandTick = HAL_GetTick();
+        return 1U;
       } break;
     case CAN_ID_CANB_DRIVING_MODE_CMD:
       if (recv_data->dlc == 8U && recv_data->msg_data[0] >= 47U && recv_data->msg_data[0] <= 51U) {
         g_CANB_LoopData.ECU.RequestedDriveModeCode = recv_data->msg_data[0];
         g_CANB_LoopData.ECU.DriveModeRequestSeen = 1U;
         g_CANB_LoopData.ECU.DriveModeRequestTick = HAL_GetTick();
+        return 1U;
       } break;
     case CAN_ID_CANB_RECYCLE_INFO:
       if (recv_data->dlc == 8U) {
@@ -296,6 +306,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         g_CANB_LoopData.ECU.RegenRate = recv_data->msg_data[2];
         g_CANB_LoopData.ECU.RegenSeen = 1U;
         g_CANB_LoopData.ECU.RegenTick = HAL_GetTick();
+        return 1U;
       } break;
     case CAN_ID_CANB_BRAKE_PEDAL_ENCODER:
       if (recv_data->dlc == 7U && recv_data->msg_data[0] == 7U && recv_data->msg_data[1] == 1U && recv_data->msg_data[2] == 1U) {
@@ -304,6 +315,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
           g_CANB_LoopData.ECU.PedalCount = count;
           g_CANB_LoopData.ECU.PedalSeen = 1U;
           g_CANB_LoopData.ECU.PedalTick = HAL_GetTick();
+          return 1U;
         }
       } break;
     case CAN_ID_CANB_GPS_SPEED:
@@ -315,6 +327,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         g_CANB_LoopData.IMU.GpsSpeedKmh = (uint16_t)((speed + 5U) / 10U);
         g_CANB_LoopData.IMU.GpsSpeedTick = HAL_GetTick();
         g_CANB_LoopData.IMU.ValidFlags |= CANB_MOTION_VALID_GPS;
+        return 1U;
       }
       break;
 
@@ -327,6 +340,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         g_CANB_LoopData.ECU.OilPressureFrontKpa = CAN_DecodeReadLe16(&recv_data->msg_data[6]);
         g_CANB_LoopData.ECU.DriverInputsSeen = 1U;
         g_CANB_LoopData.ECU.DriverInputsTick = HAL_GetTick();
+        return 1U;
       }
       break;
 
@@ -355,6 +369,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
                                                    CANB_ENERGY_VALID_VOLTAGE |
                                                    CANB_ENERGY_VALID_CURRENT);
         g_CANB_LoopData.EnergyMeter.AutoSource = CANB_ENERGY_METER_SOURCE_FS;
+        return 1U;
       }
       break;
 
@@ -362,7 +377,8 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
       if (recv_data->dlc == CAN_DECODE_LEN_8)
       {
         CAN_DecodeStoreWheelLe16(g_CANB_LoopData.ECU.Motor_Torque, recv_data->msg_data);
-        }
+        return 1U;
+      }
       break;
 
     case CAN_ID_CANB_MOTOR_DIAGNOSTIC_CODES:
@@ -372,6 +388,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         g_CANB_LoopData.ECU.DiagnosticNumber[CAN_DECODE_MOTOR_RR] = CAN_DecodeReadLe16(&recv_data->msg_data[2]);
         g_CANB_LoopData.ECU.DiagnosticNumber[CAN_DECODE_MOTOR_FL] = CAN_DecodeReadLe16(&recv_data->msg_data[4]);
         g_CANB_LoopData.ECU.DiagnosticNumber[CAN_DECODE_MOTOR_FR] = CAN_DecodeReadLe16(&recv_data->msg_data[6]);
+        return 1U;
       }
       break;
 
@@ -379,13 +396,15 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
       if (recv_data->dlc == CAN_DECODE_LEN_8)
       {
         CAN_DecodeStoreWheelLe16(g_CANB_LoopData.ECU.Motor_RPM, recv_data->msg_data);
-        }
+        return 1U;
+      }
       break;
 
     case CAN_ID_CANB_MOTOR_TEMPERATURE:
       if (recv_data->dlc == CAN_DECODE_LEN_8)
       {
         CAN_DecodeStoreWheelLe16(g_CANB_LoopData.ECU.MotorTempDc, recv_data->msg_data);
+        return 1U;
       }
       break;
 
@@ -393,6 +412,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
       if (recv_data->dlc == CAN_DECODE_LEN_8)
       {
         CAN_DecodeStoreWheelLe16(g_CANB_LoopData.ECU.InverterTempDc, recv_data->msg_data);
+        return 1U;
       }
       break;
 
@@ -400,6 +420,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
       if (recv_data->dlc == CAN_DECODE_LEN_8)
       {
         CAN_DecodeStoreWheelLe16(g_CANB_LoopData.ECU.IgbtTempDc, recv_data->msg_data);
+        return 1U;
       }
       break;
 
@@ -420,6 +441,7 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
         g_CANB_LoopData.ECU.LogicState[CAN_DECODE_MOTOR_RL] = (uint8_t)((recv_data->msg_data[3] >> 4) & 0x0FU);
         g_CANB_LoopData.ECU.LogicState[CAN_DECODE_MOTOR_FR] = (uint8_t)(recv_data->msg_data[4] & 0x0FU);
         g_CANB_LoopData.ECU.LogicState[CAN_DECODE_MOTOR_FL] = (uint8_t)((recv_data->msg_data[4] >> 4) & 0x0FU);
+        return 1U;
       }
       break;
 
@@ -428,12 +450,12 @@ void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
     case CAN_ID_COMPETITION_POWER:
     case CAN_ID_COMPETITION_WH:
       /* Competition results on CANB always carry a big-endian int32. */
-      (void)CAN_DecodeCompetitionResult(recv_data);
-      break;
+      return CAN_DecodeCompetitionResult(recv_data);
 
     default:
       break;
   }
+  return updated;
 }
 
 uint8_t CAN_IsBatteryCanbMessage(const CAN_Msg_Queue_t *frame)
@@ -445,10 +467,11 @@ uint8_t CAN_IsBatteryCanbMessage(const CAN_Msg_Queue_t *frame)
        (frame->msg_id == CAN_ID_CANB_BATTERY_ALARM_LEVELS));
 }
 
-void CAN_DecodeBatteryBoxMessage(const CAN_Msg_Queue_t *recv_data)
+uint8_t CAN_DecodeBatteryBoxMessage(const CAN_Msg_Queue_t *recv_data)
 {
-  if ((recv_data == NULL) || (recv_data->dlc > 8U)) return;
-  Extra_Receive(recv_data);
+  uint8_t updated, decoded = 0U;
+  if ((recv_data == NULL) || (recv_data->dlc > 8U)) return 0U;
+  updated = Extra_Receive(recv_data);
   if (CAN_IsBatteryCanbMessage(recv_data))
   {
     CAN_Msg_Queue_t mirror = *recv_data;
@@ -459,16 +482,17 @@ void CAN_DecodeBatteryBoxMessage(const CAN_Msg_Queue_t *recv_data)
       case CAN_ID_CANB_BATTERY_FAULT_STATUS: mirror.msg_id = CAN_ID_BATTERY_ALARM_STATUS; break;
       default: mirror.msg_id = CAN_ID_BATTERY_ALARM_LEVELS; break;
     }
-    CAN_DecodeBatteryBoxExtMessage(&mirror);
+    decoded = CAN_DecodeBatteryBoxExtMessage(&mirror);
   }
   else if (recv_data->can_channel == CAN_CHANNEL_BATTERY_BOX)
   {
-    if (recv_data->is_ext_id == 0U) CAN_DecodeBatteryBoxStdMessage(recv_data);
-    else CAN_DecodeBatteryBoxExtMessage(recv_data);
+    if (recv_data->is_ext_id == 0U) decoded = CAN_DecodeBatteryBoxStdMessage(recv_data);
+    else decoded = CAN_DecodeBatteryBoxExtMessage(recv_data);
   }
+  return updated || decoded;
 }
 
-void CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *recv_data)
+uint8_t CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *recv_data)
 {
   /* Decode the controller CANA stream into motor-specific telemetry slots. */
   uint8_t motor_index;
@@ -476,14 +500,14 @@ void CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *recv_data)
   if ((recv_data == NULL) ||
       (recv_data->can_channel != CAN_CHANNEL_CONTROLLER_CANA) ||
       (recv_data->is_ext_id != 0U) ||
-      (recv_data->dlc < CAN_DECODE_LEN_8))
+      (recv_data->dlc != CAN_DECODE_LEN_8))
   {
-    return;
+    return 0U;
   }
 
   if (CAN_DecodeControllerMotorIndex(recv_data->msg_id, &motor_index) == 0U)
   {
-    return;
+    return 0U;
   }
 
   switch (recv_data->msg_id)
@@ -529,19 +553,20 @@ void CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *recv_data)
       break;
 
     default:
-      break;
+      return 0U;
   }
+  return 1U;
 }
 
-void CAN_DecodeCdcMonitorMessage(const CAN_Msg_Queue_t *recv_data)
+uint8_t CAN_DecodeCdcMonitorMessage(const CAN_Msg_Queue_t *recv_data)
 {
-  Canc_Receive(recv_data);
+  uint8_t updated = Canc_Receive(recv_data);
   /* Keep CDC monitoring read-only so future mailbox semantics stay isolated. */
   if ((recv_data == NULL) ||
       (recv_data->can_channel != CAN_CHANNEL_CDC_MONITOR) ||
-      (recv_data->is_ext_id != 0U))
+      (recv_data->is_ext_id != 0U) || (recv_data->dlc > 8U))
   {
-    return;
+    return 0U;
   }
 
   /* CDC on SPI3 is currently treated as a read-only monitoring bus.
@@ -563,24 +588,26 @@ void CAN_DecodeCdcMonitorMessage(const CAN_Msg_Queue_t *recv_data)
     default:
       break;
   }
+  return updated;
 }
 
-static void CAN_DecodeBatteryBoxStdMessage(const CAN_Msg_Queue_t *recv_data)
+static uint8_t CAN_DecodeBatteryBoxStdMessage(const CAN_Msg_Queue_t *recv_data)
 {
   if ((recv_data != NULL) && (recv_data->is_ext_id == 0U) &&
       (recv_data->msg_id >= CAN_ID_BATTERY_IVT_CURRENT) &&
       (recv_data->msg_id <= CAN_ID_BATTERY_IVT_WH))
   {
-    CAN_DecodeBatteryIvt(recv_data);
+    return CAN_DecodeBatteryIvt(recv_data);
   }
+  return 0U;
 }
 
-static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
+static uint8_t CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
 {
   /* Extended battery-box frames carry the richer pack-level telemetry set. */
   if (recv_data == NULL || recv_data->is_ext_id == 0U)
   {
-    return;
+    return 0U;
   }
 
   if ((recv_data->msg_id >= CAN_ID_BATTERY_CELL_VOLTAGE_BASE) &&
@@ -628,7 +655,7 @@ static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
         }
       }
     }
-    return;
+    return module_id < CAN_BATTERY_MODULE_COUNT;
   }
 
   if ((recv_data->msg_id >= CAN_ID_BATTERY_CELL_TEMP_BASE) &&
@@ -654,7 +681,7 @@ static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
         }
       }
     }
-    return;
+    return module_id < CAN_BATTERY_MODULE_COUNT;
   }
 
   switch (recv_data->msg_id)
@@ -681,6 +708,7 @@ static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
         g_BatteryInfo.Battery_State = (uint8_t)((recv_data->msg_data[6] >> 4) & 0x0FU);
         g_BatteryInfo.Battery_AlarmLevel = (uint8_t)(recv_data->msg_data[6] & 0x0FU);
         g_BatteryInfo.Work_State = g_BatteryInfo.Battery_State;
+        return 1U;
       }
       break;
 
@@ -699,6 +727,7 @@ static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
           g_BatteryInfo.CellExtremaValid = 0U;
           g_BatteryInfo.MaxCellVolt = g_BatteryInfo.MinCellVolt = 0U;
         }
+        return 1U;
       }
       break;
 
@@ -716,6 +745,7 @@ static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
         g_BatteryInfo.FanStatusFlags = recv_data->msg_data[7];
         g_BatteryInfo.MaxTempNo = recv_data->msg_data[2];
         g_BatteryInfo.MinTempNo = recv_data->msg_data[3];
+        return 1U;
       }
       break;
 
@@ -731,6 +761,7 @@ static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
         g_BatteryInfo.Charge_ReqCurr = CAN_DecodeReadBe16(&recv_data->msg_data[4]);
         g_BatteryInfo.PrechargeVolt = CAN_DecodeReadBe16(&recv_data->msg_data[6]);
         Battery_Charger_Calibrate();
+        return 1U;
       }
       break;
 
@@ -741,6 +772,7 @@ static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
         g_BatteryInfo.CellVoltSum = CAN_DecodeReadBe16(&recv_data->msg_data[0]);
         g_BatteryInfo.CellSumValid = g_BatteryInfo.CellVoltSum != 0xFFFFU;
         if (!g_BatteryInfo.CellSumValid) g_BatteryInfo.CellVoltSum = 0U;
+        return 1U;
       }
       break;
 
@@ -756,6 +788,7 @@ static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
         g_BatteryInfo.FaultFrameVersion = recv_data->msg_data[7];
         g_BatteryInfo.FaultValid = 1U;
         g_BatteryInfo.FaultTick = HAL_GetTick();
+        return 1U;
       }
       break;
 
@@ -766,6 +799,7 @@ static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
           g_BatteryInfo.AlarmLevels[i] = (recv_data->msg_data[i / 4U] >> ((i % 4U) * 2U)) & 3U;
         g_BatteryInfo.AlarmLevelsValid = 1U;
         g_BatteryInfo.AlarmLevelsTick = HAL_GetTick();
+        return 1U;
       }
       break;
 
@@ -779,6 +813,7 @@ static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
         g_BatteryInfo.ImdDutyDeciPct = CAN_DecodeReadBe16(&recv_data->msg_data[2]);
         g_BatteryInfo.ImdResistanceKohm = CAN_DecodeReadBe16(&recv_data->msg_data[4]);
         g_BatteryInfo.ImdFrequencyCentiHz = CAN_DecodeReadBe16(&recv_data->msg_data[6]);
+        return 1U;
       }
       break;
 
@@ -789,6 +824,7 @@ static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
         g_BatteryInfo.LastPrechargeResult = (recv_data->msg_data[0] >> 2) & 3U;
         g_BatteryInfo.LastPrechargeSuccessMs = CAN_DecodeReadBe16(&recv_data->msg_data[1]);
         g_BatteryInfo.LastPrechargeFailureMs = CAN_DecodeReadBe16(&recv_data->msg_data[3]);
+        return 1U;
       }
       break;
 
@@ -799,12 +835,14 @@ static void CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
         g_BatteryInfo.SopChargeCurrentDa = CAN_DecodeReadBe16(&recv_data->msg_data[2]);
         g_BatteryInfo.SopDischargePowerDkw = CAN_DecodeReadBe16(&recv_data->msg_data[4]);
         g_BatteryInfo.SopChargePowerDkw = CAN_DecodeReadBe16(&recv_data->msg_data[6]);
+        return 1U;
       }
       break;
 
     default:
       break;
   }
+  return 0U;
 }
 
 /* Called by the battery owner task, including while its receive queue is idle.

@@ -115,10 +115,13 @@ def main():
     thermal_id_function = thermal_source[thermal_source.index("static uint32_t Mlx_GetCanSummaryId(uint8_t sensor_id)\n{"):]
     thermal_id_function = thermal_id_function[:thermal_id_function.index("\nstatic void Mlx_EncodeCanSummaryPair")]
     (OUT / "filters.h").write_text("static const uint16_t filter_ids[]={" + body + "};\n" + thermal_id_function)
+    dispatch = thermal_source[thermal_source.index("static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data)\n{"):]
+    dispatch = dispatch[:dispatch.index("static void Rs485_Dispatch")]
+    (OUT / "dispatch.h").write_text("#define APP_SPICANA_DECODE_ENABLED 0U\n" + dispatch)
     (OUT / "test.c").write_text(TEST_C)
     shutil.copyfile(ROOT / "test_and_fix/firmware/publish_presence_test.c", OUT / "publish_presence_test.c")
     exe = OUT / "test.exe"
-    subprocess.run([args.cc, "-std=c99", "-O0", "-static", "-I" + str(OUT), str(OUT / "test.c"),
+    subprocess.run([args.cc, "-std=c99", "-O0", "-Werror=return-type", "-static", "-I" + str(OUT), str(OUT / "test.c"),
         str(OUT / "publish_presence_test.c"), *[str(OUT / x) for x in sources], "-lm", "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
 
@@ -141,7 +144,79 @@ osMessageQueueId_t PublishQueueItemHandle;
 static fsae_TelemetryFrame out;
 static uint8_t payload[PUBLISH_MAX_PAYLOAD_SIZE];
 int Publish_PresenceRegressionTest(void);
-static void send(unsigned id,unsigned dlc,const uint8_t data[8]){
+static unsigned queued[4];
+static osStatus_t Test_QueueTopic(PublishTopic_t topic){assert((unsigned)topic<4);queued[topic]++;return 0;}
+#define Publish_QueueTopic Test_QueueTopic
+#include "dispatch.h"
+#undef Publish_QueueTopic
+static void decoder_returns(void){
+ CAN_Msg_Queue_t f={.can_channel=CAN_CHANNEL_VEHICLE_CANB,.msg_id=CAN_ID_CANB_DRIVER_INPUTS_OIL_PRESSURE,.dlc=8,.msg_data={1}};
+ assert(!CAN_DecodeVehicleCanbMessage(NULL));assert(!CAN_DecodeBatteryBoxMessage(NULL));
+ assert(!CAN_DecodeControllerCanaMessage(NULL));assert(!CAN_DecodeCdcMonitorMessage(NULL));
+ assert(!Extra_Receive(NULL));assert(!Canc_Receive(NULL));
+ assert(CAN_DecodeVehicleCanbMessage(&f));assert(g_CANB_LoopData.ECU.SteeringAngleDeciDeg==1);
+ memset(f.msg_data,0,8);assert(CAN_DecodeVehicleCanbMessage(&f));assert(CAN_DecodeVehicleCanbMessage(&f));
+ assert(g_CANB_LoopData.ECU.SteeringAngleDeciDeg==0);
+ f.dlc=7;assert(!CAN_DecodeVehicleCanbMessage(&f));f.dlc=9;assert(!CAN_DecodeVehicleCanbMessage(&f));
+ f.dlc=8;f.msg_id=0x777;assert(!CAN_DecodeVehicleCanbMessage(&f));
+ f.msg_id=CAN_ID_CANB_DRIVING_MODE_CMD;f.msg_data[0]=46;assert(!CAN_DecodeVehicleCanbMessage(&f));
+ f.msg_id=CAN_ID_CANB_BRAKE_PEDAL_ENCODER;f.dlc=7;memcpy(f.msg_data,(uint8_t[]){7,1,1,0,16,0,0},7);
+ assert(!CAN_DecodeVehicleCanbMessage(&f));f.msg_data[4]=0;assert(CAN_DecodeVehicleCanbMessage(&f));
+ f.msg_id=CAN_ID_CANB_GPS_SPEED;f.dlc=2;f.msg_data[0]=255;f.msg_data[1]=255;
+ assert(!CAN_DecodeVehicleCanbMessage(&f));
+ // Invalid measurement status is accepted when the frame updates validity caches.
+ f.msg_id=CAN_ID_CANB_GPS_CG_VELOCITY;f.dlc=8;memset(f.msg_data,0,8);
+ assert(CAN_DecodeVehicleCanbMessage(&f));assert(!g_CANB_LoopData.GPS.CgVelocityValid);
+ f.msg_id=CAN_ID_CANB_AMK_STATUS_MODE_LOGIC;f.dlc=5;f.msg_data[0]=0xF1;
+ assert(CAN_DecodeVehicleCanbMessage(&f));assert(g_CANB_LoopData.ECU.ERRO[3]);
+ f.msg_id=CAN_ID_COMPETITION_CURRENT;f.dlc=6;f.msg_data[0]=0;f.msg_data[1]=0x20;
+ assert(CAN_DecodeVehicleCanbMessage(&f));assert(!(g_CANB_LoopData.EnergyMeter.ValidFlags&1));
+ f.msg_data[0]=1;assert(!CAN_DecodeVehicleCanbMessage(&f));
+ // Extra-only frames, including accepted zero and repeated payloads.
+ f.msg_id=0x5A0;f.dlc=8;memset(f.msg_data,0,8);f.msg_data[0]=1;
+ assert(CAN_DecodeVehicleCanbMessage(&f));memset(f.msg_data,0,8);
+ assert(CAN_DecodeVehicleCanbMessage(&f));assert(CAN_DecodeVehicleCanbMessage(&f));
+ f.dlc=7;assert(!CAN_DecodeVehicleCanbMessage(&f));f.dlc=8;f.msg_id=0x5AA;f.msg_data[2]=101;
+ assert(!CAN_DecodeVehicleCanbMessage(&f));f.msg_id=0x5AF;f.msg_data[0]=3;assert(!CAN_DecodeVehicleCanbMessage(&f));
+ // Battery standard IVT, extended, CANB mirrors, and Extra-only battery fan.
+ f=(CAN_Msg_Queue_t){.can_channel=CAN_CHANNEL_BATTERY_BOX,.msg_id=CAN_ID_BATTERY_IVT_CURRENT,.dlc=6,.msg_data={0,0,1}};
+ assert(CAN_DecodeBatteryBoxMessage(&f));assert(g_BatteryInfo.IVT.CurrentMa==1);
+ f.msg_data[2]=0;assert(CAN_DecodeBatteryBoxMessage(&f));assert(CAN_DecodeBatteryBoxMessage(&f));
+ f.msg_data[1]=0x20;assert(CAN_DecodeBatteryBoxMessage(&f));assert(!(g_BatteryInfo.IVT.ValidFlags&1));
+ f.msg_data[0]=1;assert(!CAN_DecodeBatteryBoxMessage(&f));f.msg_data[0]=0;f.dlc=5;assert(!CAN_DecodeBatteryBoxMessage(&f));
+ f.is_ext_id=1;f.msg_id=CAN_ID_BATTERY_PACK_SUMMARY;f.dlc=8;memset(f.msg_data,0,8);
+ assert(CAN_DecodeBatteryBoxMessage(&f));assert(CAN_DecodeBatteryBoxMessage(&f));
+ f.dlc=6;assert(!CAN_DecodeBatteryBoxMessage(&f));f.dlc=8;f.msg_id=0x186E50F4;
+ assert(CAN_DecodeBatteryBoxMessage(&f));f.msg_data[2]=4;assert(!CAN_DecodeBatteryBoxMessage(&f));
+ f.msg_data[2]=0;f.msg_id=0x1FFFFFFF;assert(!CAN_DecodeBatteryBoxMessage(&f));
+ f.msg_id=CAN_ID_BATTERY_CELL_VOLTAGE_BASE+1;assert(!CAN_DecodeBatteryBoxMessage(&f));
+ f.msg_id=CAN_ID_BATTERY_CELL_VOLTAGE_BASE;assert(CAN_DecodeBatteryBoxMessage(&f));
+ f.msg_id=CAN_ID_BATTERY_CELL_SUM;f.dlc=2;f.msg_data[0]=f.msg_data[1]=255;
+ assert(CAN_DecodeBatteryBoxMessage(&f));assert(!g_BatteryInfo.CellSumValid);
+ f=(CAN_Msg_Queue_t){.can_channel=CAN_CHANNEL_VEHICLE_CANB,.msg_id=CAN_ID_CANB_BATTERY_POWER_STATUS,.dlc=8};
+ assert(CAN_DecodeBatteryBoxMessage(&f));f.dlc=6;assert(!CAN_DecodeBatteryBoxMessage(&f));
+ // CDC unknown/DLC errors must not report success, even though diagnostics update.
+ f=(CAN_Msg_Queue_t){.can_channel=CAN_CHANNEL_CDC_MONITOR,.msg_id=0x302,.dlc=6};
+ assert(CAN_DecodeCdcMonitorMessage(&f));assert(CAN_DecodeCdcMonitorMessage(&f));
+ f.dlc=5;assert(!CAN_DecodeCdcMonitorMessage(&f));f.dlc=9;assert(!CAN_DecodeCdcMonitorMessage(&f));
+ f.dlc=8;f.msg_id=0x777;assert(!CAN_DecodeCdcMonitorMessage(&f));
+ f=(CAN_Msg_Queue_t){.can_channel=CAN_CHANNEL_CONTROLLER_CANA,.msg_id=CAN_ID_CANA_FR_STATUS_SPEED_TORQUE_CURRENT,.dlc=8};
+ assert(CAN_DecodeControllerCanaMessage(&f));assert(CAN_DecodeControllerCanaMessage(&f));
+ f.dlc=9;assert(!CAN_DecodeControllerCanaMessage(&f));f.dlc=8;f.msg_id=0x777;
+ assert(!CAN_DecodeControllerCanaMessage(&f));
+ // Execute the real native dispatch functions with a counting publish stub.
+ f=(CAN_Msg_Queue_t){.can_channel=CAN_CHANNEL_VEHICLE_CANB,.msg_id=0x5A0,.dlc=8};
+ memset(queued,0,sizeof(queued));CanVehicle_Dispatch(&f);CanVehicle_Dispatch(&f);
+ assert(queued[PUBLISH_TOPIC_FAST_TELEMETRY]==2 && queued[PUBLISH_TOPIC_VEHICLE_STATE]==2 && queued[PUBLISH_TOPIC_BMS_SUMMARY]==2);
+ f.dlc=7;CanVehicle_Dispatch(&f);f.dlc=8;f.msg_id=0x777;CanVehicle_Dispatch(&f);
+ assert(queued[PUBLISH_TOPIC_FAST_TELEMETRY]==2 && queued[PUBLISH_TOPIC_VEHICLE_STATE]==2 && queued[PUBLISH_TOPIC_BMS_SUMMARY]==2);
+ f=(CAN_Msg_Queue_t){.can_channel=CAN_CHANNEL_BATTERY_BOX,.is_ext_id=1,.msg_id=0x186E50F4,.dlc=8};
+ memset(queued,0,sizeof(queued));CanBattery_Dispatch(&f);CanBattery_Dispatch(&f);
+ f.msg_data[2]=4;CanBattery_Dispatch(&f);f.msg_id=0x1FFFFFFF;CanBattery_Dispatch(&f);CanBattery_Dispatch(NULL);
+ assert(queued[PUBLISH_TOPIC_FAST_TELEMETRY]==2 && queued[PUBLISH_TOPIC_BMS_SUMMARY]==2 && queued[PUBLISH_TOPIC_BMS_DETAIL]==2);
+ puts("PASS: decoder success nonzero/zero/repeated, Extra-only, unknown/DLC/range rejection, validity/error updates, native dispatch publish gating");
+}
+static void send(unsigned id,unsigned dlc,const uint8_t *data){
  CAN_Msg_Queue_t f={0};f.can_channel=2;f.msg_id=id;f.dlc=dlc;memcpy(f.msg_data,data,dlc);
  CAN_DecodeVehicleCanbMessage(&f);
 }
@@ -241,7 +316,8 @@ int main(void){
  Canc_Receive(&f);memset(&out,0,sizeof(out));Canc_Map(&out,100);assert(out.canc.cdc_info.CDC_HeiFL==0x123 && out.canc.cdc_info.status.fresh);
  memset(&out,0,sizeof(out));Canc_Map(&out,101);assert(!out.canc.cdc_info.has_CDC_HeiFL);
  f.dlc=7;Canc_Receive(&f);memset(&out,0,sizeof(out));Canc_Map(&out,101);assert(out.canc.cdc_info.status.rejected_count==1);
- puts("PASS: DBC vectors, CANB filters/decoders, source/DLC rejection, tick wrap, fan V4, thermal positions, protobuf round trips, CANC");
+  puts("PASS: DBC vectors, CANB filters/decoders, source/DLC rejection, tick wrap, fan V4, thermal positions, protobuf round trips, CANC");
+  decoder_returns();
  return 0;
 }
 '''

@@ -10,10 +10,11 @@ extern "C" {
 uint8_t CAN_IsBatteryCanbMessage(const CAN_Msg_Queue_t *frame);
 void CAN_DecodeBatteryService(uint32_t now);
 void CAN_DecodeVehicleService(uint32_t now);
-void CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data);
-void CAN_DecodeBatteryBoxMessage(const CAN_Msg_Queue_t *recv_data);
-void CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *recv_data);
-void CAN_DecodeCdcMonitorMessage(const CAN_Msg_Queue_t *recv_data);
+/* Return 1 only when a recognized, accepted frame completes a cache update. */
+uint8_t CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data);
+uint8_t CAN_DecodeBatteryBoxMessage(const CAN_Msg_Queue_t *recv_data);
+uint8_t CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *recv_data);
+uint8_t CAN_DecodeCdcMonitorMessage(const CAN_Msg_Queue_t *recv_data);
 
 #ifdef __cplusplus
 }

@@ -12,23 +12,23 @@ STM32F407ZET6 数据采集工程：MLX90640 胎温采集、原生 CAN1/CAN2、MC
 
 当前默认启用 DTU 上传：`Core/Inc/app_config.h` 中 `APP_UPLINK_ENABLED=1`。MCU 通过 USART1（115200 8N1）向已配置为 MQTT 模式的 DTU 发送封包；DTU 管理服务器连接、认证和重连。设为 0 可恢复仅本地采集模式。
 
-MLX90640 任务当前在入口暂时自行挂起，不执行传感器初始化、采集或胎温 CAN/DTU 摘要发送。需要恢复采集时可调用 `osThreadResume(MLX90640Handle)`；移除入口的 `osThreadSuspend(osThreadGetId())` 可恢复上电自动采集。
+当前运行配置（2026-11-16）：原生 CAN1/CAN2 解码成功后才请求发布；CANA 仅接收并丢弃。MLX90640、CANC/CDC 和 RS485 任务均未创建，不执行对应采集；不能通过 `osThreadResume()` 恢复未创建的任务，恢复时须核对任务创建、初始化和任务体内的挂起/功能开关。
 
-- `Core/Src/modem_dtu.c` 替换原 AT 后端，`Modem_Send` 接收 Protobuf，添加 `AA 55 | payload_len(u16 LE) | seq(u8) | payload | CRC16(u16 LE)`，通过 DMA 发送并等待完成。CRC 使用 MODBUS CRC16，初值 0xFFFF，覆盖长度、序号和 payload。所有主题共用从 1 起的帧号，`frame_id=header.seq`、`header.source_id=1`，外层 seq 取帧号低 8 位。UART 发送完成后间隔 10+200 ms；发送失败后的新尝试使用新帧号。MCU 不再保存 MQTT 凭据，也不发送 AT 或 MQTT 协议包。
+- `Core/Src/modem_dtu.c` 替换原 AT 后端，`Modem_Send` 接收 Protobuf，添加 `AA 55 | payload_len(u16 LE) | seq(u8) | payload | CRC16(u16 LE)`，通过 DMA 发送并等待完成。CRC 使用 MODBUS CRC16，初值 0xFFFF，覆盖长度、序号和 payload。所有主题共用从 1 起的帧号，`frame_id=header.seq`、`header.source_id=1`，外层 seq 取帧号低 8 位。UART 发送成功后冷却 `PUBLISH_COOLDOWN_MS=50`（当前 1 kHz tick 下为 50 ms），无额外 10+200 ms 延迟；发送失败后的新尝试使用新帧号。MCU 不再保存 MQTT 凭据，也不发送 AT 或 MQTT 协议包。
 - `Core/Src/app_log.c` 与 `Core/Inc/app_log.h` 管理日志格式化、非阻塞入队及 USART3 DMA 输出；默认任务调用 `App_LogProcess()`。日志队列满或格式化缓冲被其他任务占用时丢弃日志。MCP 启动诊断保留独立的阻塞输出入口，仅用于启动阶段。
-- MLX90640 仅保留 `Prepare`、逐通道 `InitSensor` 和 `CaptureOnce`；各路就绪状态、失败和重试独立，已就绪通道不等待其他通道初始化成功。共用 I2C 总线和计算缓冲，仍由单一任务顺序访问，单次访问可能受到总线超时影响。
-- 删除温度矩阵串口输出及无调用的矩阵导出接口，保留温度计算、区域摘要、CAN 报文与状态/错误日志。删除失效的拉力任务开关、旧日志队列深度及旧 MLX 配置。
+- MLX90640 保留 `Prepare`、逐通道 `InitSensor` 和 `CaptureOnce`；保留的任务体每次启动仅逐路尝试初始化一次，不自动重试故障传感器，日志回调为 NULL、DTU 摘要开关为 0。共用 I2C 总线和计算缓冲，需单一任务顺序访问；当前任务未创建。
+- 删除温度矩阵串口输出及无调用的矩阵导出接口，保留温度计算、区域摘要、CAN 报文与状态/错误日志代码；当前不创建 MLX 任务。调试队列实际创建，深度为 8。
 - 当前启用 DTU 发布。CubeIDE 的 `Core` 源目录会纳入新模块；重新生成构建文件后编译，或使用 `test_and_fix/build/verify_firmware.py` 验证。
 
 | 链路 | 当前状态 | 主要入口 |
 |---|---|---|
-| MLX90640 / I2C1 | 任务入口暂时挂起，恢复后按 50 kHz 进行四通道初始化与采集 | `MLX90640Task` |
+| MLX90640 / I2C1 | 未创建任务；保留 50 kHz 四通道采集代码 | `MLX90640Task` |
 | CAN1 / 电池箱 | 启用，中断收包后交任务解码 | `CanForBMSTask` |
 | CAN2 / 整车 CANB | 启用收包解码；MLX 暂停期间不生成胎温发送帧 | `CanForViehcleTask`、`CanBTextTask` |
-| SPI1 / MCP2518FD-A / CANA | 启用，初始化后每 200 ms 轮询并解码控制器报文 | `SPICanControlTask` |
-| SPI3 / MCP2518FD-B / CDC | 启用；2 ms 有界轮询，解析 CANC 10 条报文 | `SPICanCDCTask` |
-| USART2 / RS485 | 接收任务已创建，业务解析仍为预留入口 | `TensionSensorTask` |
-| USART3 / 日志 | 启用，队列输出；不输出温度矩阵 | `App_LogProcess` |
+| SPI1 / MCP2518FD-A / CANA | 启动尝试初始化；每 50 ms 最多收取 32 帧并丢弃，不入共享队列、不解码、不发布 | `SPICanControlTask` |
+| SPI3 / MCP2518FD-B / CDC | 不初始化控制器、不创建任务，保留解码代码 | `SPICanCDCTask` |
+| USART2 / RS485 | 不创建接收任务，业务解析仍为预留入口 | `TensionSensorTask` |
+| USART3 / 日志 | PB10 TX、115200 8N1；启动阻塞输出，运行期队列/DMA，当前聚焦 4G，原始 CAN 日志关闭 | `App_LogProcess` |
 | USART1 / 4G | DTU 串口封包上传，无需 MCU 端 MQTT 凭据 | `APP_UPLINK_ENABLED=1` |
 
 ## Core 文件关系
@@ -110,7 +110,7 @@ DTU 参数：MQTT 3.1.1，`bitfsae.com:1883`，账号 `vehicle_gateway`，独立
 
 - `Modem_IsReady` 仅表示本地 UART/DMA 可发送；发送成功计数仅表示串口发送完成，不表示 DTU 在线或服务器收到。网络启动、掉线重连和缓存由 DTU 处理，启动期间的帧可能丢失。
 - 单一发布任务持有静态发送缓冲。DMA 超时按最大帧串口耗时加 200 ms 计算，超时中止发送，下一帧由服务器重新同步。发布任务在每次构建尝试前分配新帧号，内层 frame_id/header.seq 使用完整 uint32，外层序号使用低 8 位并在 255 后回绕；构建失败或发送失败后不复用编号。
-- 保留当前发布调度及其 200 ms 末尾延迟；本次没有提高上传频率。
+- 当前发布调度在 UART 成功发送后冷却 50 ms；实际发布频率还受帧长、主题去重、队列和失败退避影响。
 - 下行命令未实现：DTU 可订阅命令，但本固件不解析或执行车辆控制命令。
 - 上板验收：抓取 USART1，确认首字节 AA 55、长度及 CRC；确认服务器 `frames_ok/framed_ok` 增长、CRC 错误不增长，并核对解码值。断网恢复需实测 DTU 行为。本次不烧录、不发送车辆控制指令。
 
@@ -127,7 +127,7 @@ DTU 参数：MQTT 3.1.1，`bitfsae.com:1883`，账号 `vehicle_gateway`，独立
 | UART 外层序号 | `frame_id & 0xFF`；内层 255、256、257 对应外层 255、0、1 |
 | 线帧 | `AA 55 \| payload_len(u16 LE) \| seq(u8) \| payload \| CRC16(u16 LE)` |
 | CRC | MODBUS，初值 `0xFFFF`，覆盖长度、序号、payload，不含 AA55 |
-| 发送间隔 | 等待 UART 完成后，成功路径延迟 10+200 ms；失败路径保留退避与重新入队 |
+| 发送间隔 | 当前固件等待 UART 完成后冷却 50 ms；PC 历史实验的 10+200 ms 不代表当前固件；失败路径保留退避与重新入队 |
 | 数据来源 | 固件保留真实 CAN/BMS/胎温缓存映射；PC 随机车速仅用于实验；当前 `ready_to_drive=0` |
 | 时间基准 | 固件使用 HAL 启动毫秒；PC 使用 Unix 毫秒截断为 uint32，二者时间基准不同 |
 
@@ -212,13 +212,13 @@ Base 板承担整个系统的连接分配职责，本身尽量少做复杂信号
 
 ### CAN信号扩展——MCP2518FD
 
-CAN 控制器扩展使用 MCP2518FDTE/SL。它本质上是 SPI 到 CAN FD 控制器的转换芯片，适合在 MCU 原生 CAN 数量不够时扩展更多可控 CAN 通道。当前设计放置两片 MCP2518FD：A 用于控制器 CANA，初始化和轮询已启用；B 用于 CANC/CDC，初始化和轮询已启用：
+CAN 控制器扩展使用 MCP2518FDTE/SL。它本质上是 SPI 到 CAN FD 控制器的转换芯片，适合在 MCU 原生 CAN 数量不够时扩展更多可控 CAN 通道。当前设计放置两片 MCP2518FD：A 用于控制器 CANA，初始化和接收丢弃轮询已启用；B 用于 CANC/CDC，当前不初始化、不创建任务：
 
 - 每片 MCP2518FD 使用 40MHz 晶振。
 - 与 MCU 之间通过 SPI 通信，信号包括 `SCK`、`MOSI`、`MISO`、`CS` 和 `INT`。
 - 芯片供电范围支持 2.7V 到 5.5V。当前原理图标注为了缓解 3.3V 供电压力，MCP2518FD 供电使用 5V，但 SPI 侧仍需注意与 MCU 3.3V 逻辑电平兼容。
 - CANA 作为控制器相关 CAN，对应固件中的 `FDCAN_BUS_A`，使用 `SPI1 + CS_A`。
-- CANC/CDC 作为 CDC 报文监视总线，对应固件中的 `FDCAN_BUS_B`，使用 `SPI3 + CS_B`，当前启用。
+- CANC/CDC 作为 CDC 报文监视总线，对应固件中的 `FDCAN_BUS_B`，使用 `SPI3 + CS_B`，当前停用。
 - `MCP2518_CS_A/B` 为低有效片选，GPIO 初始化阶段必须保持空闲高电平。若读寄存器出现 `0xFFFFFFFF`，优先检查芯片供电、CS、MISO 是否悬空以及 SPI/片选映射，而不是先怀疑 CAN 总线。
 
 MCP2518FD 后级接 SN65HVD233DR CAN 收发器。系统里共预留四路 CAN 收发：CANA、CANB、CANC 和 CAN1，其中 CANC 面向整车 CAN，CAN1 面向电箱 CAN。每路 CAN 收发器都带 100nF 去耦，RS 脚附近预留电阻用于斜率或模式设置，CANH/CANL 出口前加入共模电感 DLW43SH510XK2L、PESD1CAN ESD 防护和 47pF 到地电容，以提升线束环境下的抗干扰和静电防护能力。
@@ -355,7 +355,7 @@ MLX90640 的 32 × 24 阵列一共 768 个像素，但官方库计算温度时�
 
 采样频率调试中验证了一个重要结论：不要直接修改官方 `MLX90640_API.c`，应优先通过官方提供的 `MLX90640_SetRefreshRate()` 接口设置刷新率。按照当前参考文档，`MLX90640_SetRefreshRate(0)` 对应约 1Hz 测量速率，参数 `0` 到 `7` 分别对应 0.5、1、2、4、8、16、32、64Hz。实际工程中将刷新率宏定义为 `MLX90640_REF_1HZ`，并调用 `MLX90640_SetRefreshRate(MLX90640_ADDR, MLX90640_REF_1HZ)`。若后续发现不同 API 版本的参数映射存在差异，应优先以手头官方例程和实测输出节奏为准，不在库文件中直接修补位操作。
 
-当前 F407 配置为：TCA9548A 地址 `0x70`，四路 MLX90640 地址均为 `0x33`，I2C1 为 50 kHz，I2C1_RX DMA 负责大块读数据。各路独立初始化和采集，完整帧生成区域温度摘要并经 CAN2 发送；USART3 仅输出状态日志，不输出矩阵。
+保留的 F407 采集配置为：TCA9548A 地址 `0x70`，四路 MLX90640 地址均为 `0x33`，I2C1 为 50 kHz，I2C1_RX DMA 负责大块读数据。恢复任务后才会逐路初始化、采集和生成摘要；当前未创建 MLX 任务，不发送胎温摘要或矩阵。
 
 ## 2+2 结构：两路标准CAN+两路CANFD解析实现——MCP2518FD
 
@@ -365,8 +365,8 @@ MLX90640 的 32 × 24 阵列一共 768 个像素，但官方库计算温度时�
 
 - `CAN1`：电池箱 CAN，对应电池包扩展帧、单体电压、温度、状态量等报文。
 - `CAN2`：整车 `CANB`，对应整车状态、轮边电机状态、IMU、IVT/FS 能量计等报文，并承担当前整车 CAN 发送链路。
-- `SPI1 + MCP2518FD-A`：控制器 `CANA`，启动时初始化；运行期 `SPICanControl` 任务已创建，每 200 ms 轮询并解码。
-- `SPI3 + MCP2518FD-B`：CDC（半主动电磁阻尼悬架）监视总线；`SPICanCDC` 任务已创建，由 `APP_SPICDC_TASK_ENABLED=1` 启用初始化，就绪后开始解析。
+- `SPI1 + MCP2518FD-A`：控制器 `CANA`，启动时最多尝试初始化三次；运行期 `SPICanControl` 每 50 ms 有界收帧并丢弃，隔离业务缓存和发布链路。
+- `SPI3 + MCP2518FD-B`：CDC（半主动电磁阻尼悬架）监视总线；当前不初始化、不创建 `SPICanCDC` 任务。宏 `APP_SPICDC_TASK_ENABLED=1` 不等于任务实际创建。
 
 代码层面的分层非常明确，建议后续也保持这种边界：
 
@@ -381,7 +381,7 @@ MLX90640 的 32 × 24 阵列一共 768 个像素，但官方库计算温度时�
 在当前实现中，原生 CAN 和 MCP2518 的接入方式并不相同：
 
 - 原生 CAN 走中断。`HAL_CAN_RxFifo0MsgPendingCallback()` 在中断里按 `hcan1/hcan2` 分发，只做“收帧 + 入队”，避免在中断上下文里做复杂解码；双 bxCAN 滤波中，CAN1 使用 `0~13` bank，CAN2 使用 `14+` bank。
-- MCP2518 走轮询。`SPICanControl` 周期性调用 `FDCAN_Poll()`，读取 `SPI1/CANA` 的 FIFO 帧后直接完成控制器报文解码；`SPICanCDC` 作为 `SPI3/CDC` 的独立监听任务，负责只读监视，并将最近一帧写入 `g_CDCInfo`，不并入电池箱链路。当前 A 路任务正常轮询，B 路未初始化，不读取未就绪控制器。
+- MCP2518 走轮询。当前 `SPICanControl` 调用 `FDCAN_Poll()` 后仅丢弃帧，不调用共享队列或解码；B 路未初始化且任务未创建。保留的 `SpiCan_PollToQueue()` 与 CDC 解码路径不是当前活动链路。
 
 这意味着原生 CAN、`SPI1/CANA` 和 `SPI3/CDC` 在进入业务解码层之前，都应当先被归一化成统一的帧结构，再由各自任务决定是否直接解码或入队：
 
@@ -411,17 +411,21 @@ MCP2518FD 当前初始化流程位于 `mcp2518fd.c`，其关键步骤包括：
 
 需要特别说明的是：`fdcan.h` 文件头已经写明，这个模块名只是历史保留名，不代表当前 MCU 真有原生 FDCAN 外设。后续任何人维护本工程时，都应把 `fdcan.c` 理解为“外置 MCP2518FD 的统一抽象层”，而不是 STM32G4/H7 系列那种硬件 FDCAN 驱动。
 
-在业务解码层，当前 `can_decode.c` 已经形成三条明确入口：
+在业务解码层，所有接收解码 API 都返回 `uint8_t` 状态，包括当前停用通道的入口：
 
 - `CAN_DecodeVehicleCanbMessage()`：整车 `CANB`
 - `CAN_DecodeBatteryBoxMessage()`：电池箱 CAN
 - `CAN_DecodeControllerCanaMessage()`：控制器 `CANA`
+- `CAN_DecodeCdcMonitorMessage()`：CANC/CDC，内部调用 `Canc_Receive()`
+- `Extra_Receive()`：CAN1/CANB 的扩展遥测；由对应解码入口合并其返回状态
 
-后续若继续完善 `CDC CAN` 这一路，推荐仍然遵守同样模式：先在 `can.h` 增加物理含义明确的邮箱宏，再在 `can_decode.c` 完善专属解码入口，不要把新的业务解码混写回 `can.c` 或 `fdcan.c`。
+返回 1 表示报文被识别、通过该分支校验并完成缓存更新，返回 0 表示未接受（未知 ID、来源/帧型/DLC 错误、适用的范围/版本/CRC 校验失败等）。真实零值和普通重复负载仍可返回 1；这不是“数值改变”检测。状态/错误/有效位更新也属于成功，不保证测量有效。SOP `0x4A0` 仍保留既有规则：2 s 内重复计数不刷新缓存、返回 0。
+
+原生 CAN2 整车成功后请求 fast/vehicle/BMS summary；CAN1 电池箱及路由到电池任务的 CANB 电池镜像成功后请求 fast/BMS summary/detail。任一入口返回 0 则不提交本帧发布请求。请求仍按主题去重、受队列容量限制，不等于每个 CAN 帧都产生一次串口发送。CANA/CANC 接口具备返回状态不代表当前启用其解码或发布。
 
 ## 悬架传感器——基于RS485总线实现的数据读取
 
-RS485 相关代码目前属于“硬件链路打通、软件框架预留”的状态。也就是说，任务、串口、使能脚、数据入口都已经安排好了，但具体传感器协议解析还没有像 CAN 那样完全落到业务层。
+RS485 当前仅保留串口、使能脚、任务体与数据入口框架，未创建接收任务，也未在本轮验证硬件链路。具体传感器协议解析仍未落到业务层。
 
 当前 RS485 侧的代码结构如下：
 
@@ -431,7 +435,7 @@ RS485 相关代码目前属于“硬件链路打通、软件框架预留”的�
 - `Rs485_Dispatch()`：预留的协议解析入口。
 - `Peripheral_Rx_Frame_t`：通用外设接收帧封装，用于承接字节流或未来的完整帧。
 
-当前 `TensionSensorTask` 已创建，任务体是 USART2 RX DMA 版本：启动后先把 `EN` 拉到接收态，再开启 ReceiveToIdle DMA；收到 idle 事件后由 DMA 缓冲区抽取新增字节，封装进 `Peripheral_Rx_Frame_t` 并送到 `Rs485_Dispatch()`。这个设计的优点是接收入口与业务解析分离，后续只需要替换解析逻辑，不需要再改任务调度结构。
+`TensionSensorTask` 当前未创建；保留的任务体是 USART2 RX DMA 版本：启动后先把 `EN` 拉到接收态，再开启 ReceiveToIdle DMA；收到 idle 事件后由 DMA 缓冲区抽取新增字节，封装进 `Peripheral_Rx_Frame_t` 并送到 `Rs485_Dispatch()`。恢复时需同时核对任务创建与业务解析。
 
 但也正因为当前解析入口仍按字节流/片段喂入，所以后续如果正式接入悬架拉力/位移类传感器，建议在 `Rs485_Dispatch()` 内部增加完整的状态机，而不要在任务外层直接拼帧。推荐结构如下：
 
@@ -560,22 +564,24 @@ Suspension_InfoDef
 - `defaultTask`：系统基线任务，负责调试串口队列输出和状态灯翻转；`Publish_Process()` 当前为空调度入口，实际 publish 请求由数据生产任务主动入队。
 - `CanForViehcle`：处理 `CAN_Msg_Queue`，负责整车 `CANB` 解码入口，对应物理 `CAN2`。
 - `CanForBMS`：处理 `CAN_Msg_Queue_2`，负责电池箱 CAN 解码入口，对应物理 `CAN1`。
-- `MLX90640`：热成像采集、CAN 摘要生成和 `thermal_summary` publish 请求任务。
-- `TensionSensor`：已创建的 USART2/RS485 DMA 接收任务，`Rs485_Dispatch()` 仍是业务解析预留入口。
-- `SPICanControl`：已启用的 `SPI1 + MCP2518FD-A` 轮询与 `CANA` 解码任务。
-- `SPICanCDC`：MCP2518FD-B 初始化启用，按 CANC DBC 采集 10 条报文。
-- `Publish4G`：上传启用时负责出队、protobuf 编码和 `Modem_Send()`；当前启动后直接退出。
+- `MLX90640`：未创建；保留热成像采集与摘要代码。
+- `TensionSensor`：未创建；`Rs485_Dispatch()` 仍是业务解析预留入口。
+- `SPICanControl`：已创建，只接收并丢弃 CANA 帧，不解码、不发布。
+- `SPICanCDC`：未创建，MCP2518FD-B 不初始化。
+- `Publish4G`：已创建；当前上传启用，持续出队、protobuf 编码和 `Modem_Send()`，仅在 `APP_UPLINK_ENABLED=0` 时入口退出。
 - `CanBText`：整车 CAN 发送任务，消费 `VehicleCanTxQueue`，最终调用 `CAN_Send_Msg(&hcan2, ...)`。
-- `initTaskBoot`：启动原生 CAN、初始化 MCP2518FD-A，按开关决定是否初始化 B；MLX 初始化在自身任务中逐通道执行，AT 初始化只属于上传任务。
+- `initTaskBoot`：启动原生 CAN、尝试初始化 MCP2518FD-A 后设置 `g_bootInitDone` 并退出；不初始化 B/MLX/网络。DTU 本地 UART/DMA 初始化属于上传任务，不发送 AT。
+
+静态栈以实际 `uint32_t` 数组为准：default/CanForViehcle/CanForBMS/initTaskBoot 各 384 words（1536 B），SPICanControl 256 words（1024 B），Publish4G 1024 words（4096 B），CanBText 512 words（2048 B）。未创建任务仍保留栈声明：MLX 512、TensionSensor 128、SPICanCDC 256 words；声明大小不代表运行期栈水位已测量。
 
 对应的队列设计如下：
 
-- `App_Uart_Tx`：通用 UART 发送队列，当前主要保留框架。
+- `App_Uart_Tx`：仅保留声明，当前未创建。
 - `CAN_Msg_Queue`：整车 `CANB` 业务帧队列，来源为物理 `CAN2`。
 - `CAN_Msg_Queue_2`：电池箱业务帧队列，来源为物理 `CAN1`。
 - `PublishQueueItem`：publish topic 队列，由 `Publish4G` 消费。
 - `VehicleCanTxQueue`：整车 CAN 发送队列，最终走物理 `CAN2`。
-- `task01DebugQueue`：调试日志队列
+- `task01DebugQueue`：实际创建的 8 深度调试日志队列；满时丢日志，不等待空间。
 
 这套设计的核心思想是：**采集、解码、缓存、发布四层分离**。
 
@@ -597,13 +603,13 @@ ISR / poll
 
 数据生产任务通过解码层或传感器应用层更新缓存；发布层读取缓存，MLX 的 CAN 摘要发送也会读取温度缓存。
 
-- `CanForViehcle/CanForBMS` 当前已经稳定写入 `g_CANB_LoopData` / `g_BatteryInfo`
-- `SPICanControl` 对应 `CANA` 控制器报文解码，当前写入控制器相关缓存
-- `SPICanCDC` 当前作为 CDC 监视入口存在，任务恢复后写入独立的 `g_CDCInfo` 通用缓存；后续若明确 CDC 报文语义，再在该缓存基础上补充协议专属字段，而不是复用电池箱或整车缓存
-- `MLX90640` 最终写 `g_MLX90640_Frame`
+- `CanForViehcle/CanForBMS` 解码接受的帧写入 `g_CANB_LoopData` / `g_BatteryInfo`，本轮未做硬件稳定性验证
+- `SPICanControl` 当前不写业务缓存
+- `SPICanCDC` 的任务与初始化未启用，保留 CANC 专属缓存/映射代码
+- `MLX90640` 任务恢复后才会写 `g_MLX90640_Frame`
 - `publish.c` 只读取这些全局缓存，不反向影响采集过程
 
-当前没有为这些全局缓存额外加锁，原因是本工程默认采用“单写多读、最新值覆盖”的实时遥测思路，而不是“每一帧都要绝对一致快照”的事务性思路。对于遥测系统来说，这样的取舍通常是合理的，但后续如果引入大块复合结构并要求一致性极高，可以再考虑快照拷贝或临界区保护。
+当前不保证所有全局缓存的事务性一致快照；Extra/CANC 等局部更新使用临界区保护，不能概括为完全无锁。运行期一致性与任务栈余量仍需实测。
 
 调试链路也值得单独记录。当前系统区分了两种“发”：
 
@@ -612,13 +618,15 @@ ISR / poll
 
 这样可以避免调试信息污染正式对外数据口，也避免发布链路阻塞时把调试一起拖死。
 
-热成像任务 `MLX90640` 是现阶段多任务设计最完整的一个示例。它做了这些事：
+当前 `APP_DEBUG_LOG_ENABLED=1`、`APP_4G_PUBLISH_LOG_ENABLED=1`、`APP_MODEM_LOG_ENABLED=0`。`main()` 的 `[BOOT]` 和 `App_LogBootImmediate()` 的启动诊断使用阻塞 `HAL_UART_Transmit()`；defaultTask 等待启动完成后才消费日志队列，避免与启动日志并发发送。运行期日志生产者非阻塞入队，由 defaultTask 通过 USART3 DMA 输出并有界等待。两处 `App_LogCan2RxFrame()` 调用均被注释，周期 CAN 状态打印关闭；保留的原始帧日志 helper 最多每 100 ms 打印一次，`valid=1` 不是解码成功证明。每 2 s 的 `[UPLINK]` 记录本地 ready、队列、长度、状态和 UART 成败；`CANA_drop` 是旧共享队列丢帧计数，不是当前主动丢弃帧的数量。
 
-1. 顺序访问 4 个传感器，按各自状态初始化或重试，不等待所有通道同时就绪；
+以下为保留的热成像任务设计，当前未创建任务、不执行这些步骤：
+
+1. 启动时顺序尝试初始化 4 个传感器一次，不自动重试；
 2. 对就绪通道采样，收齐两个 subpage 后形成完整温度帧；
-3. 输出成功/失败状态日志，不再输出温度矩阵；
+3. 当前日志回调为 NULL，任务不输出成功/失败摘要或温度矩阵；
 4. 每路完整帧生成 CANB 温度摘要；
-5. 每路成功采集后请求 `thermal_summary` 发布；当前 DTU 上传已启用，请求按主题去重后入队，上传关闭时才直接返回。
+5. 仅在 `APP_MLX90640_PUBLISH_ENABLED` 开启时请求 `thermal_summary` 发布；当前该开关为 0，即使单独恢复任务也不会请求 DTU 胎温摘要。
 
 各通道状态独立，但共用 I2C 总线及计算缓冲，由单一任务顺序访问。
 
@@ -826,7 +834,7 @@ TaskXX poll
 - MLX90640 acquisition and CAN publishing remain enabled.
 - This snapshot is for hardware validation; long-term stability is not yet verified.
 
-## 接口同步（2026-11-07）
+## 接口同步（2026-11-07，历史基线）
 
 接口版本固定为 `vehicle-interfaces@27a5f677970dd9729e445b077fd8169809b34113`。
 本机 Nanopb 0.4.9.1 从同步的 proto/options 生成 C/H。
@@ -845,7 +853,7 @@ CAN 解析以 [BITFSAE/vehicle-interfaces](https://github.com/BITFSAE/vehicle-in
 
 - `can/Vehicle_Can1.dbc`、`Vehicle_CanA.dbc`、`Vehicle_CanB.dbc`、`Vehicle_CanC.dbc` 定义报文 ID、位布局、字节序、符号和比例。
 - `docs/CANC接口.md`、`docs/CAN与遥测对照.md`、`telemetry/docs/interface-notes.md` 和 `telemetry/docs/protocol.md` 补充来源优先级、有效性、超时与发布规则；更新时同时阅读 `CHANGELOG.md`，不可仅替换生成文件。
-- SPI/MCP2518FD 驱动只收帧；`SPICanControlTask`、`SPICanCDCTask` 通过 `SpiCan_PollToQueue()` 将原始帧放入 `CAN_Msg_QueueHandle`。专门的消费任务 `CanForViehcleTask` 按来源调用 CANA/CANB/CANC 解析函数更新缓存，再通过发布请求队列通知 `Publish4GTask`。发布任务负责字段映射、Protobuf 编码和串口发送，DTU 完成 MQTT 网络封装。
+- 该历史基线通过 `SpiCan_PollToQueue()` 将 CANA/CANC 帧交给消费任务；当前配置已改为 CANA 接收丢弃、CANC 不创建任务。原生 CAN1/CAN2 解码成功才请求发布，`Publish4GTask` 负责映射、编码和发送，DTU 完成 MQTT 网络封装。
 - 本工程保留构建所需的 proto/options、Nanopb 生成文件及自身解析代码。参考仓库完整副本与下载压缩包已清除；重新生成 CANC 解析时，将单独获取的上述版本仓库路径传给 `generate_canc.py --interfaces`。
 
 ## CANB 同步（2026-11-09）
@@ -869,3 +877,11 @@ python test_and_fix/firmware/test_protocol_host.py --cc <原生gcc路径> --dbc 
 ```
 
 覆盖过滤器容量、新帧 DLC/来源、油压单位、GPS/质心速度符号与无效值、计时回绕、请求/反馈分离、风扇 V4、曲线通道隔离、风扇来源优先级、前轮温度发布轮位及真实 Protobuf 往返。默认 DBC 路径为当前用户 Downloads/Vehicle_CanB.dbc，构建产物位于 build/host_protocol，不烧录硬件。
+
+## 当前回归（2026-11-16）
+
+- 原生 MinGW GCC 执行 `test_protocol_host.py` 通过：真实解码器、Extra/CANC 返回状态、有效零值/普通重复负载、未知 ID/DLC/范围拒绝、状态/有效位更新，以及抽取实际 native dispatch 后统计发布请求的门控测试。测试桩不模拟 RTOS 调度、真实队列压力或 UART 硬件。
+- `python -m unittest discover -s test_and_fix/communication -p test_dtu_transport.py` 的 3 项通过；覆盖 MODBUS 标准向量 `123456789 -> 0x4B37`、帧头/长度/序号回绕、最大负载及含附加 CRC 的零余数。
+- PC `--dry-run --count 3 --sequence 254 --speed 42` 通过，无串口访问。一次代表性样例为 `AA55 1C00 FF | 08 D3 F9 80 A6 0E 10 FF 01 D2 01 0B 08 D3 F9 80 A6 0E 10 FF 01 18 01 8A 02 02 08 2A | 9F D9`：payload 28 B、线帧 35 B、CRC 值 `0xD99F`（小端 `9F D9`）。后两帧外层序号 0/1、CRC 为 `0xF4C3`/`0xB41E`；时间戳随运行变化，因此不是固定黄金向量，也不是硬件抓包证据。
+- ARM GCC 14.3.1、`-O0`：`--uplink 1` 和 `--uplink 0` 均完成 61 个源码编译与链接；开启上传段大小 text/data/bss 为 112884/416/61896 B，关闭为 71836/416/43384 B。保留 4 个未使用函数警告，最终本地产物恢复为上传开启配置。
+- 以上均为主机/离线验证，不证明硬件接收、长期稳定性或实际云端入库。`local_ready`、`uart_ok` 和 HAL_OK 仅说明本地 UART/DMA 状态；历史 PC 上云实验也不能替代本轮 MCU 端到端验收。

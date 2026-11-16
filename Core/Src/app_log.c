@@ -125,6 +125,38 @@ static HAL_StatusTypeDef App_UART_TransmitDmaBlocking(UART_HandleTypeDef *huart,
   return HAL_OK;
 }
 
+void App_LogCan2RxFrame(const CAN_Msg_Queue_t *frame)
+{
+  static uint32_t last_log_tick;
+  static uint8_t logged;
+  uint32_t now;
+  if ((frame == NULL) || (frame->can_channel != CAN_CHANNEL_VEHICLE_CANB))
+  {
+    return;
+  }
+
+  /* Both CAN consumers can log CAN2 frames; limit output, never acquisition. */
+  now = HAL_GetTick();
+  taskENTER_CRITICAL();
+  if (logged && (uint32_t)(now - last_log_tick) < 100U)
+  {
+    taskEXIT_CRITICAL();
+    return;
+  }
+  logged = 1U;
+  last_log_tick = now;
+  taskEXIT_CRITICAL();
+
+  /* Log the dequeued frame, not ISR context that may already hold a newer frame. */
+  App_LogPrintf(
+      "CAN2 RX valid=1 ide=%u id=0x%08lX dlc=%u data=%02X %02X %02X %02X %02X %02X %02X %02X\r\n",
+      (unsigned int)frame->is_ext_id,
+      (unsigned long)frame->msg_id,
+      (unsigned int)frame->dlc,
+      frame->msg_data[0], frame->msg_data[1], frame->msg_data[2], frame->msg_data[3],
+      frame->msg_data[4], frame->msg_data[5], frame->msg_data[6], frame->msg_data[7]);
+}
+
 static void App_LogCanRxContext(const char *prefix, const CAN_ControllerContext_t *ctx)
 {
   if ((prefix == NULL) || (ctx == NULL))

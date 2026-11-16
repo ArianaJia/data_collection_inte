@@ -70,36 +70,37 @@ static void Extra_StoreCanbFields(int index, const uint8_t *p, uint32_t tick)
   g_BatteryInfo.CanbFan.LeaseRemainingS=p[6];g_BatteryInfo.CanbFan.ProtocolVersion=p[7];
  }
 }
-void Extra_Receive(const CAN_Msg_Queue_t *f){
- if(!f || f->dlc>8)return;
+uint8_t Extra_Receive(const CAN_Msg_Queue_t *f){
+ if(!f || f->dlc>8)return 0U;
  int index=-1;unsigned min=8;
  if(f->can_channel==CAN_CHANNEL_VEHICLE_CANB && !f->is_ext_id){switch(f->msg_id){
  case 0x5A0:index=PDM_BUS;break;case 0x5A1:index=PDM_BAT;break;case 0x5A2:index=FAN;break;
  case 0x5A3:index=FAN_DIAG;break;
  case 0x5A5:index=FAN_ACK;break;
- case 0x5A6:if(f->dlc!=8 || f->msg_data[7]<1 || f->msg_data[7]>2)return;index=f->msg_data[7]==1?FAN_CURVE1:FAN_CURVE2;break;
+ case 0x5A6:if(f->dlc!=8 || f->msg_data[7]<1 || f->msg_data[7]>2)return 0U;index=f->msg_data[7]==1?FAN_CURVE1:FAN_CURVE2;break;
  case 0x5A7:index=FAN_FAILSAFE;break;
  case 0x5A8:index=FAN_POWER;break;
- case 0x5A9:if(f->dlc!=8 || f->msg_data[5]!=4)return;index=FAN_CALIB;break;
- case 0x5AF:if(f->dlc!=8 || f->msg_data[0]!=4)return;index=FAN_PROFILE;break;
- case 0x5AA:if(f->msg_data[2]>100)return;index=BAT_FANB;break;
+ case 0x5A9:if(f->dlc!=8 || f->msg_data[5]!=4)return 0U;index=FAN_CALIB;break;
+ case 0x5AF:if(f->dlc!=8 || f->msg_data[0]!=4)return 0U;index=FAN_PROFILE;break;
+ case 0x5AA:if(f->msg_data[2]>100)return 0U;index=BAT_FANB;break;
  case 0x201:index=CH_V;min=7;break;case 0x202:index=CH_I;min=7;break;
  case 0x204:index=CH_P;min=7;break;case 0x205:index=CH_O;min=4;break;
- case 0x4A0:if(f->dlc!=8 || f->msg_data[6]>>6!=3 || crc(0x4A0,f->msg_data,7)!=f->msg_data[7])return;index=SOP_P;break;
- case 0x4A3:if(f->msg_data[7]>>4!=3)return;index=SOP_I;break;
- case 0x4A4:if(f->dlc!=4 || f->msg_data[1]!=3 || (f->msg_data[2]&0xFE) || crc(0x4A4,f->msg_data,3)!=f->msg_data[3])return;index=SOP_ACK;min=4;break;
- default:return;}}
+ case 0x4A0:if(f->dlc!=8 || f->msg_data[6]>>6!=3 || crc(0x4A0,f->msg_data,7)!=f->msg_data[7])return 0U;index=SOP_P;break;
+ case 0x4A3:if(f->msg_data[7]>>4!=3)return 0U;index=SOP_I;break;
+ case 0x4A4:if(f->dlc!=4 || f->msg_data[1]!=3 || (f->msg_data[2]&0xFE) || crc(0x4A4,f->msg_data,3)!=f->msg_data[3])return 0U;index=SOP_ACK;min=4;break;
+ default:return 0U;}}
  else if(f->can_channel==CAN_CHANNEL_BATTERY_BOX && f->is_ext_id){switch(f->msg_id){
- case 0x186E50F4:if(be16(f->msg_data+2)>1000)return;index=BAT_FAN1;break;
+ case 0x186E50F4:if(be16(f->msg_data+2)>1000)return 0U;index=BAT_FAN1;break;
  case 0x186A50F4:index=SOP_MIRROR;break;case 0x186350F4:index=BMS_RELAYS;break;
- case 0x186950F4:index=BMS_HV;break;case 0x186850F4:index=IMD;break;default:return;}}
- if(index<0 || f->dlc<min || (index!=CH_V && index!=CH_I && index!=CH_P && index!=CH_O && f->dlc!=min))return;
- if((index==CH_V || index==CH_I) && (!isfinite(fl32(f->msg_data+3)) || fl32(f->msg_data+3)<0))return;
+ case 0x186950F4:index=BMS_HV;break;case 0x186850F4:index=IMD;break;default:return 0U;}}
+ if(index<0 || f->dlc<min || (index!=CH_V && index!=CH_I && index!=CH_P && index!=CH_O && f->dlc!=min))return 0U;
+ if((index==CH_V || index==CH_I) && (!isfinite(fl32(f->msg_data+3)) || fl32(f->msg_data+3)<0))return 0U;
  taskENTER_CRITICAL();
- if(index==SOP_P && samples[index].seen && (uint32_t)(HAL_GetTick()-samples[index].tick)<=2000U && (uint8_t)(f->msg_data[4]-samples[index].data[4])==0){taskEXIT_CRITICAL();return;}
+ if(index==SOP_P && samples[index].seen && (uint32_t)(HAL_GetTick()-samples[index].tick)<=2000U && (uint8_t)(f->msg_data[4]-samples[index].data[4])==0){taskEXIT_CRITICAL();return 0U;}
  samples[index].tick=HAL_GetTick();samples[index].seen=1;memcpy(samples[index].data,f->msg_data,8);
  Extra_StoreCanbFields(index,f->msg_data,samples[index].tick);
  taskEXIT_CRITICAL();
+ return 1U;
 }
 #define SET(msg,field,value) do{frame->has_##msg=true;frame->msg.has_##field=true;frame->msg.field=(value);}while(0)
 void Extra_Map(fsae_TelemetryFrame *frame,uint32_t now){
