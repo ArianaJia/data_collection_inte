@@ -12,7 +12,21 @@ STM32F407ZET6 数据采集工程：MLX90640 胎温采集、原生 CAN1/CAN2、MC
 
 当前默认启用 DTU 上传：`Core/Inc/app_config.h` 中 `APP_UPLINK_ENABLED=1`。MCU 通过 USART1（115200 8N1）向已配置为 MQTT 模式的 DTU 发送封包；DTU 管理服务器连接、认证和重连。设为 0 可恢复仅本地采集模式。
 
-当前运行配置（2026-11-16）：原生 CAN1/CAN2 解码成功后才请求发布；CANA 仅接收并丢弃。MLX90640、CANC/CDC 和 RS485 任务均未创建，不执行对应采集；不能通过 `osThreadResume()` 恢复未创建的任务，恢复时须核对任务创建、初始化和任务体内的挂起/功能开关。
+当前运行配置（2026-11-17）：原生 CAN1/CAN2 解码返回明确的遥测更新组，上传只映射待发组，不再固定请求三个完整主题；CANA 仅接收并丢弃。MLX90640、CANC/CDC 和 RS485 任务均未创建，不执行对应采集；不能通过 `osThreadResume()` 恢复未创建的任务，恢复时须核对任务创建、初始化和任务体内的挂起/功能开关。
+
+### 更新组上传架构（2026-11-17）
+
+`telemetry_updates.h` 定义 `TelemetryUpdates`（uint64_t）及组 ID。解码保留原全局缓存，成功提交后返回对应组位；Extra、CANC 各缓存槽有独立组位。未知 ID、帧型/DLC/协议校验失败返回零；有效零值和普通重复负载仍返回更新组。已接受的无效测量/状态帧仍更新有效性，GPS 越界速度清除有效位并返回速度组。SOP 原有重复计数抑制保留。
+
+`Publish_QueueUpdates()` 在短临界区 OR 合并待发位；`Publish_TakePending()` 原子取走并清零当时的位。采集任务在构建/发送期间再次提交同组不会被旧发送完成清掉；构建或 UART 失败将取走的位 OR 回去，与新请求合并。语义是 **latest value**，不是每个 CAN 报文的历史队列，失败重试重新读取最新缓存并分配新帧号。无 schema 表示的缓存组不进入发送待办，不用其他数据替代。
+
+`publish.c` 的 `group_mappers[]` 是集中组映射表，只调用选中组的 mapper；Extra/CANC 只读取相应缓存槽，电池风扇、SOP 及 HV 电压/电流保留必要的判源依赖。电机数组保留四轮 position，模块只输出满足原有完整度/新鲜度条件的模块。全局仍是业务数据源，未建立第二套常驻遥测副本。位图当前使用 63 个 ID（含缓存专用组），后续超过容量时应扩展 mask 表示，不能直接继续左移超过 63 位。
+
+原生解码、超时服务、MLX 提交及选中组映射使用任务级调度保护；MLX 温度计算在保护外，最后只提交结果。ISR 仍只收帧入队，不写业务缓存。protobuf 编码、UART/DMA 等待及 50 ms 冷却均不在保护内，不在编码或发送期间关中断。Extra/CANC 保留短缓存复制临界区。单一 Publish4G 任务拥有编码缓冲；诊断完整构建 API 不可与其并发调用。新业务写者必须遵循相同任务级事务约定。
+
+外部 `.proto` 未修改：optional 的 `has_*` 可表达零和 GPS position validity=false；proto3 普通 scalar 仍不能区分“本次未包含”和“本次值为零”，空数组也不能独立表达清除旧数组。部分电机字段、旧 HV/故障 scalar 及无显式 valid 字段的失效通知仍有此限制，接收端不能将每个部分帧未带字段都重置为零，也不能假定所有零/失效都可独立表示。缓存专有的 CG/GPS 质量/圈速、请求、风扇 V4 未映射字段继续保留，不虚构默认遥测。
+
+运行链路：`decoder -> updated groups -> atomic pending mask -> selected cache mapping -> protobuf -> Modem_Send -> USART1 DTU`。旧 `Publish_BuildFrame(topic,...)` 保留用于既有诊断/回归，旧 `Publish_QueueTopic` 转为显式组请求；采集和上传任务不再依赖 topic 队列。下文旧主题与队列说明属于兼容接口/历史结构，以本节为当前行为准。
 
 - `Core/Src/modem_dtu.c` 替换原 AT 后端，`Modem_Send` 接收 Protobuf，添加 `AA 55 | payload_len(u16 LE) | seq(u8) | payload | CRC16(u16 LE)`，通过 DMA 发送并等待完成。CRC 使用 MODBUS CRC16，初值 0xFFFF，覆盖长度、序号和 payload。所有主题共用从 1 起的帧号，`frame_id=header.seq`、`header.source_id=1`，外层 seq 取帧号低 8 位。UART 发送成功后冷却 `PUBLISH_COOLDOWN_MS=50`（当前 1 kHz tick 下为 50 ms），无额外 10+200 ms 延迟；发送失败后的新尝试使用新帧号。MCU 不再保存 MQTT 凭据，也不发送 AT 或 MQTT 协议包。
 - `Core/Src/app_log.c` 与 `Core/Inc/app_log.h` 管理日志格式化、非阻塞入队及 USART3 DMA 输出；默认任务调用 `App_LogProcess()`。日志队列满或格式化缓冲被其他任务占用时丢弃日志。MCP 启动诊断保留独立的阻塞输出入口，仅用于启动阶段。
@@ -411,7 +425,7 @@ MCP2518FD 当前初始化流程位于 `mcp2518fd.c`，其关键步骤包括：
 
 需要特别说明的是：`fdcan.h` 文件头已经写明，这个模块名只是历史保留名，不代表当前 MCU 真有原生 FDCAN 外设。后续任何人维护本工程时，都应把 `fdcan.c` 理解为“外置 MCP2518FD 的统一抽象层”，而不是 STM32G4/H7 系列那种硬件 FDCAN 驱动。
 
-在业务解码层，所有接收解码 API 都返回 `uint8_t` 状态，包括当前停用通道的入口：
+在业务解码层，所有接收解码 API 都返回 `TelemetryUpdates` 更新组掩码，包括当前停用通道的入口：
 
 - `CAN_DecodeVehicleCanbMessage()`：整车 `CANB`
 - `CAN_DecodeBatteryBoxMessage()`：电池箱 CAN
@@ -419,9 +433,9 @@ MCP2518FD 当前初始化流程位于 `mcp2518fd.c`，其关键步骤包括：
 - `CAN_DecodeCdcMonitorMessage()`：CANC/CDC，内部调用 `Canc_Receive()`
 - `Extra_Receive()`：CAN1/CANB 的扩展遥测；由对应解码入口合并其返回状态
 
-返回 1 表示报文被识别、通过该分支校验并完成缓存更新，返回 0 表示未接受（未知 ID、来源/帧型/DLC 错误、适用的范围/版本/CRC 校验失败等）。真实零值和普通重复负载仍可返回 1；这不是“数值改变”检测。状态/错误/有效位更新也属于成功，不保证测量有效。SOP `0x4A0` 仍保留既有规则：2 s 内重复计数不刷新缓存、返回 0。
+非零掩码表示报文通过该分支校验并完成对应组缓存更新，零表示未接受。真实零值和普通重复负载仍返回对应组；这不是“数值改变”检测。状态/错误/有效位更新也属于成功，不保证测量有效。SOP `0x4A0` 仍保留既有规则：2 s 内重复计数不刷新缓存、返回 0。
 
-原生 CAN2 整车成功后请求 fast/vehicle/BMS summary；CAN1 电池箱及路由到电池任务的 CANB 电池镜像成功后请求 fast/BMS summary/detail。任一入口返回 0 则不提交本帧发布请求。请求仍按主题去重、受队列容量限制，不等于每个 CAN 帧都产生一次串口发送。CANA/CANC 接口具备返回状态不代表当前启用其解码或发布。
+原生 CAN2、CAN1 及 CANB 电池镜像只提交解码返回组，零不产生待发位。超时服务返回发生有效性变化的组并合并待发。CANA/CANC 接口具备更新组不代表当前启用其解码或发布。
 
 ## 悬架传感器——基于RS485总线实现的数据读取
 
@@ -488,7 +502,7 @@ Suspension_InfoDef
 
 ## 4G传输——基于protobuf的MQTT订阅
 
-当前默认 `APP_UPLINK_ENABLED=1`，采集任务更新缓存后向发布队列提交请求。设为 0 时上传任务退出，发布请求直接返回 `osErrorResource`，本地采集继续运行。
+当前默认 `APP_UPLINK_ENABLED=1`，采集任务更新缓存后合并更新组到 pending mask。设为 0 时上传任务退出，发布请求直接返回 `osErrorResource`，本地采集继续运行。
 
 也就是说，MCU 当前承担的职责只有三层：
 
@@ -498,8 +512,8 @@ Suspension_InfoDef
 
 `publish.c` 负责遥测内容，USART 发送由通信后端处理：
 
-- 发布请求去重与非阻塞入队；仅在上传关闭时直接返回
-- 将内部缓存映射到 protobuf 结构体
+- 更新组非阻塞 OR 合并；上传关闭不累计 pending
+- 集中映射表只将本次选中缓存组映射到 protobuf 结构体
 - 调用 `pb_encode()` 完成编码
 - 将编码结果交给上传任务，由任务调用通信后端
 
@@ -511,17 +525,17 @@ Suspension_InfoDef
 - `bms_detail`
 - `thermal_summary`
 
-其中 `Publish_Process()` 当前保留为空的调度入口；真正的 topic 入队由 CAN、MLX90640 等数据生产任务在更新缓存后主动调用 `Publish_QueueTopic()` 完成，编码和串口发送由 `Publish4GTask` 负责执行。这样做的好处是把“数据采集”和“发送”拆开，避免主调度逻辑因为一次编码或串口忙而失控。
+其中 `Publish_Process()` 保留为空入口；CAN 生产任务提交解码组，MLX API 提交温度组，编码和串口发送由 `Publish4GTask` 单独执行。旧 topic API 仅为显式诊断兼容入口。
 
 当前完整链路如下：
 
 ```text
- decode result in telemetry_data
-  -> producer task calls Publish_QueueTopic()
-  -> PublishQueueItem stores PublishQueueItem_t
-  -> Publish4GTask dequeues one topic
+  decode result in telemetry_data + TelemetryUpdates
+   -> producer task calls Publish_QueueUpdates()
+   -> atomic pending mask OR merge
+   -> Publish4GTask takes pending groups
   -> Publish4GTask allocates frame_id (first attempt = 1)
-  -> Publish_BuildFrame(topic, frame_id, ...) fills TelemetryFrame
+   -> Publish_BuildUpdates(groups, frame_id, ...) maps selected groups only
   -> Modem_Send(payload, length, (uint8_t)frame_id) adds UART framing
   -> USART1 DMA (115200 8N1)
   -> DTU publishes fsae/telemetry
@@ -568,7 +582,7 @@ Suspension_InfoDef
 - `TensionSensor`：未创建；`Rs485_Dispatch()` 仍是业务解析预留入口。
 - `SPICanControl`：已创建，只接收并丢弃 CANA 帧，不解码、不发布。
 - `SPICanCDC`：未创建，MCP2518FD-B 不初始化。
-- `Publish4G`：已创建；当前上传启用，持续出队、protobuf 编码和 `Modem_Send()`，仅在 `APP_UPLINK_ENABLED=0` 时入口退出。
+- `Publish4G`：已创建；当前上传启用，持续取走 pending groups、protobuf 编码和 `Modem_Send()`，无待办时让出 1 tick，仅在 `APP_UPLINK_ENABLED=0` 时入口退出。
 - `CanBText`：整车 CAN 发送任务，消费 `VehicleCanTxQueue`，最终调用 `CAN_Send_Msg(&hcan2, ...)`。
 - `initTaskBoot`：启动原生 CAN、尝试初始化 MCP2518FD-A 后设置 `g_bootInitDone` 并退出；不初始化 B/MLX/网络。DTU 本地 UART/DMA 初始化属于上传任务，不发送 AT。
 
@@ -579,7 +593,7 @@ Suspension_InfoDef
 - `App_Uart_Tx`：仅保留声明，当前未创建。
 - `CAN_Msg_Queue`：整车 `CANB` 业务帧队列，来源为物理 `CAN2`。
 - `CAN_Msg_Queue_2`：电池箱业务帧队列，来源为物理 `CAN1`。
-- `PublishQueueItem`：publish topic 队列，由 `Publish4G` 消费。
+- `PublishQueueItem`：保留静态兼容队列声明/创建，当前业务调度不使用；Publish4G 消费原子 pending mask。
 - `VehicleCanTxQueue`：整车 CAN 发送队列，最终走物理 `CAN2`。
 - `task01DebugQueue`：实际创建的 8 深度调试日志队列；满时丢日志，不等待空间。
 
@@ -609,7 +623,7 @@ ISR / poll
 - `MLX90640` 任务恢复后才会写 `g_MLX90640_Frame`
 - `publish.c` 只读取这些全局缓存，不反向影响采集过程
 
-当前不保证所有全局缓存的事务性一致快照；Extra/CANC 等局部更新使用临界区保护，不能概括为完全无锁。运行期一致性与任务栈余量仍需实测。
+当前运行上传按选中组在任务级保护中映射一致视图，Extra/CANC 局部复制仍使用短临界区；不是完全无锁。保护覆盖当前业务写者，不保证任意外部直接修改 globals 的安全性。运行期调度延迟与任务栈余量仍需实测。
 
 调试链路也值得单独记录。当前系统区分了两种“发”：
 

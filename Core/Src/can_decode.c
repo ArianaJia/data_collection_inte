@@ -8,6 +8,8 @@
 
 #include "main.h"
 #include "telemetry_data.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #define CAN_DECODE_MOTOR_RL 0U
 #define CAN_DECODE_MOTOR_RR 1U
@@ -195,9 +197,9 @@ static uint8_t CAN_DecodeControllerMotorIndex(uint32_t msg_id, uint8_t *motor_in
   }
 }
 
-uint8_t CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
+static TelemetryUpdates DecodeVehicle(const CAN_Msg_Queue_t *recv_data)
 {
-  uint8_t updated;
+  TelemetryUpdates updated;
   /* Parse vehicle-side CANB frames and update the shared vehicle telemetry. */
   if (recv_data == NULL || recv_data->can_channel != CAN_CHANNEL_VEHICLE_CANB || recv_data->dlc > 8U)
   {
@@ -322,7 +324,10 @@ uint8_t CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data)
       if (recv_data->dlc == CAN_DECODE_LEN_2)
       {
         uint16_t speed = CAN_DecodeReadLe16(recv_data->msg_data);
-        if (speed > 3000U) { g_CANB_LoopData.IMU.ValidFlags &= (uint8_t)~CANB_MOTION_VALID_GPS; break; }
+        if (speed > 3000U) {
+          g_CANB_LoopData.IMU.ValidFlags &= (uint8_t)~CANB_MOTION_VALID_GPS;
+          return TELEMETRY_UPDATE(TELEMETRY_GPS_SPEED);
+        }
         g_CANB_LoopData.IMU.GpsSpeedDeciKmh = speed;
         g_CANB_LoopData.IMU.GpsSpeedKmh = (uint16_t)((speed + 5U) / 10U);
         g_CANB_LoopData.IMU.GpsSpeedTick = HAL_GetTick();
@@ -467,9 +472,10 @@ uint8_t CAN_IsBatteryCanbMessage(const CAN_Msg_Queue_t *frame)
        (frame->msg_id == CAN_ID_CANB_BATTERY_ALARM_LEVELS));
 }
 
-uint8_t CAN_DecodeBatteryBoxMessage(const CAN_Msg_Queue_t *recv_data)
+static TelemetryUpdates DecodeBattery(const CAN_Msg_Queue_t *recv_data)
 {
-  uint8_t updated, decoded = 0U;
+  TelemetryUpdates updated;
+  uint8_t decoded = 0U;
   if ((recv_data == NULL) || (recv_data->dlc > 8U)) return 0U;
   updated = Extra_Receive(recv_data);
   if (CAN_IsBatteryCanbMessage(recv_data))
@@ -489,10 +495,31 @@ uint8_t CAN_DecodeBatteryBoxMessage(const CAN_Msg_Queue_t *recv_data)
     if (recv_data->is_ext_id == 0U) decoded = CAN_DecodeBatteryBoxStdMessage(recv_data);
     else decoded = CAN_DecodeBatteryBoxExtMessage(recv_data);
   }
-  return updated || decoded;
+  if (!decoded) return updated;
+  if (!recv_data->is_ext_id && !CAN_IsBatteryCanbMessage(recv_data))
+    return updated | TELEMETRY_UPDATE(TELEMETRY_IVT);
+  uint32_t id = recv_data->msg_id;
+  if (id == CAN_ID_CANB_BATTERY_POWER_STATUS) id = CAN_ID_BATTERY_PACK_SUMMARY;
+  if (id == CAN_ID_CANB_BATTERY_FAULT_STATUS) id = CAN_ID_BATTERY_ALARM_STATUS;
+  if (id == CAN_ID_CANB_BATTERY_ALARM_LEVELS) id = CAN_ID_BATTERY_ALARM_LEVELS;
+  TelemetryGroup group;
+  switch (id) {
+    case CAN_ID_BATTERY_PACK_SUMMARY: group=TELEMETRY_PACK; break;
+    case CAN_ID_BATTERY_CELL_EXTREMA: group=TELEMETRY_CELL_EXTREMA; break;
+    case CAN_ID_BATTERY_TEMP_EXTREMA: group=TELEMETRY_TEMP_EXTREMA; break;
+    case CAN_ID_BATTERY_CELL_SUM: group=TELEMETRY_CELL_SUM; break;
+    case CAN_ID_BATTERY_ALARM_STATUS:
+    case CAN_ID_BATTERY_ALARM_LEVELS: group=TELEMETRY_FAULT; break;
+    case CAN_ID_BATTERY_STATUS:
+    case CAN_ID_BATTERY_IMD_DIAG:
+    case CAN_ID_BATTERY_HV_STATUS:
+    case CAN_ID_BATTERY_SOP_MIRROR: group=TELEMETRY_BATTERY_STATUS; break;
+    default: group=TELEMETRY_MODULES; break;
+  }
+  return updated | TELEMETRY_UPDATE(group);
 }
 
-uint8_t CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *recv_data)
+static uint8_t DecodeController(const CAN_Msg_Queue_t *recv_data)
 {
   /* Decode the controller CANA stream into motor-specific telemetry slots. */
   uint8_t motor_index;
@@ -558,9 +585,9 @@ uint8_t CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *recv_data)
   return 1U;
 }
 
-uint8_t CAN_DecodeCdcMonitorMessage(const CAN_Msg_Queue_t *recv_data)
+static TelemetryUpdates DecodeCdc(const CAN_Msg_Queue_t *recv_data)
 {
-  uint8_t updated = Canc_Receive(recv_data);
+  TelemetryUpdates updated = Canc_Receive(recv_data);
   /* Keep CDC monitoring read-only so future mailbox semantics stay isolated. */
   if ((recv_data == NULL) ||
       (recv_data->can_channel != CAN_CHANNEL_CDC_MONITOR) ||
@@ -848,7 +875,7 @@ static uint8_t CAN_DecodeBatteryBoxExtMessage(const CAN_Msg_Queue_t *recv_data)
 /* Called by the battery owner task, including while its receive queue is idle.
  * Unsigned subtraction intentionally handles HAL tick wraparound.
  */
-void CAN_DecodeBatteryService(uint32_t now)
+static void BatteryService(uint32_t now)
 {
   for (uint8_t i = 0U; i < 8U; ++i)
   {
@@ -910,7 +937,7 @@ void CAN_DecodeBatteryService(uint32_t now)
     g_BatteryInfo.AlarmLevelsValid = 0U;
 }
 
-void CAN_DecodeVehicleService(uint32_t now)
+static void VehicleService(uint32_t now)
 {
   if ((uint32_t)(now - g_CANB_LoopData.IMU.GpsSpeedTick) > CANB_GPS_TIMEOUT_MS)
   {
@@ -942,4 +969,120 @@ void CAN_DecodeVehicleService(uint32_t now)
     g_CANB_LoopData.EnergyMeter.AutoSource =
         (g_CANB_LoopData.EnergyMeter.ValidFlags != 0U) ? CANB_ENERGY_METER_SOURCE_COMPETITION_IVT : CANB_ENERGY_METER_SOURCE_UNKNOWN;
   }
+}
+
+/* All cache writers are tasks. Suspending scheduling makes each accepted
+ * decoder transaction indivisible to the mapping task without masking IRQs. */
+TelemetryUpdates CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *frame)
+{
+  vTaskSuspendAll();
+  TelemetryUpdates result = DecodeVehicle(frame);
+  if (result == 1U && frame != NULL) {
+    TelemetryGroup group;
+    switch (frame->msg_id) {
+      case CAN_ID_CANB_DRIVER_INPUTS_OIL_PRESSURE: group=TELEMETRY_DRIVER_INPUTS; break;
+      case CAN_ID_CANB_GPS_SPEED: group=TELEMETRY_GPS_SPEED; break;
+      case CAN_ID_CANB_GPS_POSITION: group=TELEMETRY_POSITION; break;
+      case CAN_ID_CANB_GPS_MOTION: group=TELEMETRY_GPS_MOTION; break;
+      case CAN_ID_CANB_GPS_CG_VELOCITY: group=TELEMETRY_CG_VELOCITY; break;
+      case CAN_ID_CANB_GPS_STATUS_ODOMETER: group=TELEMETRY_GPS_STATUS; break;
+      case CAN_ID_CANB_GPS_LAP_TIMING: group=TELEMETRY_LAP_TIMING; break;
+      case CAN_ID_CANB_STEERING_COMMAND: group=TELEMETRY_STEERING_COMMAND; break;
+      case CAN_ID_CANB_DRIVING_MODE_CMD: group=TELEMETRY_MODE_REQUEST; break;
+      case CAN_ID_CANB_RECYCLE_INFO: group=TELEMETRY_REGEN; break;
+      case CAN_ID_CANB_BRAKE_PEDAL_ENCODER: group=TELEMETRY_PEDAL; break;
+      case CAN_ID_CANB_WHEEL_ACTUAL_TORQUE: group=TELEMETRY_MOTOR_TORQUE; break;
+      case CAN_ID_CANB_MOTOR_DIAGNOSTIC_CODES: group=TELEMETRY_MOTOR_DIAGNOSTIC; break;
+      case CAN_ID_CANB_WHEEL_ACTUAL_SPEED: group=TELEMETRY_MOTOR_SPEED; break;
+      case CAN_ID_CANB_MOTOR_TEMPERATURE: group=TELEMETRY_MOTOR_TEMP; break;
+      case CAN_ID_CANB_INVERTER_TEMPERATURE: group=TELEMETRY_INVERTER_TEMP; break;
+      case CAN_ID_CANB_IGBT_TEMPERATURE: group=TELEMETRY_IGBT_TEMP; break;
+      case CAN_ID_CANB_AMK_STATUS_MODE_LOGIC: group=TELEMETRY_AMK_STATUS; break;
+      case CAN_ID_BATTERY_CHARGER_FEEDBACK: group=TELEMETRY_BATTERY_STATUS; break;
+      default: group=TELEMETRY_ENERGY; break;
+    }
+    result=TELEMETRY_UPDATE(group);
+  }
+  (void)xTaskResumeAll();
+  return result;
+}
+
+TelemetryUpdates CAN_DecodeBatteryBoxMessage(const CAN_Msg_Queue_t *frame)
+{
+  vTaskSuspendAll();
+  TelemetryUpdates result=DecodeBattery(frame);
+  (void)xTaskResumeAll();
+  return result;
+}
+
+TelemetryUpdates CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *frame)
+{
+  vTaskSuspendAll();
+  TelemetryUpdates result=0U;
+  if(DecodeController(frame)){
+    switch(frame->msg_id){
+      case CAN_ID_CANA_FR_STATUS_SPEED_TORQUE_CURRENT:
+      case CAN_ID_CANA_FL_STATUS_SPEED_TORQUE_CURRENT:
+      case CAN_ID_CANA_RR_STATUS_SPEED_TORQUE_CURRENT:
+      case CAN_ID_CANA_RL_STATUS_SPEED_TORQUE_CURRENT:
+        result=TELEMETRY_UPDATE(TELEMETRY_MOTOR_SPEED)|TELEMETRY_UPDATE(TELEMETRY_MOTOR_TORQUE)|TELEMETRY_UPDATE(TELEMETRY_AMK_STATUS);break;
+      case CAN_ID_CANA_FR_DIAGNOSTIC_INFO:
+      case CAN_ID_CANA_FL_DIAGNOSTIC_INFO:
+      case CAN_ID_CANA_RR_DIAGNOSTIC_INFO:
+      case CAN_ID_CANA_RL_DIAGNOSTIC_INFO:
+        result=TELEMETRY_UPDATE(TELEMETRY_MOTOR_DIAGNOSTIC);break;
+      case CAN_ID_CANA_FR_MOTOR_INVERTER_IGBT_TEMP_DCBUS:
+      case CAN_ID_CANA_FL_MOTOR_INVERTER_IGBT_TEMP_DCBUS:
+      case CAN_ID_CANA_RR_MOTOR_INVERTER_IGBT_TEMP_DCBUS:
+      case CAN_ID_CANA_RL_MOTOR_INVERTER_IGBT_TEMP_DCBUS:
+        result=TELEMETRY_UPDATE(TELEMETRY_MOTOR_TEMP)|TELEMETRY_UPDATE(TELEMETRY_INVERTER_TEMP)|TELEMETRY_UPDATE(TELEMETRY_IGBT_TEMP);break;
+      default:result=TELEMETRY_UPDATE(TELEMETRY_CANA_MOTOR);break;
+    }
+  }
+  (void)xTaskResumeAll();
+  return result;
+}
+
+TelemetryUpdates CAN_DecodeCdcMonitorMessage(const CAN_Msg_Queue_t *frame)
+{
+  vTaskSuspendAll();
+  TelemetryUpdates result=DecodeCdc(frame);
+  (void)xTaskResumeAll();
+  return result;
+}
+
+TelemetryUpdates CAN_DecodeBatteryService(uint32_t now)
+{
+  vTaskSuspendAll();
+  uint8_t ivt=g_BatteryInfo.IVT.ValidFlags, pack=g_BatteryInfo.PackValidFlags;
+  uint8_t ce=g_BatteryInfo.CellExtremaValid, te=g_BatteryInfo.TempExtremaValid;
+  uint8_t sum=g_BatteryInfo.CellSumValid, fault=g_BatteryInfo.FaultValid, levels=g_BatteryInfo.AlarmLevelsValid;
+  uint64_t cells=g_BatteryInfo.CellFramesReceived;
+  uint8_t temps=g_BatteryInfo.TempFramesReceived;
+  BatteryService(now);
+  TelemetryUpdates result=0U;
+  if(ivt!=g_BatteryInfo.IVT.ValidFlags)result|=TELEMETRY_UPDATE(TELEMETRY_IVT);
+  if(pack!=g_BatteryInfo.PackValidFlags)result|=TELEMETRY_UPDATE(TELEMETRY_PACK);
+  if(ce!=g_BatteryInfo.CellExtremaValid)result|=TELEMETRY_UPDATE(TELEMETRY_CELL_EXTREMA);
+  if(te!=g_BatteryInfo.TempExtremaValid)result|=TELEMETRY_UPDATE(TELEMETRY_TEMP_EXTREMA);
+  if(sum!=g_BatteryInfo.CellSumValid)result|=TELEMETRY_UPDATE(TELEMETRY_CELL_SUM);
+  if(fault!=g_BatteryInfo.FaultValid || levels!=g_BatteryInfo.AlarmLevelsValid)result|=TELEMETRY_UPDATE(TELEMETRY_FAULT);
+  if(cells!=g_BatteryInfo.CellFramesReceived || temps!=g_BatteryInfo.TempFramesReceived)result|=TELEMETRY_UPDATE(TELEMETRY_MODULES);
+  (void)xTaskResumeAll();
+  return result;
+}
+
+TelemetryUpdates CAN_DecodeVehicleService(uint32_t now)
+{
+  vTaskSuspendAll();
+  uint8_t gps=g_CANB_LoopData.IMU.ValidFlags;
+  uint8_t energy=g_CANB_LoopData.EnergyMeter.ValidFlags;
+  int8_t mode=g_CANB_LoopData.ECU.driving_mode;
+  VehicleService(now);
+  TelemetryUpdates result=0U;
+  if(gps!=g_CANB_LoopData.IMU.ValidFlags)result|=TELEMETRY_UPDATE(TELEMETRY_GPS_SPEED);
+  if(energy!=g_CANB_LoopData.EnergyMeter.ValidFlags)result|=TELEMETRY_UPDATE(TELEMETRY_ENERGY);
+  if(mode!=g_CANB_LoopData.ECU.driving_mode)result|=TELEMETRY_UPDATE(TELEMETRY_AMK_STATUS);
+  (void)xTaskResumeAll();
+  return result;
 }

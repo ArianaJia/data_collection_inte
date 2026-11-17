@@ -3,6 +3,10 @@
 #include "MLX90640_API.h"
 #include "MLX90640_I2C_Driver.h"
 #include "telemetry_data.h"
+#include "publish.h"
+#include "app_config.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #include <stdio.h>
 
@@ -26,8 +30,19 @@ static int MLX90640_LoadParametersOnChannel(uint8_t sensorIndex);
 static int MLX90640_SelectReadySensor(uint8_t sensorIndex);
 static int MLX90640_IsFrameReady(void);
 static void MLX90640_LogInitError(uint8_t sensorIndex, const char *step, int error);
-static void MLX90640_UpdateRegionTemp(uint8_t sensorIndex, const float *pixelTemp);
+static void MLX90640_UpdateRegionTemp(const float *pixelTemp, int32_t regions[MLX90640_REGION_COUNT]);
 static int32_t MLX90640_TempToCentiC(float tempC);
+
+static void MLX90640_StoreError(uint8_t sensor, int status, uint8_t invalidate)
+{
+  vTaskSuspendAll();
+  g_MLX90640_Frame.LastError[sensor]=status;
+  if(invalidate)g_MLX90640_Frame.ValidMask &= (uint8_t)~(1U<<sensor);
+  (void)xTaskResumeAll();
+#if (APP_MLX90640_PUBLISH_ENABLED != 0U)
+  (void)Publish_QueueUpdates(TELEMETRY_UPDATE(TELEMETRY_THERMAL));
+#endif
+}
 
 void MLX90640_App_SetLogCallback(MLX90640_AppLogFn callback)
 {
@@ -178,10 +193,10 @@ int MLX90640_App_InitSensor(uint8_t sensorIndex)
   if (sensorIndex >= MLX90640_SENSOR_COUNT) return -MLX90640_I2C_WRITE_ERROR;
   if (mlx90640SensorReady[sensorIndex]) return MLX90640_NO_ERROR;
   mlx90640SubPageMask[sensorIndex] = 0U;
-  g_MLX90640_Frame.ValidMask &= (uint8_t)~(1U << sensorIndex);
+  MLX90640_StoreError(sensorIndex,0,1U);
   int status = MLX90640_InitSensorOnChannel(sensorIndex);
   mlx90640SensorReady[sensorIndex] = (status == MLX90640_NO_ERROR);
-  g_MLX90640_Frame.LastError[sensorIndex] = status;
+  MLX90640_StoreError(sensorIndex,status,0U);
   if ((status == MLX90640_NO_ERROR) && (mlx90640LogCallback != NULL))
   {
     (void)snprintf(mlx90640LineBuffer, sizeof(mlx90640LineBuffer),
@@ -211,8 +226,7 @@ int MLX90640_App_CaptureOnce(uint8_t sensorIndex)
   if (status != MLX90640_NO_ERROR)
   {
     mlx90640SensorReady[sensorIndex] = 0U;
-    g_MLX90640_Frame.LastError[sensorIndex] = status;
-    g_MLX90640_Frame.ValidMask &= (uint8_t)(~(1U << sensorIndex));
+    MLX90640_StoreError(sensorIndex,status,1U);
     return status;
   }
 
@@ -226,8 +240,7 @@ int MLX90640_App_CaptureOnce(uint8_t sensorIndex)
 
     mlx90640SensorReady[sensorIndex] = 0U;
     mlx90640SubPageMask[sensorIndex] = 0U;
-    g_MLX90640_Frame.ValidMask &= (uint8_t)~(1U << sensorIndex);
-    g_MLX90640_Frame.LastError[sensorIndex] = status;
+    MLX90640_StoreError(sensorIndex,status,1U);
     return status;
   }
 
@@ -251,8 +264,7 @@ int MLX90640_App_CaptureOnce(uint8_t sensorIndex)
     }
     mlx90640SensorReady[sensorIndex] = 0U;
     mlx90640SubPageMask[sensorIndex] = 0U;
-    g_MLX90640_Frame.ValidMask &= (uint8_t)~(1U << sensorIndex);
-    g_MLX90640_Frame.LastError[sensorIndex] = status;
+    MLX90640_StoreError(sensorIndex,status,1U);
     return status;
   }
 
@@ -268,7 +280,7 @@ int MLX90640_App_CaptureOnce(uint8_t sensorIndex)
 
   if (mlx90640SubPageMask[sensorIndex] != 0x03U)
   {
-    g_MLX90640_Frame.LastError[sensorIndex] = -MLX90640_FRAME_INCOMPLETE_ERROR;
+    MLX90640_StoreError(sensorIndex,-MLX90640_FRAME_INCOMPLETE_ERROR,0U);
     return -MLX90640_FRAME_INCOMPLETE_ERROR;
   }
 
@@ -283,13 +295,20 @@ int MLX90640_App_CaptureOnce(uint8_t sensorIndex)
       1,
       &mlx90640Runtime.Params[sensorIndex]);
 
-  MLX90640_UpdateRegionTemp(sensorIndex, mlx90640Runtime.TempMap[sensorIndex]);
+  int32_t regions[MLX90640_REGION_COUNT];
+  MLX90640_UpdateRegionTemp(mlx90640Runtime.TempMap[sensorIndex],regions);
+  vTaskSuspendAll();
+  for(unsigned i=0;i<MLX90640_REGION_COUNT;i++)g_MLX90640_Frame.RegionTemp[sensorIndex][i]=regions[i];
   g_MLX90640_Frame.Ta[sensorIndex] = MLX90640_TempToCentiC(ta);
   g_MLX90640_Frame.Tr[sensorIndex] = MLX90640_TempToCentiC(tr);
   g_MLX90640_Frame.LastError[sensorIndex] = 0;
   g_MLX90640_Frame.FrameCounter[sensorIndex]++;
   g_MLX90640_Frame.ActiveSensorId = sensorIndex;
   g_MLX90640_Frame.ValidMask |= (uint8_t)(1U << sensorIndex);
+  (void)xTaskResumeAll();
+#if (APP_MLX90640_PUBLISH_ENABLED != 0U)
+  (void)Publish_QueueUpdates(TELEMETRY_UPDATE(TELEMETRY_THERMAL));
+#endif
   mlx90640SubPageMask[sensorIndex] = 0U;
 
   return MLX90640_NO_ERROR;
@@ -317,7 +336,7 @@ static int32_t MLX90640_TempToCentiC(float tempC)
   return (int32_t)(scaledTemp - 0.5f);
 }
 
-static void MLX90640_UpdateRegionTemp(uint8_t sensorIndex, const float *pixelTemp)
+static void MLX90640_UpdateRegionTemp(const float *pixelTemp, int32_t regions[MLX90640_REGION_COUNT])
 {
   float regionSum[MLX90640_REGION_COUNT] = {0.0f};
   uint16_t regionCount[MLX90640_REGION_COUNT] = {0U};
@@ -344,12 +363,12 @@ static void MLX90640_UpdateRegionTemp(uint8_t sensorIndex, const float *pixelTem
   {
     if (regionCount[regionIndex] > 0U)
     {
-      g_MLX90640_Frame.RegionTemp[sensorIndex][regionIndex] =
+      regions[regionIndex] =
           MLX90640_TempToCentiC(regionSum[regionIndex] / (float)regionCount[regionIndex]);
     }
     else
     {
-      g_MLX90640_Frame.RegionTemp[sensorIndex][regionIndex] = 0;
+      regions[regionIndex] = 0;
     }
   }
 }

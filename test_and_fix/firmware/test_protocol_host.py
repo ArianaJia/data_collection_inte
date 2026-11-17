@@ -90,7 +90,7 @@ def main():
     sources = ["can_decode.c", "telemetry_data.c", "canc_telemetry.c", "telemetry_extra.c",
                "publish.c", "fsae_telemetry.pb.c", "pb_common.c", "pb_encode.c", "pb_decode.c"]
     headers = ["can_decode.h", "telemetry_data.h", "canc_telemetry.h", "telemetry_extra.h",
-               "publish.h", "fsae_telemetry.pb.h", "pb.h", "pb_common.h", "pb_encode.h", "pb_decode.h"]
+                "publish.h", "telemetry_updates.h", "fsae_telemetry.pb.h", "pb.h", "pb_common.h", "pb_encode.h", "pb_decode.h"]
     for name in sources:
         shutil.copyfile(ROOT / "Core/Src" / name, OUT / name)
     for name in headers:
@@ -103,11 +103,11 @@ def main():
  """)
     (OUT / "main.h").write_text('#include "can.h"\n')
     (OUT / "FreeRTOS.h").write_text('#define taskENTER_CRITICAL() ((void)0)\n#define taskEXIT_CRITICAL() ((void)0)\n')
-    (OUT / "task.h").write_text("")
+    (OUT / "task.h").write_text('void TestSuspend(void);\nint TestResume(void);\n#define vTaskSuspendAll TestSuspend\n#define xTaskResumeAll TestResume\n')
     (OUT / "freertos_app.h").write_text("")
     (OUT / "app_log.h").write_text('#define App_LogPrintf(...) ((void)0)\n')
-    (OUT / "app_config.h").write_text('#define APP_UPLINK_ENABLED 0U\n')
-    (OUT / "cmsis_os2.h").write_text("#pragma once\n#include <stdint.h>\ntypedef void *osMessageQueueId_t;\ntypedef int osStatus_t;\n#define osErrorResource (-3)\n")
+    (OUT / "app_config.h").write_text('#define APP_UPLINK_ENABLED 1U\n')
+    (OUT / "cmsis_os2.h").write_text("#pragma once\n#include <stdint.h>\ntypedef void *osMessageQueueId_t;\ntypedef int osStatus_t;\n#define osErrorResource (-3)\n#define osOK 0\nint osMessageQueuePut(void *, const void *, unsigned, unsigned);\n")
     (OUT / "vectors.h").write_text(vectors_from_dbc(args.dbc))
     # Validate actual hardware filter allowlist, including spare bank capacity.
     body = (ROOT / "Core/Src/can.c").read_text(encoding="utf-8").split("g_can2_vehicle_filter_ids[] = {", 1)[1].split("};", 1)[0]
@@ -121,6 +121,10 @@ def main():
     (OUT / "test.c").write_text(TEST_C)
     shutil.copyfile(ROOT / "test_and_fix/firmware/publish_presence_test.c", OUT / "publish_presence_test.c")
     exe = OUT / "test.exe"
+    subprocess.run([args.cc, "-std=c99", "-O0", "-Werror=return-type", "-static", "-I" + str(OUT), str(OUT / "test.c"),
+        str(OUT / "publish_presence_test.c"), *[str(OUT / x) for x in sources], "-lm", "-o", str(exe)], check=True)
+    subprocess.run([str(exe)], check=True)
+    (OUT / "app_config.h").write_text('#define APP_UPLINK_ENABLED 0U\n')
     subprocess.run([args.cc, "-std=c99", "-O0", "-Werror=return-type", "-static", "-I" + str(OUT), str(OUT / "test.c"),
         str(OUT / "publish_presence_test.c"), *[str(OUT / x) for x in sources], "-lm", "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
@@ -138,17 +142,26 @@ TEST_C = r'''#include "can_decode.h"
 #include <math.h>
 #include "vectors.h"
 #include "filters.h"
+#include "app_config.h"
 static uint32_t tick;
 uint32_t HAL_GetTick(void){return tick;}
+static unsigned scheduler_depth, mutate_on_resume;
+void TestSuspend(void){scheduler_depth++;}
+int TestResume(void){assert(scheduler_depth);if(--scheduler_depth==0 && mutate_on_resume){
+ mutate_on_resume=0;g_CANB_LoopData.ECU.SteeringAngleDeciDeg=999;
+ Publish_QueueUpdates(TELEMETRY_UPDATE(TELEMETRY_DRIVER_INPUTS));
+}return 0;}
+int osMessageQueuePut(void *q,const void *p,unsigned a,unsigned b){(void)q;(void)p;(void)a;(void)b;return 0;}
 osMessageQueueId_t PublishQueueItemHandle;
 static fsae_TelemetryFrame out;
 static uint8_t payload[PUBLISH_MAX_PAYLOAD_SIZE];
 int Publish_PresenceRegressionTest(void);
-static unsigned queued[4];
-static osStatus_t Test_QueueTopic(PublishTopic_t topic){assert((unsigned)topic<4);queued[topic]++;return 0;}
-#define Publish_QueueTopic Test_QueueTopic
+static TelemetryUpdates queued;
+static unsigned queue_calls;
+static osStatus_t Test_QueueUpdates(TelemetryUpdates updates){queued|=updates;if(updates)queue_calls++;return 0;}
+#define Publish_QueueUpdates Test_QueueUpdates
 #include "dispatch.h"
-#undef Publish_QueueTopic
+#undef Publish_QueueUpdates
 static void decoder_returns(void){
  CAN_Msg_Queue_t f={.can_channel=CAN_CHANNEL_VEHICLE_CANB,.msg_id=CAN_ID_CANB_DRIVER_INPUTS_OIL_PRESSURE,.dlc=8,.msg_data={1}};
  assert(!CAN_DecodeVehicleCanbMessage(NULL));assert(!CAN_DecodeBatteryBoxMessage(NULL));
@@ -163,8 +176,8 @@ static void decoder_returns(void){
  f.msg_id=CAN_ID_CANB_BRAKE_PEDAL_ENCODER;f.dlc=7;memcpy(f.msg_data,(uint8_t[]){7,1,1,0,16,0,0},7);
  assert(!CAN_DecodeVehicleCanbMessage(&f));f.msg_data[4]=0;assert(CAN_DecodeVehicleCanbMessage(&f));
  f.msg_id=CAN_ID_CANB_GPS_SPEED;f.dlc=2;f.msg_data[0]=255;f.msg_data[1]=255;
- assert(!CAN_DecodeVehicleCanbMessage(&f));
- // Invalid measurement status is accepted when the frame updates validity caches.
+  assert(CAN_DecodeVehicleCanbMessage(&f)==TELEMETRY_UPDATE(TELEMETRY_GPS_SPEED));
+  // Invalid measurement status is accepted when the frame updates validity caches.
  f.msg_id=CAN_ID_CANB_GPS_CG_VELOCITY;f.dlc=8;memset(f.msg_data,0,8);
  assert(CAN_DecodeVehicleCanbMessage(&f));assert(!g_CANB_LoopData.GPS.CgVelocityValid);
  f.msg_id=CAN_ID_CANB_AMK_STATUS_MODE_LOGIC;f.dlc=5;f.msg_data[0]=0xF1;
@@ -206,14 +219,14 @@ static void decoder_returns(void){
  assert(!CAN_DecodeControllerCanaMessage(&f));
  // Execute the real native dispatch functions with a counting publish stub.
  f=(CAN_Msg_Queue_t){.can_channel=CAN_CHANNEL_VEHICLE_CANB,.msg_id=0x5A0,.dlc=8};
- memset(queued,0,sizeof(queued));CanVehicle_Dispatch(&f);CanVehicle_Dispatch(&f);
- assert(queued[PUBLISH_TOPIC_FAST_TELEMETRY]==2 && queued[PUBLISH_TOPIC_VEHICLE_STATE]==2 && queued[PUBLISH_TOPIC_BMS_SUMMARY]==2);
+  queued=0;queue_calls=0;CanVehicle_Dispatch(&f);CanVehicle_Dispatch(&f);
+  assert(queued==TELEMETRY_EXTRA_UPDATE(0) && queue_calls==2);
  f.dlc=7;CanVehicle_Dispatch(&f);f.dlc=8;f.msg_id=0x777;CanVehicle_Dispatch(&f);
- assert(queued[PUBLISH_TOPIC_FAST_TELEMETRY]==2 && queued[PUBLISH_TOPIC_VEHICLE_STATE]==2 && queued[PUBLISH_TOPIC_BMS_SUMMARY]==2);
+  assert(queued==TELEMETRY_EXTRA_UPDATE(0) && queue_calls==2);
  f=(CAN_Msg_Queue_t){.can_channel=CAN_CHANNEL_BATTERY_BOX,.is_ext_id=1,.msg_id=0x186E50F4,.dlc=8};
- memset(queued,0,sizeof(queued));CanBattery_Dispatch(&f);CanBattery_Dispatch(&f);
+  queued=0;queue_calls=0;CanBattery_Dispatch(&f);CanBattery_Dispatch(&f);
  f.msg_data[2]=4;CanBattery_Dispatch(&f);f.msg_id=0x1FFFFFFF;CanBattery_Dispatch(&f);CanBattery_Dispatch(NULL);
- assert(queued[PUBLISH_TOPIC_FAST_TELEMETRY]==2 && queued[PUBLISH_TOPIC_BMS_SUMMARY]==2 && queued[PUBLISH_TOPIC_BMS_DETAIL]==2);
+  assert(queued==TELEMETRY_EXTRA_UPDATE(3) && queue_calls==2);
  puts("PASS: decoder success nonzero/zero/repeated, Extra-only, unknown/DLC/range rejection, validity/error updates, native dispatch publish gating");
 }
 static void send(unsigned id,unsigned dlc,const uint8_t *data){
@@ -227,6 +240,84 @@ static void roundtrip(PublishTopic_t topic){
  assert(out.frame_id==42 && out.header.seq==42);
 }
 static int has_filter(unsigned id){for(unsigned i=0;i<sizeof(filter_ids)/sizeof(filter_ids[0]);i++)if(filter_ids[i]==id)return 1;return 0;}
+static void updates_roundtrip(TelemetryUpdates groups,unsigned id){
+ uint16_t size=0;assert(Publish_BuildUpdates(groups,id,payload,sizeof(payload),&size));
+ assert(scheduler_depth==0);out=(fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
+ pb_istream_t s=pb_istream_from_buffer(payload,size);assert(pb_decode(&s,fsae_TelemetryFrame_fields,&out));
+ assert(out.has_header && out.header.source_id==1 && out.header.seq==id && out.frame_id==id);
+ assert(out.header.timestamp_ms==out.timestamp_ms);
+}
+static void update_groups(void){
+ CANB_Loop_Data_Clear();Battery_Data_Clear();tick=20;
+ CAN_Msg_Queue_t f={.can_channel=CAN_CHANNEL_VEHICLE_CANB,.msg_id=CAN_ID_CANB_DRIVER_INPUTS_OIL_PRESSURE,.dlc=8};
+ TelemetryUpdates driver=TELEMETRY_UPDATE(TELEMETRY_DRIVER_INPUTS),energy=TELEMETRY_UPDATE(TELEMETRY_ENERGY);
+ uint16_t size=99;
+ assert(CAN_DecodeVehicleCanbMessage(&f)==driver);
+ assert(CAN_DecodeVehicleCanbMessage(&f)==driver); // valid repeated zero
+ f.dlc=7;assert(!CAN_DecodeVehicleCanbMessage(&f));f.dlc=8;f.msg_id=0x777;assert(!CAN_DecodeVehicleCanbMessage(&f));
+ const unsigned ids[]={CAN_ID_CANB_WHEEL_ACTUAL_TORQUE,CAN_ID_CANB_MOTOR_DIAGNOSTIC_CODES,CAN_ID_CANB_WHEEL_ACTUAL_SPEED,
+ CAN_ID_CANB_MOTOR_TEMPERATURE,CAN_ID_CANB_INVERTER_TEMPERATURE,CAN_ID_CANB_IGBT_TEMPERATURE};
+ for(unsigned i=0;i<6;i++){f.msg_id=ids[i];assert(CAN_DecodeVehicleCanbMessage(&f)==TELEMETRY_UPDATE(TELEMETRY_MOTOR_TORQUE+i));}
+ f.msg_id=0x5A0;assert(CAN_DecodeVehicleCanbMessage(&f)==TELEMETRY_EXTRA_UPDATE(0));
+ f.msg_id=0x5A1;assert(CAN_DecodeVehicleCanbMessage(&f)==TELEMETRY_EXTRA_UPDATE(1));
+ f.msg_id=0x5A2;assert(CAN_DecodeVehicleCanbMessage(&f)==TELEMETRY_EXTRA_UPDATE(2));
+ g_BatteryInfo.TotalVolt=777000;g_CANB_LoopData.ECU.Motor_RPM[0]=1234;
+ g_CANB_LoopData.ECU.SteeringAngleDeciDeg=-120;
+ updates_roundtrip(driver,256);
+ assert(out.steering_angle==-12 && out.hv_voltage==0 && out.motor_rpm==0);
+ assert(out.has_vehicle_state && out.vehicle_state.motors_count==0);
+ assert(!out.has_energy_meter && !out.has_fan_telemetry && !out.has_canc && !out.has_ivt_telemetry && !out.has_fast_telemetry);
+ updates_roundtrip(TELEMETRY_EXTRA_UPDATE(0),257);
+ assert(out.has_pdm_telemetry && out.pdm_telemetry.has_bus_voltage_v && out.pdm_telemetry.bus_voltage_v==0);
+ assert(!out.pdm_telemetry.has_battery_voltage_v && !out.has_fan_telemetry && !out.has_vehicle_state && out.hv_voltage==0);
+ updates_roundtrip(TELEMETRY_UPDATE(TELEMETRY_MOTOR_SPEED),UINT32_MAX);
+ assert(out.vehicle_state.motors_count==4 && out.vehicle_state.motors[0].rpm==1234);
+ for(unsigned i=0;i<4;i++)assert(out.vehicle_state.motors[i].position!=0 && !out.vehicle_state.motors[i].has_logic_state);
+ updates_roundtrip(driver|TELEMETRY_UPDATE(TELEMETRY_MOTOR_SPEED)|TELEMETRY_UPDATE(TELEMETRY_MOTOR_TORQUE),255);
+ assert(out.steering_angle==-12 && out.vehicle_state.motors[0].rpm==1234 && !out.has_fan_telemetry);
+ // Pack -> IVT -> pack fallback with original physical units and freshness.
+ g_BatteryInfo.PackReceived=1;g_BatteryInfo.PackValidFlags=7;
+ g_BatteryInfo.PackLastUpdateMs=tick;g_BatteryInfo.TotalVolt=500000;g_BatteryInfo.TotalCurrent=-12300;
+ g_BatteryInfo.SocDeciPct=0;
+ updates_roundtrip(TELEMETRY_UPDATE(TELEMETRY_PACK),5);
+ assert(out.hv_voltage==500 && fabs(out.hv_current+12.3f)<0.001f && out.has_battery_soc_pct_x10 && out.battery_soc_pct_x10==0);
+ g_BatteryInfo.IVT.ValidFlags=3;g_BatteryInfo.IVT.ReceivedFlags=3;
+ g_BatteryInfo.IVT.LastUpdateMs[0]=g_BatteryInfo.IVT.LastUpdateMs[1]=tick;
+ g_BatteryInfo.IVT.VoltageU1Mv=499000;g_BatteryInfo.IVT.CurrentMa=0;
+ updates_roundtrip(TELEMETRY_UPDATE(TELEMETRY_IVT),6);
+ assert(out.hv_voltage==499 && out.ivt_telemetry.has_current_ma && out.ivt_telemetry.current_ma==0);
+ g_BatteryInfo.IVT.ValidFlags=0;g_BatteryInfo.IVT.CurrentState=2;
+ updates_roundtrip(TELEMETRY_UPDATE(TELEMETRY_IVT),7);
+ assert(out.hv_voltage==500 && out.has_ivt_telemetry && !out.ivt_telemetry.has_current_ma && out.ivt_telemetry.current_state==2);
+ assert((CAN_DecodeBatteryService(tick+2001)&TELEMETRY_UPDATE(TELEMETRY_PACK))!=0);
+ f=(CAN_Msg_Queue_t){.can_channel=CAN_CHANNEL_CDC_MONITOR,.msg_id=0x301,.dlc=8};
+ assert(CAN_DecodeCdcMonitorMessage(&f)==TELEMETRY_CANC_UPDATE(0));
+ f.msg_id=0x302;f.dlc=6;assert(CAN_DecodeCdcMonitorMessage(&f)==TELEMETRY_CANC_UPDATE(1));
+ updates_roundtrip(TELEMETRY_CANC_UPDATE(0),1);
+ assert(out.has_canc && out.canc.has_cdc_info && !out.canc.has_cdc_acceleration && !out.has_pdm_telemetry);
+ (void)Publish_TakePending();
+#if APP_UPLINK_ENABLED
+ assert(Publish_QueueUpdates(TELEMETRY_UPDATE(TELEMETRY_CG_VELOCITY)|TELEMETRY_EXTRA_UPDATE(19)|TELEMETRY_EXTRA_UPDATE(21))==0);
+ assert(!Publish_TakePending()); // accepted cache-only groups produce no fake telemetry
+ assert(Publish_QueueUpdates(driver)==0 && Publish_QueueUpdates(driver|energy)==0);
+ TelemetryUpdates in_flight=Publish_TakePending();assert(in_flight==(driver|energy));assert(!Publish_TakePending());
+ // A producer runs after snapshot release, before encoding. The encoded value
+ // stays coherent, while its new pending bit survives successful transmission.
+ g_CANB_LoopData.ECU.SteeringAngleDeciDeg=120;mutate_on_resume=1;
+ updates_roundtrip(driver,2);assert(out.steering_angle==12 && g_CANB_LoopData.ECU.SteeringAngleDeciDeg==999);
+ assert(Publish_TakePending()==driver);
+ assert(!Publish_BuildUpdates(in_flight,3,payload,1,&size) && size==0);
+ assert(Publish_QueueUpdates(TELEMETRY_UPDATE(TELEMETRY_THERMAL))==0);
+ assert(Publish_QueueUpdates(in_flight)==0); // build/send failure requeue
+ assert(Publish_TakePending()==(in_flight|TELEMETRY_UPDATE(TELEMETRY_THERMAL)));
+ assert(!Publish_TakePending());
+#else
+ assert(Publish_QueueUpdates(driver|energy)==osErrorResource);
+ assert(!Publish_TakePending());
+#endif
+ assert(!Publish_BuildUpdates(0,4,payload,sizeof(payload),&size));
+ puts("PASS: exact update groups, zero/repeat, selective cache mapping, nested positions, coherent snapshot, concurrent pending merge/drain/retry, frame headers");
+}
 int main(void){
  assert(Publish_PresenceRegressionTest()==0);
  CANB_Loop_Data_Clear();Battery_Data_Clear();
@@ -317,7 +408,8 @@ int main(void){
  memset(&out,0,sizeof(out));Canc_Map(&out,101);assert(!out.canc.cdc_info.has_CDC_HeiFL);
  f.dlc=7;Canc_Receive(&f);memset(&out,0,sizeof(out));Canc_Map(&out,101);assert(out.canc.cdc_info.status.rejected_count==1);
   puts("PASS: DBC vectors, CANB filters/decoders, source/DLC rejection, tick wrap, fan V4, thermal positions, protobuf round trips, CANC");
-  decoder_returns();
+   decoder_returns();
+  update_groups();
  return 0;
 }
 '''

@@ -6,15 +6,16 @@ extern "C" {
 #endif
 
 #include "can.h"
+#include "telemetry_updates.h"
 
 uint8_t CAN_IsBatteryCanbMessage(const CAN_Msg_Queue_t *frame);
-void CAN_DecodeBatteryService(uint32_t now);
-void CAN_DecodeVehicleService(uint32_t now);
-/* Return 1 only when a recognized, accepted frame completes a cache update. */
-uint8_t CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data);
-uint8_t CAN_DecodeBatteryBoxMessage(const CAN_Msg_Queue_t *recv_data);
-uint8_t CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *recv_data);
-uint8_t CAN_DecodeCdcMonitorMessage(const CAN_Msg_Queue_t *recv_data);
+TelemetryUpdates CAN_DecodeBatteryService(uint32_t now);
+TelemetryUpdates CAN_DecodeVehicleService(uint32_t now);
+/* Task-context APIs: accepted cache groups, including zero/status updates. */
+TelemetryUpdates CAN_DecodeVehicleCanbMessage(const CAN_Msg_Queue_t *recv_data);
+TelemetryUpdates CAN_DecodeBatteryBoxMessage(const CAN_Msg_Queue_t *recv_data);
+TelemetryUpdates CAN_DecodeControllerCanaMessage(const CAN_Msg_Queue_t *recv_data);
+TelemetryUpdates CAN_DecodeCdcMonitorMessage(const CAN_Msg_Queue_t *recv_data);
 
 #ifdef __cplusplus
 }

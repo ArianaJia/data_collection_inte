@@ -48,6 +48,7 @@ extern "C" {
 
 #include "cmsis_os2.h"
 #include "fsae_telemetry.pb.h"
+#include "telemetry_updates.h"
 
 
 #define PUBLISH_FAST_PERIOD_MS         100U
@@ -79,6 +80,12 @@ typedef struct
 
 void Publish_Init(void);
 void Publish_Process(void);
+/* Latest-value coalescing. Taking clears only the captured pending bits;
+ * producers may add the same group during build/TX. Retry merges, never clears. */
+osStatus_t Publish_QueueUpdates(TelemetryUpdates groups);
+TelemetryUpdates Publish_TakePending(void);
+bool Publish_BuildUpdates(TelemetryUpdates groups, uint32_t frame_id,
+                          uint8_t *buffer, uint16_t capacity, uint16_t *size);
 /* Returns osErrorResource without queueing when APP_UPLINK_ENABLED is 0. */
 osStatus_t Publish_QueueTopic(PublishTopic_t topic);
 void Publish_OnTopicDequeued(PublishTopic_t topic);

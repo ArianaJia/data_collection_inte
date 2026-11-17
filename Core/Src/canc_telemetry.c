@@ -10,7 +10,7 @@ static int32_t ReadMotorola(const uint8_t *data, unsigned bit, unsigned width, u
  for(unsigned i=0;i<width;i++){value=(value<<1)|((data[bit/8]>>(bit%8))&1U);bit=(bit%8)?bit-1:bit+15;}
  return sign && (value & (1UL<<(width-1))) ? (int32_t)value-(int32_t)(1UL<<width) : (int32_t)value;
 }
-uint8_t Canc_Receive(const CAN_Msg_Queue_t *frame) {
+TelemetryUpdates Canc_Receive(const CAN_Msg_Queue_t *frame) {
  if(!frame || frame->can_channel!=CAN_CHANNEL_CDC_MONITOR || frame->is_ext_id) return 0U;
  unsigned index, length;
  switch(frame->msg_id){
@@ -32,7 +32,7 @@ uint8_t Canc_Receive(const CAN_Msg_Queue_t *frame) {
  uint32_t now=HAL_GetTick(); c->interval=now-c->tick;c->tick=now;c->count++;
  memcpy(c->data,frame->msg_data,length);
  taskEXIT_CRITICAL();
- return 1U;
+ return TELEMETRY_CANC_UPDATE(index);
 }
 static void MapStatus(fsae_CancFrameStatus *s,const CancCache *c,unsigned length,uint32_t now){
  s->has_seen=s->has_fresh=s->has_rx_count=s->has_rejected_count=true;
@@ -42,8 +42,12 @@ static void MapStatus(fsae_CancFrameStatus *s,const CancCache *c,unsigned length
  s->has_interval_ms=c->count>1;s->interval_ms=c->interval;s->raw_payload.size=length;memcpy(s->raw_payload.bytes,c->data,length);}
 }
 void Canc_Map(fsae_TelemetryFrame *frame,uint32_t now){
+ Canc_MapGroups(frame,now,TELEMETRY_ALL_UPDATES);
+}
+void Canc_MapGroups(fsae_TelemetryFrame *frame,uint32_t now,TelemetryUpdates groups){
  CancCache c;
- taskENTER_CRITICAL();c=cache[0];taskEXIT_CRITICAL();
+ memset(&c,0,sizeof(c));
+ if(groups & TELEMETRY_CANC_UPDATE(0)){taskENTER_CRITICAL();c=cache[0];taskEXIT_CRITICAL();}
  if(c.count || c.rejected){
  frame->has_canc=true;frame->canc.has_cdc_info=true;
  fsae_CancCdcInfo *m=&frame->canc.cdc_info;m->has_status=true;MapStatus(&m->status,&c,8,now);
@@ -74,7 +78,8 @@ void Canc_Map(fsae_TelemetryFrame *frame,uint32_t now){
  if(physical < -0.2-1e-8 || physical > 0.2095+1e-8)m->status.out_of_range_mask|=1UL<<5;
  if(m->status.fresh){m->has_CDC_HeiRR=true;m->CDC_HeiRR=v;} }
  }
- taskENTER_CRITICAL();c=cache[1];taskEXIT_CRITICAL();
+ memset(&c,0,sizeof(c));
+ if(groups & TELEMETRY_CANC_UPDATE(1)){taskENTER_CRITICAL();c=cache[1];taskEXIT_CRITICAL();}
  if(c.count || c.rejected){
  frame->has_canc=true;frame->canc.has_cdc_acceleration=true;
  fsae_CancCdcAcceleration *m=&frame->canc.cdc_acceleration;m->has_status=true;MapStatus(&m->status,&c,6,now);
@@ -104,7 +109,8 @@ void Canc_Map(fsae_TelemetryFrame *frame,uint32_t now){
  if(physical < -30.0-1e-8 || physical > 30.0+1e-8)m->status.out_of_range_mask|=1UL<<5;
  if(m->status.fresh){m->has_CDC_LgtAcc=true;m->CDC_LgtAcc=v;} }
  }
- taskENTER_CRITICAL();c=cache[2];taskEXIT_CRITICAL();
+ memset(&c,0,sizeof(c));
+ if(groups & TELEMETRY_CANC_UPDATE(2)){taskENTER_CRITICAL();c=cache[2];taskEXIT_CRITICAL();}
  if(c.count || c.rejected){
  frame->has_canc=true;frame->canc.has_cdc_rotation=true;
  fsae_CancCdcRotation *m=&frame->canc.cdc_rotation;m->has_status=true;MapStatus(&m->status,&c,7,now);
@@ -134,7 +140,8 @@ void Canc_Map(fsae_TelemetryFrame *frame,uint32_t now){
  if(physical < 0.0-1e-8 || physical > 1.0+1e-8)m->status.out_of_range_mask|=1UL<<5;
  if(m->status.fresh){m->has_CDC_RollRateV=true;m->CDC_RollRateV=v;} }
  }
- taskENTER_CRITICAL();c=cache[3];taskEXIT_CRITICAL();
+ memset(&c,0,sizeof(c));
+ if(groups & TELEMETRY_CANC_UPDATE(3)){taskENTER_CRITICAL();c=cache[3];taskEXIT_CRITICAL();}
  if(c.count || c.rejected){
  frame->has_canc=true;frame->canc.has_cdc_current=true;
  fsae_CancCdcCurrent *m=&frame->canc.cdc_current;m->has_status=true;MapStatus(&m->status,&c,8,now);
@@ -172,7 +179,8 @@ void Canc_Map(fsae_TelemetryFrame *frame,uint32_t now){
  if(physical < 0.0-1e-8 || physical > 1785.0+1e-8)m->status.out_of_range_mask|=1UL<<7;
  if(m->status.fresh){m->has_CDC_CurrRbndRR=true;m->CDC_CurrRbndRR=v;} }
  }
- taskENTER_CRITICAL();c=cache[4];taskEXIT_CRITICAL();
+ memset(&c,0,sizeof(c));
+ if(groups & TELEMETRY_CANC_UPDATE(4)){taskENTER_CRITICAL();c=cache[4];taskEXIT_CRITICAL();}
  if(c.count || c.rejected){
  frame->has_canc=true;frame->canc.has_abs_status=true;
  fsae_CancAbsStatus *m=&frame->canc.abs_status;m->has_status=true;MapStatus(&m->status,&c,8,now);
@@ -186,7 +194,8 @@ void Canc_Map(fsae_TelemetryFrame *frame,uint32_t now){
  if(physical < 0.0-1e-8 || physical > 1.0+1e-8)m->status.out_of_range_mask|=1UL<<1;
  if(m->status.fresh){m->has_ABS_VehSpdV=true;m->ABS_VehSpdV=v;} }
  }
- taskENTER_CRITICAL();c=cache[5];taskEXIT_CRITICAL();
+ memset(&c,0,sizeof(c));
+ if(groups & TELEMETRY_CANC_UPDATE(5)){taskENTER_CRITICAL();c=cache[5];taskEXIT_CRITICAL();}
  if(c.count || c.rejected){
  frame->has_canc=true;frame->canc.has_esc_status=true;
  fsae_CancEscStatus *m=&frame->canc.esc_status;m->has_status=true;MapStatus(&m->status,&c,2,now);
@@ -208,7 +217,8 @@ void Canc_Map(fsae_TelemetryFrame *frame,uint32_t now){
  if(physical < -100.0-1e-8 || physical > 309.4+1e-8)m->status.out_of_range_mask|=1UL<<3;
  if(m->status.fresh){m->has_ESC_MstCylP=true;m->ESC_MstCylP=v;} }
  }
- taskENTER_CRITICAL();c=cache[6];taskEXIT_CRITICAL();
+ memset(&c,0,sizeof(c));
+ if(groups & TELEMETRY_CANC_UPDATE(6)){taskENTER_CRITICAL();c=cache[6];taskEXIT_CRITICAL();}
  if(c.count || c.rejected){
  frame->has_canc=true;frame->canc.has_ibs_info=true;
  fsae_CancIbsInfo *m=&frame->canc.ibs_info;m->has_status=true;MapStatus(&m->status,&c,5,now);
@@ -246,7 +256,8 @@ void Canc_Map(fsae_TelemetryFrame *frame,uint32_t now){
  if(physical < 0.0-1e-8 || physical > 100.0+1e-8)m->status.out_of_range_mask|=1UL<<7;
  if(m->status.fresh){m->has_AB_AccPdlTrvl=true;m->AB_AccPdlTrvl=v;} }
  }
- taskENTER_CRITICAL();c=cache[7];taskEXIT_CRITICAL();
+ memset(&c,0,sizeof(c));
+ if(groups & TELEMETRY_CANC_UPDATE(7)){taskENTER_CRITICAL();c=cache[7];taskEXIT_CRITICAL();}
  if(c.count || c.rejected){
  frame->has_canc=true;frame->canc.has_sas_sensor=true;
  fsae_CancSasSensor *m=&frame->canc.sas_sensor;m->has_status=true;MapStatus(&m->status,&c,5,now);
@@ -272,7 +283,8 @@ void Canc_Map(fsae_TelemetryFrame *frame,uint32_t now){
  if(physical < -780.0-1e-8 || physical > 779.733+1e-8)m->status.out_of_range_mask|=1UL<<4;
  if(m->status.fresh){m->has_SAS_SteerAg=true;m->SAS_SteerAg=v;} }
  }
- taskENTER_CRITICAL();c=cache[8];taskEXIT_CRITICAL();
+ memset(&c,0,sizeof(c));
+ if(groups & TELEMETRY_CANC_UPDATE(8)){taskENTER_CRITICAL();c=cache[8];taskEXIT_CRITICAL();}
  if(c.count || c.rejected){
  frame->has_canc=true;frame->canc.has_vcu_requests=true;
  fsae_CancVcuRequests *m=&frame->canc.vcu_requests;m->has_status=true;MapStatus(&m->status,&c,7,now);
@@ -302,7 +314,8 @@ void Canc_Map(fsae_TelemetryFrame *frame,uint32_t now){
  if(physical < -5000.0-1e-8 || physical > 5000.0+1e-8)m->status.out_of_range_mask|=1UL<<5;
  if(m->status.fresh){m->has_VCU_MCU_TarDrvgReq=true;m->VCU_MCU_TarDrvgReq=v;} }
  }
- taskENTER_CRITICAL();c=cache[9];taskEXIT_CRITICAL();
+ memset(&c,0,sizeof(c));
+ if(groups & TELEMETRY_CANC_UPDATE(9)){taskENTER_CRITICAL();c=cache[9];taskEXIT_CRITICAL();}
  if(c.count || c.rejected){
  frame->has_canc=true;frame->canc.has_vcu_status=true;
  fsae_CancVcuStatus *m=&frame->canc.vcu_status;m->has_status=true;MapStatus(&m->status,&c,8,now);

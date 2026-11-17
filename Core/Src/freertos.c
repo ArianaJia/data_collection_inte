@@ -464,7 +464,7 @@ void CanForViehcleTask(void *argument)
       CanVehicle_Dispatch(&recv_data);
       /* App_LogCan2RxFrame(&recv_data); */
     }
-    CAN_DecodeVehicleService(HAL_GetTick());
+    (void)Publish_QueueUpdates(CAN_DecodeVehicleService(HAL_GetTick()));
     if ((uint32_t)(HAL_GetTick() - led_tick) >= 500U)
     {
       HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
@@ -496,7 +496,7 @@ void CanForBMSTask(void *argument)
       CanBattery_Dispatch(&recv_data);
       /* App_LogCan2RxFrame(&recv_data); */
     }
-    CAN_DecodeBatteryService(HAL_GetTick());
+    (void)Publish_QueueUpdates(CAN_DecodeBatteryService(HAL_GetTick()));
   }
   /* USER CODE END CanForBMSTask */
 }
@@ -531,7 +531,7 @@ void MLX90640Task(void *argument)
       {
         Mlx_SendCanSummary(g_mlxCurrentSensor);
 #if (APP_MLX90640_PUBLISH_ENABLED != 0U)
-        (void)Publish_QueueTopic(PUBLISH_TOPIC_THERMAL_SUMMARY);
+        (void)Publish_QueueUpdates(TELEMETRY_UPDATE(TELEMETRY_THERMAL));
 #endif
       }
       else if ((status == -MLX90640_FRAME_NOT_READY_ERROR) ||
@@ -685,7 +685,7 @@ void Publish4GTask(void *argument)
   (void)argument;
   osThreadExit();
 #else
-  PublishQueueItem_t item;
+  TelemetryUpdates updates;
   uint16_t frame_length = 0U;
   HAL_StatusTypeDef tx_status = HAL_OK;
   uint32_t wait_log_tick = 0U;
@@ -713,15 +713,15 @@ void Publish4GTask(void *argument)
       continue;
     }
 
-    if (osMessageQueueGet(PublishQueueItemHandle, &item, NULL, osWaitForever) == osOK)
+    updates = Publish_TakePending();
+    if (updates != 0U)
     {
-      Publish_OnTopicDequeued(item.topic);
 
       /* One counter for all topics, starting at 1 as in the PC experiment.
        * Failed attempts may leave gaps; never reuse an ID after a partial TX.
        */
       ++frame_counter;
-      if (Publish_BuildFrame(item.topic, frame_counter, g_publishFrameBuffer,
+      if (Publish_BuildUpdates(updates, frame_counter, g_publishFrameBuffer,
                              (uint16_t)sizeof(g_publishFrameBuffer), &frame_length))
       {
         g_diagPublishPayloadLen = frame_length;
@@ -747,7 +747,7 @@ void Publish4GTask(void *argument)
                          (unsigned long)g_diagPublishFailCount);
           }
           osDelay(1000U);
-          (void)Publish_QueueTopic(item.topic);
+          (void)Publish_QueueUpdates(updates);
         }
       }
       else
@@ -756,14 +756,15 @@ void Publish4GTask(void *argument)
         if (APP_4G_PUBLISH_LOG_ENABLED != 0U)
         {
           App_LogPrintf(
-                       "[PUB-DIAG] build frame failed topic=%u fail=%lu\r\n",
-                       (unsigned int)item.topic,
+                       "[PUB-DIAG] build frame failed groups=%08lx fail=%lu\r\n",
+                       (unsigned long)updates,
                        (unsigned long)g_diagPublishFailCount);
         }
         osDelay(1000U);
-        (void)Publish_QueueTopic(item.topic);
+        (void)Publish_QueueUpdates(updates);
       }
     }
+    else osDelay(1U);
   }
 #endif
   /* USER CODE END Publish4GTask */
@@ -1182,35 +1183,29 @@ static void CanVehicle_Dispatch(const CAN_Msg_Queue_t *recv_data)
   if (recv_data->can_channel == CAN_CHANNEL_CONTROLLER_CANA)
   {
 #if (APP_SPICANA_DECODE_ENABLED != 0U)
-    if (CAN_DecodeControllerCanaMessage(recv_data) == 0U) return;
+    TelemetryUpdates updates = CAN_DecodeControllerCanaMessage(recv_data);
 #if (APP_SPICANA_PUBLISH_ENABLED != 0U)
-    (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
-    (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
+    (void)Publish_QueueUpdates(updates);
+#else
+    (void)updates;
 #endif
 #endif
     return;
   }
   if (recv_data->can_channel == CAN_CHANNEL_CDC_MONITOR)
   {
-    if (CAN_DecodeCdcMonitorMessage(recv_data) == 0U) return;
-    (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
+    (void)Publish_QueueUpdates(CAN_DecodeCdcMonitorMessage(recv_data));
     return;
   }
   if (recv_data->can_channel == CAN_CHANNEL_VEHICLE_CANB)
   {
-    if (CAN_DecodeVehicleCanbMessage(recv_data) == 0U) return;
-    (void)Publish_QueueTopic(PUBLISH_TOPIC_FAST_TELEMETRY);
-    (void)Publish_QueueTopic(PUBLISH_TOPIC_VEHICLE_STATE);
-    (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
+    (void)Publish_QueueUpdates(CAN_DecodeVehicleCanbMessage(recv_data));
   }
 }
 
 static void CanBattery_Dispatch(const CAN_Msg_Queue_t *recv_data)
 {
-  if (CAN_DecodeBatteryBoxMessage(recv_data) == 0U) return;
-  (void)Publish_QueueTopic(PUBLISH_TOPIC_FAST_TELEMETRY);
-  (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_SUMMARY);
-  (void)Publish_QueueTopic(PUBLISH_TOPIC_BMS_DETAIL);
+  (void)Publish_QueueUpdates(CAN_DecodeBatteryBoxMessage(recv_data));
 }
 
 static void Rs485_Dispatch(const Peripheral_Rx_Frame_t *recv_data)

@@ -24,7 +24,33 @@ extern osMessageQueueId_t PublishQueueItemHandle;
 static fsae_TelemetryFrame g_publishTelemetryFrame;
 // Reserved standalone publish cache; current mapping uses g_publishTelemetryFrame.vehicle_state.
 // static fsae_VehicleState g_publishVehicleState;
-static volatile uint32_t g_publishQueuedTopicMask = 0U;
+static TelemetryUpdates g_pendingUpdates;
+#if (APP_UPLINK_ENABLED != 0U)
+static TelemetryUpdates Publish_WireGroups(TelemetryUpdates groups);
+#endif
+
+osStatus_t Publish_QueueUpdates(TelemetryUpdates groups)
+{
+#if (APP_UPLINK_ENABLED == 0U)
+    (void)groups;
+    return osErrorResource;
+#else
+    groups=Publish_WireGroups(groups);
+    taskENTER_CRITICAL();
+    g_pendingUpdates |= groups;
+    taskEXIT_CRITICAL();
+    return osOK;
+#endif
+}
+
+TelemetryUpdates Publish_TakePending(void)
+{
+    taskENTER_CRITICAL();
+    TelemetryUpdates groups = g_pendingUpdates;
+    g_pendingUpdates = 0U;
+    taskEXIT_CRITICAL();
+    return groups;
+}
 
 static fsae_DrivingMode Publish_MapDrivingMode(uint8_t raw_mode);
 static uint32_t Publish_GetVehicleSpeedKmh(void);
@@ -67,56 +93,20 @@ void Publish_Process(void)
 
 osStatus_t Publish_QueueTopic(PublishTopic_t topic)
 {
-#if (APP_UPLINK_ENABLED == 0U)
-    /* A disabled uplink must not accumulate requests or deduplication bits. */
-    (void)topic;
-    return osErrorResource;
-#else
-    /* Coalesce duplicate requests so one topic is queued at most once. */
-    PublishQueueItem_t item;
-    uint32_t topic_mask;
-    osStatus_t status;
-
-    if ((PublishQueueItemHandle == NULL) || !Publish_IsTopicValid(topic))
-    {
-        return osErrorResource;
-    }
-
-    topic_mask = (1UL << (uint32_t)topic);
-
-    taskENTER_CRITICAL();
-    if ((g_publishQueuedTopicMask & topic_mask) != 0U)
-    {
-        taskEXIT_CRITICAL();
-        return osOK;
-    }
-    g_publishQueuedTopicMask |= topic_mask;
-    taskEXIT_CRITICAL();
-
-    item.topic = topic;
-    status = osMessageQueuePut(PublishQueueItemHandle, &item, 0U, 0U);
-    if (status != osOK)
-    {
-        taskENTER_CRITICAL();
-        g_publishQueuedTopicMask &= ~topic_mask;
-        taskEXIT_CRITICAL();
-    }
-
-    return status;
-#endif
+    /* Explicit legacy requests, not used by acquisition tasks. */
+    if(!Publish_IsTopicValid(topic))return osErrorResource;
+    TelemetryUpdates groups;
+    if(topic==PUBLISH_TOPIC_THERMAL_SUMMARY)groups=TELEMETRY_UPDATE(TELEMETRY_THERMAL);
+    else if(topic==PUBLISH_TOPIC_FAST_TELEMETRY)
+        groups=TELEMETRY_UPDATE(TELEMETRY_PACK)|TELEMETRY_UPDATE(TELEMETRY_GPS_SPEED)|TELEMETRY_UPDATE(TELEMETRY_AMK_STATUS);
+    else groups=TELEMETRY_ALL_UPDATES & ~TELEMETRY_UPDATE(TELEMETRY_THERMAL);
+    return Publish_QueueUpdates(groups);
 }
 
 void Publish_OnTopicDequeued(PublishTopic_t topic)
 {
-    /* Release the deduplication bit once task08 has consumed the request. */
-    if (!Publish_IsTopicValid(topic))
-    {
-        return;
-    }
-
-    taskENTER_CRITICAL();
-    g_publishQueuedTopicMask &= ~(1UL << (uint32_t)topic);
-    taskEXIT_CRITICAL();
+    /* Compatibility only: taking pending groups already releases ownership. */
+    (void)topic;
 }
 
 bool Publish_BuildFrame(PublishTopic_t topic, uint32_t frame_id, uint8_t *frame_buffer, uint16_t frame_capacity, uint16_t *frame_size)
@@ -297,8 +287,14 @@ static bool Publish_MapIvtTelemetry(fsae_IvtTelemetry *ivt_telemetry)
     }
 
     *ivt_telemetry = (fsae_IvtTelemetry)fsae_IvtTelemetry_init_zero;
+    /* Result state is diagnostic data even when its measurement is invalid. */
+    ivt_telemetry->current_state=g_BatteryInfo.IVT.CurrentState;
+    ivt_telemetry->voltage_u1_state=g_BatteryInfo.IVT.VoltageU1State;
+    ivt_telemetry->voltage_u2_state=g_BatteryInfo.IVT.VoltageU2State;
+    ivt_telemetry->power_state=g_BatteryInfo.IVT.PowerState;
+    ivt_telemetry->energy_state=g_BatteryInfo.IVT.EnergyState;
 
-    if ((valid_flags & BATTERY_IVT_TELEMETRY_VALID_MASK) == 0U)
+    if (((valid_flags | g_BatteryInfo.IVT.ReceivedFlags) & BATTERY_IVT_TELEMETRY_VALID_MASK) == 0U)
     {
         return false;
     }
@@ -366,7 +362,7 @@ static bool Publish_MapEnergyMeterTelemetry(fsae_EnergyMeterTelemetry *energy_me
      * FS status/result frames.
      */
     valid_flags = g_CANB_LoopData.EnergyMeter.ValidFlags;
-    if (valid_flags == 0U)
+    if (valid_flags == 0U && g_CANB_LoopData.EnergyMeter.ReceivedFlags == 0U)
     {
         return false;
     }
@@ -886,4 +882,248 @@ static bool Publish_IsTopicValid(PublishTopic_t topic)
 {
     /* Reject unsupported topic IDs before they hit the queue. */
     return ((uint32_t)topic < (uint32_t)PUBLISH_TOPIC_COUNT);
+}
+
+/* Selective mapping is the runtime uplink path. Legacy topic builders remain
+ * available for explicit diagnostic full-cache requests and existing tests. */
+typedef void (*GroupMapper)(fsae_TelemetryFrame *, TelemetryGroup, uint32_t);
+
+static void MapVehicleGroup(fsae_TelemetryFrame *f, TelemetryGroup group, uint32_t now)
+{
+    const CANB_ECU_VehicleTypeDef *e=&g_CANB_LoopData.ECU;
+    switch(group) {
+    case TELEMETRY_DRIVER_INPUTS:
+        f->apps_position=e->ThrottlePositionDeciPct/10.0f;
+        f->brake_pressure=e->OilPressureRearKpa/1000.0f;
+        f->steering_angle=e->SteeringAngleDeciDeg/10.0f;
+        f->has_vehicle_state=true;
+        f->vehicle_state.throttle_position=(e->ThrottlePositionDeciPct+5U)/10U;
+        break;
+    case TELEMETRY_GPS_SPEED:
+        f->has_motion=true;
+        if(g_CANB_LoopData.IMU.ValidFlags & CANB_MOTION_VALID_GPS)
+            f->motion.gps_speed_kmh=g_CANB_LoopData.IMU.GpsSpeedKmh;
+        f->has_vehicle_state=true;
+        f->vehicle_state.speed_kmh=Publish_GetVehicleSpeedKmh();
+        break;
+    case TELEMETRY_POSITION:
+    case TELEMETRY_GPS_MOTION: {
+        bool valid=e->PositionSeen && e->PositionStatusSeen &&
+            (uint32_t)(now-e->PositionTick)<=500U && (uint32_t)(now-e->PositionStatusTick)<=500U &&
+            (e->PositionFlags & 9U)==9U && e->LatitudeE7>=-900000000 && e->LatitudeE7<=900000000 &&
+            e->LongitudeE7>=-1800000000 && e->LongitudeE7<=1800000000;
+        f->has_motion=true;f->motion.has_gps_position_valid=true;
+        f->motion.gps_position_valid=valid;
+        f->motion.has_gps_latitude_e7=f->motion.has_gps_longitude_e7=valid;
+        f->motion.gps_latitude_e7=e->LatitudeE7;f->motion.gps_longitude_e7=e->LongitudeE7;
+        break;
+    }
+    case TELEMETRY_REGEN:
+        if(e->RegenSeen && (uint32_t)(now-e->RegenTick)<=2000U){
+            f->has_regen_telemetry=true;
+            f->regen_telemetry.has_recycle_rate=e->RegenRate<=120U;
+            f->regen_telemetry.recycle_rate=e->RegenRate;
+            f->regen_telemetry.has_power_limit_reason_fl=true;f->regen_telemetry.power_limit_reason_fl=e->RegenReasons[0];
+            f->regen_telemetry.has_power_limit_reason_fr=true;f->regen_telemetry.power_limit_reason_fr=e->RegenReasons[1];
+            f->regen_telemetry.has_power_limit_reason_rl=true;f->regen_telemetry.power_limit_reason_rl=e->RegenReasons[2];
+            f->regen_telemetry.has_power_limit_reason_rr=true;f->regen_telemetry.power_limit_reason_rr=e->RegenReasons[3];
+        }break;
+    case TELEMETRY_PEDAL:
+        f->has_brake_pedal_encoder_angle_deg=e->PedalSeen && (uint32_t)(now-e->PedalTick)<=100U;
+        f->brake_pedal_encoder_angle_deg=e->PedalCount*(360.0f/4096.0f);break;
+    case TELEMETRY_ENERGY:
+        f->has_energy_meter=Publish_MapEnergyMeterTelemetry(&f->energy_meter);break;
+    default:
+        /* These accepted caches have no fields in the existing wire schema.
+         * Do not invent a value or publish unrelated data as a substitute. */
+        break;
+    }
+}
+
+static void MapMotorGroup(fsae_TelemetryFrame *f, TelemetryGroup group, uint32_t now)
+{
+    (void)now;
+    const CANB_ECU_VehicleTypeDef *e=&g_CANB_LoopData.ECU;
+    f->has_vehicle_state=true;
+    if(group==TELEMETRY_AMK_STATUS)f->vehicle_state.driving_mode=Publish_MapDrivingMode(e->driving_mode);
+    f->vehicle_state.motors_count=4U;
+    for(unsigned i=0;i<4;i++){
+        fsae_MotorState *m=&f->vehicle_state.motors[i];
+        m->position=Publish_MapCanbMotorPosition(i);
+        switch(group){
+        case TELEMETRY_MOTOR_TORQUE:m->torque_nm=e->Motor_Torque[i];break;
+        case TELEMETRY_MOTOR_DIAGNOSTIC:m->diagnostic_number=e->DiagnosticNumber[i];break;
+        case TELEMETRY_MOTOR_SPEED:m->rpm=e->Motor_RPM[i];break;
+        case TELEMETRY_MOTOR_TEMP:m->motor_temp_dc=e->MotorTempDc[i];break;
+        case TELEMETRY_INVERTER_TEMP:m->inverter_temp_dc=e->InverterTempDc[i];break;
+        case TELEMETRY_IGBT_TEMP:m->igbt_temp_dc=e->IgbtTempDc[i];break;
+        case TELEMETRY_AMK_STATUS:
+            m->motor_error=e->ERRO[i];m->has_logic_state=true;m->logic_state=e->LogicState[i];break;
+        case TELEMETRY_CANA_MOTOR:m->power_w=e->MotorPowerW[i]>INT32_MAX?INT32_MAX:(int32_t)e->MotorPowerW[i];break;
+        default:break;
+        }
+    }
+}
+
+static void MapBatteryGroup(fsae_TelemetryFrame *f, TelemetryGroup group, uint32_t now)
+{
+    const Battery_InfoDef *b=&g_BatteryInfo;
+    switch(group){
+    case TELEMETRY_PACK:
+        f->battery_soc=b->SOC;
+        f->has_battery_soc_pct_x10=(b->PackValidFlags & BATTERY_SOC_VALID) && (uint32_t)(now-b->PackLastUpdateMs)<BATTERY_STATUS_TIMEOUT_MS;
+        f->battery_soc_pct_x10=b->SocDeciPct;
+        if(b->PackReceived && (uint32_t)(now-b->PackLastUpdateMs)<=2000U){
+            f->has_bms_telemetry=true;
+            f->bms_telemetry.has_battery_state=f->bms_telemetry.has_battery_alarm_level=true;
+            f->bms_telemetry.battery_state=b->Battery_State;f->bms_telemetry.battery_alarm_level=b->Battery_AlarmLevel;
+        }
+        /* Pack and IVT share the same physical voltage/current view. */
+        /* fall through */
+    case TELEMETRY_IVT:
+    case TELEMETRY_CELL_SUM:
+        if(group==TELEMETRY_IVT)f->has_ivt_telemetry=Publish_MapIvtTelemetry(&f->ivt_telemetry);
+        if((b->IVT.ValidFlags & BATTERY_IVT_VALID_U1) && (uint32_t)(now-b->IVT.LastUpdateMs[1])<BATTERY_IVT_TIMEOUT_MS)
+            f->hv_voltage=b->IVT.VoltageU1Mv/1000.0f;
+        else if((b->PackValidFlags & BATTERY_PACK_VOLT_VALID) && (uint32_t)(now-b->PackLastUpdateMs)<2000U)
+            f->hv_voltage=b->TotalVolt/1000.0f;
+        else {
+            uint32_t sum=0;bool complete=true;
+            for(unsigned m=0;m<6;m++)for(unsigned c=0;c<23;c++){
+                unsigned n=m*6+(c<3?0:1+(c-3)/4);
+                if(!(b->CellValidMask[m]&(1UL<<c)) || (uint32_t)(now-b->CellFrameTick[n])>=2000U)complete=false;
+                sum+=b->CellVolt[m][c];
+            }
+            if(complete)f->hv_voltage=sum/1000.0f;
+            if(b->CellSumValid && (uint32_t)(now-b->CellSumTick)<2000U && (b->PackValidFlags & 8U))f->hv_voltage=b->CellVoltSum/10.0f;
+        }
+        if(group!=TELEMETRY_CELL_SUM){
+            if((b->IVT.ValidFlags & BATTERY_IVT_VALID_CURRENT) && (uint32_t)(now-b->IVT.LastUpdateMs[0])<BATTERY_IVT_TIMEOUT_MS)
+                f->hv_current=b->IVT.CurrentMa/1000.0f;
+            else if((b->PackValidFlags & BATTERY_PACK_CURR_VALID) && (uint32_t)(now-b->PackLastUpdateMs)<2000U)
+                f->hv_current=b->TotalCurrent/1000.0f;
+        }break;
+    case TELEMETRY_CELL_EXTREMA:
+        f->max_cell_voltage=b->MaxCellVolt;f->min_cell_voltage=b->MinCellVolt;
+        f->max_cell_voltage_no=b->CellExtremaValid?b->MaxCellVoltNo+1U:0;
+        f->min_cell_voltage_no=b->CellExtremaValid?b->MinCellVoltNo+1U:0;break;
+    case TELEMETRY_TEMP_EXTREMA:
+        f->battery_temp_max=b->MaxTemp;f->max_temp=b->MaxTemp*10;f->min_temp=b->MinTemp*10;
+        f->max_temp_no=b->TempExtremaValid?b->MaxTempNo+1U:0;
+        f->min_temp_no=b->TempExtremaValid?b->MinTempNo+1U:0;break;
+    case TELEMETRY_FAULT:
+        f->fault_code=f->battery_fault_code=b->BatteryFaultCode;
+        f->has_bms_telemetry=true;
+        f->bms_telemetry.has_battery_state=f->bms_telemetry.has_battery_alarm_level=true;
+        f->bms_telemetry.battery_state=b->Battery_State;
+        f->bms_telemetry.battery_alarm_level=b->Battery_AlarmLevel;
+        if(b->FaultValid && (uint32_t)(now-b->FaultTick)<=2000U)
+            for(unsigned bit=0;bit<32;bit++)if(b->BatteryFaultCode & (1UL<<bit)){
+                fsae_Alarm *a=&f->alarms[f->alarms_count++];a->alarm_id=bit;
+                uint8_t level=b->AlarmLevelsValid && (uint32_t)(now-b->AlarmLevelsTick)<3000U?b->AlarmLevels[bit]:0;
+                a->severity=level==1?fsae_AlarmSeverity_ALARM_SEVERITY_FATAL:level==2?fsae_AlarmSeverity_ALARM_SEVERITY_WARNING:fsae_AlarmSeverity_ALARM_SEVERITY_UNSPECIFIED;
+            }break;
+    case TELEMETRY_MODULES:
+        for(unsigned m=0;m<6;m++){
+            bool fresh=b->TempValidMask[m]==0xFFU && (uint32_t)(now-b->TempFrameTick[m])<2000U;
+            for(unsigned j=0;j<6;j++)fresh=fresh && ((b->CellFramesReceived>>(m*6+j))&1U) && (uint32_t)(now-b->CellFrameTick[m*6+j])<2000U;
+            if(fresh)Publish_MapBatteryModule(&f->modules[f->modules_count++],m);
+        }break;
+    default:break;
+    }
+}
+
+static void MapExtraGroup(fsae_TelemetryFrame *f, TelemetryGroup g, uint32_t now){Extra_MapGroups(f,now,TELEMETRY_UPDATE(g));}
+static void MapCancGroup(fsae_TelemetryFrame *f, TelemetryGroup g, uint32_t now){Canc_MapGroups(f,now,TELEMETRY_UPDATE(g));}
+static void MapThermalGroup(fsae_TelemetryFrame *f, TelemetryGroup g, uint32_t now){
+    (void)g;(void)now;f->has_thermal_summary=true;Publish_MapThermalSummary(&f->thermal_summary);
+}
+
+/* The single update-group -> mapper registry. NULL means cache-only: the
+ * external schema has no representation, not permission to map another group. */
+static const GroupMapper group_mappers[TELEMETRY_GROUP_COUNT]={
+    [TELEMETRY_DRIVER_INPUTS]=MapVehicleGroup,
+    [TELEMETRY_GPS_SPEED]=MapVehicleGroup,
+    [TELEMETRY_POSITION]=MapVehicleGroup,
+    [TELEMETRY_GPS_MOTION]=MapVehicleGroup,
+    [TELEMETRY_REGEN]=MapVehicleGroup,
+    [TELEMETRY_PEDAL]=MapVehicleGroup,
+    [TELEMETRY_ENERGY]=MapVehicleGroup,
+    [TELEMETRY_MOTOR_TORQUE]=MapMotorGroup,
+    [TELEMETRY_MOTOR_DIAGNOSTIC]=MapMotorGroup,
+    [TELEMETRY_MOTOR_SPEED]=MapMotorGroup,
+    [TELEMETRY_MOTOR_TEMP]=MapMotorGroup,
+    [TELEMETRY_INVERTER_TEMP]=MapMotorGroup,
+    [TELEMETRY_IGBT_TEMP]=MapMotorGroup,
+    [TELEMETRY_AMK_STATUS]=MapMotorGroup,
+    [TELEMETRY_CANA_MOTOR]=MapMotorGroup,
+    [TELEMETRY_PACK]=MapBatteryGroup,
+    [TELEMETRY_CELL_EXTREMA]=MapBatteryGroup,
+    [TELEMETRY_TEMP_EXTREMA]=MapBatteryGroup,
+    [TELEMETRY_CELL_SUM]=MapBatteryGroup,
+    [TELEMETRY_FAULT]=MapBatteryGroup,
+    [TELEMETRY_IVT]=MapBatteryGroup,
+    [TELEMETRY_MODULES]=MapBatteryGroup,
+    [TELEMETRY_EXTRA_FIRST+0]=MapExtraGroup, /* PDM bus */
+    [TELEMETRY_EXTRA_FIRST+1]=MapExtraGroup, /* PDM battery */
+    [TELEMETRY_EXTRA_FIRST+2]=MapExtraGroup, /* Fan */
+    [TELEMETRY_EXTRA_FIRST+3]=MapExtraGroup, /* CAN1 battery fan */
+    [TELEMETRY_EXTRA_FIRST+4]=MapExtraGroup, /* CANB battery fan */
+    [TELEMETRY_EXTRA_FIRST+5]=MapExtraGroup, /* Charger voltage */
+    [TELEMETRY_EXTRA_FIRST+6]=MapExtraGroup, /* Charger current */
+    [TELEMETRY_EXTRA_FIRST+7]=MapExtraGroup, /* Charger protection */
+    [TELEMETRY_EXTRA_FIRST+8]=MapExtraGroup, /* Charger output */
+    [TELEMETRY_EXTRA_FIRST+9]=MapExtraGroup, /* SOP power */
+    [TELEMETRY_EXTRA_FIRST+10]=MapExtraGroup, /* SOP current */
+    [TELEMETRY_EXTRA_FIRST+11]=MapExtraGroup, /* SOP ACK */
+    [TELEMETRY_EXTRA_FIRST+12]=MapExtraGroup, /* SOP mirror */
+    [TELEMETRY_EXTRA_FIRST+13]=MapExtraGroup, /* BMS relays */
+    [TELEMETRY_EXTRA_FIRST+14]=MapExtraGroup, /* BMS HV */
+    [TELEMETRY_EXTRA_FIRST+15]=MapExtraGroup, /* IMD */
+    [TELEMETRY_EXTRA_FIRST+16]=MapExtraGroup, /* Fan diagnostics */
+    [TELEMETRY_EXTRA_FIRST+17]=MapExtraGroup, /* Fan ACK */
+    [TELEMETRY_EXTRA_FIRST+18]=MapExtraGroup, /* Fan CH1 curve */
+    [TELEMETRY_EXTRA_FIRST+20]=MapExtraGroup, /* Fan failsafe */
+    [TELEMETRY_CANC_FIRST+0]=MapCancGroup,
+    [TELEMETRY_CANC_FIRST+1]=MapCancGroup,
+    [TELEMETRY_CANC_FIRST+2]=MapCancGroup,
+    [TELEMETRY_CANC_FIRST+3]=MapCancGroup,
+    [TELEMETRY_CANC_FIRST+4]=MapCancGroup,
+    [TELEMETRY_CANC_FIRST+5]=MapCancGroup,
+    [TELEMETRY_CANC_FIRST+6]=MapCancGroup,
+    [TELEMETRY_CANC_FIRST+7]=MapCancGroup,
+    [TELEMETRY_CANC_FIRST+8]=MapCancGroup,
+    [TELEMETRY_CANC_FIRST+9]=MapCancGroup,
+    [TELEMETRY_THERMAL]=MapThermalGroup
+};
+
+#if (APP_UPLINK_ENABLED != 0U)
+static TelemetryUpdates Publish_WireGroups(TelemetryUpdates groups)
+{
+    TelemetryUpdates result=0U;
+    for(unsigned g=0;g<TELEMETRY_GROUP_COUNT;g++)
+        if(group_mappers[g] && (groups & TELEMETRY_UPDATE(g)))result|=TELEMETRY_UPDATE(g);
+    return result;
+}
+#endif
+
+bool Publish_BuildUpdates(TelemetryUpdates groups,uint32_t id,uint8_t *buffer,uint16_t capacity,uint16_t *size)
+{
+    if(!buffer || !size || !groups || (groups & ~TELEMETRY_ALL_UPDATES))return false;
+    *size=0;
+    g_publishTelemetryFrame=(fsae_TelemetryFrame)fsae_TelemetryFrame_init_zero;
+    uint32_t now=HAL_GetTick();
+    /* No ISR writes business caches. Protect the entire selected mapping view;
+     * encoding and all UART/DMA operations run with scheduling enabled. */
+    vTaskSuspendAll();
+    for(unsigned g=0;g<TELEMETRY_GROUP_COUNT;g++)
+        if((groups & TELEMETRY_UPDATE(g)) && group_mappers[g])group_mappers[g](&g_publishTelemetryFrame,(TelemetryGroup)g,now);
+    (void)xTaskResumeAll();
+    g_publishTelemetryFrame.timestamp_ms=now;g_publishTelemetryFrame.frame_id=id;
+    g_publishTelemetryFrame.has_header=true;
+    g_publishTelemetryFrame.header.timestamp_ms=now;g_publishTelemetryFrame.header.seq=id;g_publishTelemetryFrame.header.source_id=1U;
+    pb_ostream_t stream=pb_ostream_from_buffer(buffer,capacity);
+    if(!pb_encode(&stream,fsae_TelemetryFrame_fields,&g_publishTelemetryFrame))return false;
+    *size=(uint16_t)stream.bytes_written;
+    return true;
 }

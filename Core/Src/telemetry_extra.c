@@ -70,7 +70,7 @@ static void Extra_StoreCanbFields(int index, const uint8_t *p, uint32_t tick)
   g_BatteryInfo.CanbFan.LeaseRemainingS=p[6];g_BatteryInfo.CanbFan.ProtocolVersion=p[7];
  }
 }
-uint8_t Extra_Receive(const CAN_Msg_Queue_t *f){
+TelemetryUpdates Extra_Receive(const CAN_Msg_Queue_t *f){
  if(!f || f->dlc>8)return 0U;
  int index=-1;unsigned min=8;
  if(f->can_channel==CAN_CHANNEL_VEHICLE_CANB && !f->is_ext_id){switch(f->msg_id){
@@ -100,12 +100,21 @@ uint8_t Extra_Receive(const CAN_Msg_Queue_t *f){
  samples[index].tick=HAL_GetTick();samples[index].seen=1;memcpy(samples[index].data,f->msg_data,8);
  Extra_StoreCanbFields(index,f->msg_data,samples[index].tick);
  taskEXIT_CRITICAL();
- return 1U;
+  return TELEMETRY_EXTRA_UPDATE(index);
 }
 #define SET(msg,field,value) do{frame->has_##msg=true;frame->msg.has_##field=true;frame->msg.field=(value);}while(0)
 void Extra_Map(fsae_TelemetryFrame *frame,uint32_t now){
+ Extra_MapGroups(frame,now,TELEMETRY_ALL_UPDATES);
+}
+void Extra_MapGroups(fsae_TelemetryFrame *frame,uint32_t now,TelemetryUpdates groups){
  Sample s[SAMPLE_COUNT];uint8_t fresh[SAMPLE_COUNT];
- taskENTER_CRITICAL();memcpy(s,samples,sizeof(s));taskEXIT_CRITICAL();
+ memset(s,0,sizeof(s));
+ taskENTER_CRITICAL();
+ for(unsigned i=0;i<SAMPLE_COUNT;i++)if(groups & TELEMETRY_EXTRA_UPDATE(i))s[i]=samples[i];
+ /* Battery fan and SOP have competing sources: snapshot just those dependencies. */
+ if(groups & (TELEMETRY_EXTRA_UPDATE(BAT_FAN1)|TELEMETRY_EXTRA_UPDATE(BAT_FANB))){s[BAT_FAN1]=samples[BAT_FAN1];s[BAT_FANB]=samples[BAT_FANB];}
+ if(groups & (TELEMETRY_EXTRA_UPDATE(SOP_P)|TELEMETRY_EXTRA_UPDATE(SOP_MIRROR))){s[SOP_P]=samples[SOP_P];s[SOP_MIRROR]=samples[SOP_MIRROR];}
+ taskEXIT_CRITICAL();
  for(unsigned i=0;i<SAMPLE_COUNT;i++)fresh[i]=s[i].seen && (uint32_t)(now-s[i].tick)<=(i>=CH_V && i<=CH_O?750U:i>=FAN_DIAG?1500U:2000U);
  for(unsigned i=0;i<2;i++){const uint8_t *p=s[i].data;if(!fresh[i])continue;
  if(i==0){SET(pdm_telemetry,bus_voltage_v,(int16_t)be16(p)*0.001f);SET(pdm_telemetry,bus_current_a,(int16_t)be16(p+2)*0.01f);SET(pdm_telemetry,bus_power_w,be16(p+4)*0.1f);SET(pdm_telemetry,bus_energy_wh,be16(p+6)*0.01f);}
